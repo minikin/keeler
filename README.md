@@ -12,10 +12,14 @@ See [WORKFLOW.md](WORKFLOW.md) for how it works in plain words, and
 
 ## Quick start
 
-`/spec → approve → /tasks → /tdd → /qa → /review → /mutants` — or
-`/feature <problem>` to run the whole examination end to end. Bugs take
-`/fix` (reproduce with a failing test first); trivia takes the fast path
-(see *Change classes* in CLAUDE.md).
+- **Feature:** `/spec → approve → /tasks → /tdd → /qa → /review → /mutants` —
+  or `/feature <problem>` to run the whole examination end to end.
+- **Bugfix:** `/fix` — reproduce with a failing regression test first, then
+  fix minimally.
+- **Trivial** (docs, comments, config): fast path — `just lint`, no spec,
+  no ceremony.
+
+See *Change classes* in CLAUDE.md for how to pick the right road.
 
 ## Using this template
 
@@ -34,9 +38,7 @@ See [WORKFLOW.md](WORKFLOW.md) for how it works in plain words, and
    template (it ships with a tiny placeholder function so every gate has
    something to measure).
 5. Start your first examination: `/feature <problem>` in Claude Code —
-   or `/spec` if you prefer to drive stage by stage. The placeholder
-   `checked_total` and spec `00` conventions can be deleted with your first
-   real feature.
+   or `/spec` if you prefer to drive stage by stage.
 
 ## Skills
 
