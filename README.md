@@ -58,13 +58,17 @@ See *Change classes* in CLAUDE.md for how to pick the right road.
 
 ## Adopting Keeler in an existing project
 
-You don't need to start from the template — run the installer against any
-Rust project:
+You don't need to start from the template — one command installs the
+workflow into any Rust project:
 
 ```bash
-git clone https://github.com/minikin/keeler
-./keeler/install.sh /path/to/your/project
+curl -fsSL https://raw.githubusercontent.com/minikin/keeler/main/install.sh \
+    | bash -s /path/to/your/project
 ```
+
+(Prefer to read before you run? `git clone https://github.com/minikin/keeler
+&& ./keeler/install.sh /path/to/your/project` does the same from a local
+checkout.)
 
 It copies the commands, skills, spec template, Justfile, gate configs, and a
 `keeler.yml` CI workflow. It never overwrites your files — conflicts land

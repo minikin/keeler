@@ -4,11 +4,24 @@
 # are written next to the original as <name>.keeler for manual merge.
 #
 # Usage:
-#   ./install.sh /path/to/your/project
+#   ./install.sh /path/to/your/project          (from a clone)
+#   curl -fsSL https://raw.githubusercontent.com/minikin/keeler/main/install.sh \
+#       | bash -s /path/to/your/project         (no clone needed)
 set -euo pipefail
 
-SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_TARBALL="${KEELER_TARBALL:-https://codeload.github.com/minikin/keeler/tar.gz/refs/heads/main}"
 DEST="${1:?usage: ./install.sh /path/to/your/project}"
+
+# When run next to the repo files, install from them; when piped from curl,
+# fetch a fresh tarball into a temp dir instead.
+SRC="$(cd "$(dirname "${BASH_SOURCE[0]:-.}")" 2>/dev/null && pwd || pwd)"
+if [ ! -f "$SRC/specs/TEMPLATE.md" ]; then
+    tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' EXIT
+    echo "Fetching Keeler..."
+    curl -fsSL "$REPO_TARBALL" | tar -xz -C "$tmp" --strip-components=1
+    SRC="$tmp"
+fi
 
 if [ ! -f "$DEST/Cargo.toml" ]; then
     echo "error: $DEST does not look like a Rust project (no Cargo.toml)" >&2
