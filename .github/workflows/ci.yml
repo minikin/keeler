@@ -64,6 +64,26 @@ jobs:
             echo "no crap-baseline.json committed — skipping the delta gate"
           fi
 
+  version:
+    name: Version consistency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      # VERSION is the single source of truth; the marker installed into
+      # every project must agree with it, or users cannot tell what they run.
+      - name: VERSION matches the marker in .claude/keeler.md
+        run: |
+          version="$(tr -d '[:space:]' < VERSION)"
+          marker="$(sed -n 's/^<!-- keeler-version: \(.*\) -->$/\1/p' .claude/keeler.md)"
+          echo "VERSION=$version marker=$marker"
+          [ -n "$marker" ] || { echo "no keeler-version marker in .claude/keeler.md"; exit 1; }
+          [ "$version" = "$marker" ] || { echo "VERSION and the marker disagree"; exit 1; }
+      - name: CHANGELOG has an entry for this version
+        run: |
+          version="$(tr -d '[:space:]' < VERSION)"
+          grep -q "^## \[$version\]" CHANGELOG.md || {
+            echo "CHANGELOG.md has no section for $version"; exit 1; }
+
   installer:
     name: Installer (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

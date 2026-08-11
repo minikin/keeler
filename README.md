@@ -1,5 +1,8 @@
 # Keeler
 
+[![CI](https://github.com/minikin/keeler/actions/workflows/ci.yml/badge.svg)](https://github.com/minikin/keeler/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 > Named after [Leonarde Keeler](https://en.wikipedia.org/wiki/Leonarde_Keeler), builder of the first practical polygraph.
 
 Keeler is a quality-assurance workflow for AI-assisted **Rust** development:
@@ -63,6 +66,17 @@ One command sets up four things:
 Re-running is safe — nothing is duplicated, and your files are never
 overwritten (a conflicting file is copied alongside as `<name>.keeler`).
 Pass `--no-tools` to skip the tool installs.
+
+**Pin a version.** The command above tracks `main`. To install a fixed
+release — and to upgrade deliberately rather than whenever `main` moves —
+set `KEELER_REF`:
+
+```bash
+KEELER_REF=v0.1.0 curl -fsSL https://raw.githubusercontent.com/minikin/keeler/main/install.sh | bash -s .
+```
+
+Later, `just keeler-upgrade` re-runs the installer in place; the version you
+have is recorded at the top of `.claude/keeler.md`.
 
 **Already have a `CLAUDE.md`?** It stays exactly as it is. The rules install
 as `.claude/keeler.md`, and your file gets one `@.claude/keeler.md` import

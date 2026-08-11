@@ -10,9 +10,13 @@
 #   curl -fsSL https://raw.githubusercontent.com/minikin/keeler/main/install.sh | bash -s .
 #   ./install.sh /path/to/project        # from a clone
 #   ./install.sh . --no-tools            # skip installing CLI tools
+#
+# KEELER_REF pins the version to install — a tag or a branch:
+#   KEELER_REF=v0.1.0 curl -fsSL .../install.sh | bash -s .
 set -euo pipefail
 
-REPO_TARBALL="${KEELER_TARBALL:-https://codeload.github.com/minikin/keeler/tar.gz/refs/heads/main}"
+# codeload takes tags and branches in the same short form.
+REPO_TARBALL="${KEELER_TARBALL:-https://codeload.github.com/minikin/keeler/tar.gz/${KEELER_REF:-main}}"
 DEST="."
 WITH_TOOLS=1
 for arg in "$@"; do
@@ -43,6 +47,9 @@ if [ ! -f "$SRC/specs/TEMPLATE.md" ]; then
     SRC="$tmp"
     ok "downloaded"
 fi
+
+KEELER_VERSION="$(cat "$SRC/VERSION" 2>/dev/null || echo unknown)"
+say "Keeler $KEELER_VERSION"
 
 # --- 1. Tools -------------------------------------------------------------
 if [ "$WITH_TOOLS" = 1 ]; then
@@ -98,6 +105,14 @@ for f in .claude/commands/keeler/spec.md .claude/commands/keeler/tasks.md \
          .cargo-mutants.toml clippy.toml rustfmt.toml; do
     install_file "$f"
 done
+
+# An upgrade replaces the rules wholesale — they are ours to own, and the
+# version marker inside must match what we just installed.
+if [ -e "$DEST/.claude/keeler.md.keeler" ]; then
+    mv "$DEST/.claude/keeler.md.keeler" "$DEST/.claude/keeler.md"
+    merges=("${merges[@]/.claude\/keeler.md}")
+    note "workflow rules updated to $KEELER_VERSION"
+fi
 
 # CLAUDE.md is never overwritten or duplicated: the rules live in
 # .claude/keeler.md and CLAUDE.md merely imports them with one @-line, so a

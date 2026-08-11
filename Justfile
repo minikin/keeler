@@ -61,9 +61,7 @@ mutants FILE:
 mutants-all:
     cargo mutants
 
-# Mutation tests only on lines changed vs HEAD (uncommitted), falling back
-# to the last commit. Line-level via --in-diff: far cheaper than mutating
-# whole changed files.
+# Mutation tests on changed lines only (--in-diff vs HEAD, else last commit)
 mutants-diff:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -89,3 +87,7 @@ mutants-diff:
 
 # Full validation including mutation tests (slow)
 dev-full: dev mutants-all
+
+# Upgrade Keeler itself (KEELER_REF=v0.1.0 just keeler-upgrade to pin a tag)
+keeler-upgrade:
+    curl -fsSL https://raw.githubusercontent.com/minikin/keeler/main/install.sh | bash -s .
