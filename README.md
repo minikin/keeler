@@ -56,6 +56,38 @@ See *Change classes* in CLAUDE.md for how to pick the right road.
 5. Start your first examination: `/feature <problem>` in Claude Code —
    or `/spec` if you prefer to drive stage by stage.
 
+## Adopting Keeler in an existing project
+
+You don't need to start from the template — run the installer against any
+Rust project:
+
+```bash
+git clone https://github.com/minikin/keeler
+./keeler/install.sh /path/to/your/project
+```
+
+It copies the commands, skills, spec template, Justfile, gate configs, and a
+`keeler.yml` CI workflow. It never overwrites your files — conflicts land
+next to the original as `<name>.keeler` for manual merge — and it prints the
+few manual steps (dev-dependencies, tool install, `.gitignore` entries).
+
+**Legacy code will not pass the gates on day one — that's expected.** Adopt
+them incrementally:
+
+1. `just crap-baseline` — freeze today's scores. From now on `just
+   crap-delta` fails only on *regressions*: the legacy debt is grandfathered,
+   new debt is not.
+2. Use `just mutants-diff` (changed lines only) — never run full mutation
+   testing on a legacy codebase.
+3. Set the coverage threshold in the `cov` recipe to today's number, and
+   ratchet it up as tested code grows. Same for the CRAP `--threshold`.
+4. Write specs for new features only; legacy behavior earns specs
+   opportunistically, one `/fix` at a time.
+
+The principle: **the gates guard the delta, not the past.** Every change
+must leave the codebase better; nobody is asked to repay ten years of debt
+up front.
+
 ## Skills
 
 The template ships two project skills in `.claude/skills/` that load
