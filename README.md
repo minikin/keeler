@@ -2,10 +2,15 @@
 
 > Named after [Leonarde Keeler](https://en.wikipedia.org/wiki/Leonarde_Keeler), builder of the first practical polygraph.
 
-Keeler is a quality-assurance workflow for AI-assisted development: every
-change starts as a human-approved spec, is built test-first, and must clear
-independent gates: tests, coverage, CRAP score, review, and mutation
+Keeler is a quality-assurance workflow for AI-assisted **Rust** development:
+every change starts as a human-approved spec, is built test-first, and must
+clear independent gates: tests, coverage, CRAP score, review, and mutation
 testing. A defect may slip past one gate, but rarely past all of them.
+
+The method is language-agnostic; this implementation is wired to the Rust
+toolchain (`cargo nextest`, `cargo llvm-cov`, `cargo mutants`, `cargo crap`,
+`proptest`, `just`). Porting it means swapping the `Justfile` recipes and the
+tool names in the commands — the pipeline and its rules stay as they are.
 
 ## How it works
 
@@ -46,25 +51,27 @@ From inside any Rust project — existing or freshly `cargo new`-ed:
 curl -fsSL https://raw.githubusercontent.com/minikin/keeler/main/install.sh | bash -s .
 ```
 
-That single command does everything: installs the CLI tools it needs
-(`cargo-nextest`, `cargo-llvm-cov`, `cargo-mutants`, `cargo-crap`, `just`)
-if they are missing, copies the commands, skills, spec template, `Justfile`,
-gate configs and a `keeler.yml` CI workflow, adds `proptest` plus the
-`[profile.mutants]` and `[lints.clippy]` sections to `Cargo.toml`, and
-extends `.gitignore`. Re-running it is safe: nothing is duplicated, and your
-files are never overwritten — a conflicting file is copied alongside as
-`<name>.keeler` to merge by hand. Pass `--no-tools` to skip the tool
-installs.
+One command sets up four things:
 
-**Already have a `CLAUDE.md`?** It is left exactly as it is. The workflow
-rules install as `.claude/keeler.md`, and your `CLAUDE.md` gets a single
-`@.claude/keeler.md` import line appended — Claude Code pulls the rules in
-from there, so your own instructions are never rewritten or duplicated.
+|              | What it installs                                                                                        |
+| ------------ | ------------------------------------------------------------------------------------------------------- |
+| **Tools**    | `cargo-nextest`, `cargo-llvm-cov`, `cargo-mutants`, `cargo-crap`, `just` — only the ones you're missing |
+| **Workflow** | slash commands, skills, spec template, `Justfile`, gate configs, and a `keeler.yml` CI workflow         |
+| **Manifest** | `proptest` as a dev-dependency, plus the `[profile.mutants]` and `[lints.clippy]` sections              |
+| **Ignores**  | the generated artifacts, appended to `.gitignore`                                                       |
 
-(Prefer to read before you run? `git clone https://github.com/minikin/keeler
-&& ./keeler/install.sh /path/to/your/project` does the same from a local
-checkout. For a brand-new project, use GitHub's **Use this template** button
-or `cargo generate minikin/keeler`.)
+Re-running is safe — nothing is duplicated, and your files are never
+overwritten (a conflicting file is copied alongside as `<name>.keeler`).
+Pass `--no-tools` to skip the tool installs.
+
+**Already have a `CLAUDE.md`?** It stays exactly as it is. The rules install
+as `.claude/keeler.md`, and your file gets one `@.claude/keeler.md` import
+line appended — so your own instructions are never rewritten.
+
+**Other ways in:** clone first if you prefer to read before you run
+(`git clone https://github.com/minikin/keeler && ./keeler/install.sh
+<project>`); for a brand-new project use GitHub's **Use this template**
+button or `cargo generate minikin/keeler`.
 
 **Legacy code will not pass the gates on day one — that's expected.** Adopt
 them incrementally:

@@ -2,6 +2,9 @@
 
 The spec-first, test-driven workflow this project follows. Imported by CLAUDE.md.
 
+This is a **Rust** project: the gates run through `cargo` (nextest, llvm-cov,
+mutants, crap) and `just`. Tests use `proptest` for property tests.
+
 ## Workflow (THE LAW)
 
 Every feature follows this pipeline. Do not skip stages or reorder them.

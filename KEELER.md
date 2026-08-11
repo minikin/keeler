@@ -2,7 +2,10 @@
 
 **Keeler** is a way of building software *with* AI that stays trustworthy:
 the human owns decisions, the AI does the labor, and machines — not vibes —
-verify the result.
+verify the result. It targets **Rust** projects: every gate below is a Rust
+tool (`cargo nextest`, `cargo llvm-cov`, `cargo mutants`, `cargo crap`,
+`proptest`), though the method itself carries over to any language with an
+equivalent toolchain.
 
 It is named after **[Leonarde Keeler](https://en.wikipedia.org/wiki/Leonarde_Keeler)**, who built the first practical
 polygraph (it's in the Smithsonian). A polygraph doesn't detect lies — it
