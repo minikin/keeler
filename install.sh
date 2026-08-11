@@ -84,10 +84,13 @@ install_file() {
     fi
 }
 
-for f in .claude/commands/spec.md .claude/commands/tasks.md \
-         .claude/commands/tdd.md .claude/commands/qa.md \
-         .claude/commands/review.md .claude/commands/mutants.md \
-         .claude/commands/feature.md .claude/commands/fix.md \
+# Commands live under .claude/commands/keeler/ so they are invoked as
+# /keeler:spec, /keeler:fix, … and never collide with a project's own
+# commands of the same name.
+for f in .claude/commands/keeler/spec.md .claude/commands/keeler/tasks.md \
+         .claude/commands/keeler/tdd.md .claude/commands/keeler/qa.md \
+         .claude/commands/keeler/review.md .claude/commands/keeler/mutants.md \
+         .claude/commands/keeler/feature.md .claude/commands/keeler/fix.md \
          .claude/skills/property-testing/SKILL.md \
          .claude/skills/gherkin-specs/SKILL.md \
          .claude/keeler.md \
@@ -181,7 +184,9 @@ say "Updating .gitignore"
 gitignore="$DEST/.gitignore"
 touch "$gitignore"
 added=0
-for entry in '/target' 'lcov.info' 'crap-report.json' 'crap-baseline.json' 'mutants.out*/'; do
+# crap-baseline.json is deliberately NOT ignored: it is the shared
+# reference the delta gate measures against, so it belongs in git.
+for entry in '/target' 'lcov.info' 'crap-report.json' 'mutants.out*/'; do
     grep -qxF "$entry" "$gitignore" || { printf '%s\n' "$entry" >> "$gitignore"; added=$((added + 1)); }
 done
 ok "$added entry(ies) added"
@@ -199,5 +204,5 @@ point. Legacy debt is grandfathered by the baseline; new debt is not.
 See the Install section in README.md, and KEELER.md for the full workflow.
 
 Then open the project in Claude Code and run:
-  /feature <what you want to build>
+  /keeler:feature <what you want to build>
 NEXT

@@ -42,8 +42,8 @@ this?*
 flowchart TD
     A[Incoming change] --> B{Does it change<br/>behavior?}
     B -- "No — docs, comments,<br/>config, renames" --> C[<b>Trivial: fast path</b><br/>just lint<br/>+ just test if code touched]
-    B -- "Yes — existing behavior<br/>is wrong" --> D[<b>Bugfix: /fix</b><br/>failing regression test first,<br/>then the minimal fix]
-    B -- "Yes — new or changed<br/>behavior, new API" --> E[<b>Feature: /feature</b><br/>full pipeline below]
+    B -- "Yes — existing behavior<br/>is wrong" --> D[<b>Bugfix: /keeler:fix</b><br/>failing regression test first,<br/>then the minimal fix]
+    B -- "Yes — new or changed<br/>behavior, new API" --> E[<b>Feature: /keeler:feature</b><br/>full pipeline below]
     C --> F[English summary,<br/>commit on confirmation]
     D --> G[just dev + mutants on<br/>the changed lines] --> F
     E --> F
@@ -54,7 +54,7 @@ Two honesty rules keep the classes meaningful:
 - **Never downgrade mid-flight.** A change doesn't become "trivial" because a
   gate went red. If a trivial change breaks any test, it wasn't trivial —
   reclassify and take the proper road.
-- **Bugs are reproduced before they are fixed.** `/fix` refuses to touch code
+- **Bugs are reproduced before they are fixed.** `/keeler:fix` refuses to touch code
   until a regression test fails on the current build for the right reason. If
   the bug lives in behavior no spec covers, the spec gets a one-scenario
   amendment (human-approved) first — otherwise the fix would quietly encode a
@@ -64,13 +64,13 @@ Two honesty rules keep the classes meaningful:
 
 ```mermaid
 flowchart TD
-    P[Problem] --> S["/spec — analysis +<br/>Gherkin scenarios"]
+    P[Problem] --> S["/keeler:spec — analysis +<br/>Gherkin scenarios"]
     S <--> H{{Human reviews,<br/>pushes back}}
-    H -- approve --> T["/tasks — small steps,<br/>each mapped to scenarios"]
-    T --> TDD["/tdd — per task:<br/>RED failing test → GREEN<br/>minimal code → REFACTOR"]
-    TDD --> QA["/qa — fmt, clippy, tests,<br/>coverage ≥ 90%, CRAP ≤ 15"]
-    QA --> R["/review — spec conformance<br/>+ independent code review"]
-    R --> M["/mutants — inject bugs,<br/>tests must catch them"]
+    H -- approve --> T["/keeler:tasks — small steps,<br/>each mapped to scenarios"]
+    T --> TDD["/keeler:tdd — per task:<br/>RED failing test → GREEN<br/>minimal code → REFACTOR"]
+    TDD --> QA["/keeler:qa — fmt, clippy, tests,<br/>coverage ≥ 90%, CRAP ≤ 15"]
+    QA --> R["/keeler:review — spec conformance<br/>+ independent code review"]
+    R --> M["/keeler:mutants — inject bugs,<br/>tests must catch them"]
     M -- "survivors" --> ST[Strengthen tests,<br/>never weaken code] --> QA
     M -- "zero survivors" --> DONE[Spec → Implemented<br/>CRAP delta vs baseline<br/>English summary<br/>commit on confirmation]
 ```
@@ -83,14 +83,14 @@ suite catches every injected bug.
 
 | Stage                     | What it does                                                               | The AI failure mode it defends against                                               |
 | ------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| **/spec** + approval      | Problem analysis → Gherkin scenarios → human sign-off                      | AI confidently building the wrong thing; requirements drifting mid-implementation    |
-| **/tasks**                | Spec broken into small ordered steps, each mapped to scenarios             | "Big bang" generation that's impossible to review; scenarios silently dropped        |
-| **/tdd**                  | Red → green → refactor; the failing test is shown *before* the code exists | AI writing tests after the fact that merely describe what the code already does      |
-| **/qa** (coverage + CRAP) | Every line of new code exercised; no function both complex and untested    | Plausible-looking generated code that nothing actually executes                      |
-| **/review**               | Spec-conformance check + independent generic review                        | Scope creep; code that satisfies the letter of tests but not the spec                |
-| **/mutants**              | Injects bugs; every one must be caught by a test                           | Assertion-free or tautological tests — the classic weakness of generated test suites |
+| **/keeler:spec** + approval      | Problem analysis → Gherkin scenarios → human sign-off                      | AI confidently building the wrong thing; requirements drifting mid-implementation    |
+| **/keeler:tasks**                | Spec broken into small ordered steps, each mapped to scenarios             | "Big bang" generation that's impossible to review; scenarios silently dropped        |
+| **/keeler:tdd**                  | Red → green → refactor; the failing test is shown *before* the code exists | AI writing tests after the fact that merely describe what the code already does      |
+| **/keeler:qa** (coverage + CRAP) | Every line of new code exercised; no function both complex and untested    | Plausible-looking generated code that nothing actually executes                      |
+| **/keeler:review**               | Spec-conformance check + independent generic review                        | Scope creep; code that satisfies the letter of tests but not the spec                |
+| **/keeler:mutants**              | Injects bugs; every one must be caught by a test                           | Assertion-free or tautological tests — the classic weakness of generated test suites |
 | **CRAP delta**            | Compares scores before/after the feature                                   | Slow erosion: each change "fine", the codebase quietly getting worse                 |
-| **/fix** (bugfix road)    | Failing regression test before any fix; minimal change after               | "Fixing" what was never reproduced; drive-by rewrites hiding inside a bugfix         |
+| **/keeler:fix** (bugfix road)    | Failing regression test before any fix; minimal change after               | "Fixing" what was never reproduced; drive-by rewrites hiding inside a bugfix         |
 
 The through-line: **at no point does "the AI said so" count as evidence.**
 Specs are approved by a human; everything else is verified by a machine.
@@ -121,9 +121,9 @@ questions don't probe the examinee, they probe the instrument.
   scenarios (these ARE the acceptance criteria), task checklist,
   implementation notes. Specs are law: the AI may not edit one without
   permission (only `Status:` and task checkboxes move as bookkeeping).
-- `.claude/commands/` — one slash command per stage (`/spec`, `/tasks`,
-  `/tdd`, `/qa`, `/review`, `/mutants`), plus `/feature` which runs the whole
-  pipeline with a hard stop at spec approval, and `/fix` for the bugfix road.
+- `.claude/commands/` — one slash command per stage (`/keeler:spec`, `/keeler:tasks`,
+  `/keeler:tdd`, `/keeler:qa`, `/keeler:review`, `/keeler:mutants`), plus `/keeler:feature` which runs the whole
+  pipeline with a hard stop at spec approval, and `/keeler:fix` for the bugfix road.
 - `.claude/keeler.md` — the standing rules the AI works under (imported by
   `CLAUDE.md`): the pipeline, change classes, quality bars, "never commit without confirmation", "every task
   ends with an English summary that re-surfaces discovered problems".

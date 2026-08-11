@@ -33,9 +33,9 @@ Bug fixes and trivial edits take lighter roads. See
 
 ## Quick start
 
-- **Feature:** `/spec → approve → /tasks → /tdd → /qa → /review → /mutants` —
-  or `/feature <problem>` to run the whole examination end to end.
-- **Bugfix:** `/fix` — reproduce with a failing regression test first, then
+- **Feature:** `/keeler:spec → approve → /keeler:tasks → /keeler:tdd → /keeler:qa → /keeler:review → /keeler:mutants` —
+  or `/keeler:feature <problem>` to run the whole examination end to end.
+- **Bugfix:** `/keeler:fix` — reproduce with a failing regression test first, then
   fix minimally.
 - **Trivial** (docs, comments, config): fast path — `just lint`, no spec,
   no ceremony.
@@ -76,15 +76,16 @@ button or `cargo generate minikin/keeler`.
 **Legacy code will not pass the gates on day one — that's expected.** Adopt
 them incrementally:
 
-1. `just crap-baseline` — freeze today's scores. From now on `just
-   crap-delta` fails only on *regressions*: the legacy debt is grandfathered,
-   new debt is not.
+1. `just crap-baseline`, then **commit `crap-baseline.json`** — it freezes
+   today's scores as the shared reference. From now on `just crap-delta`
+   fails only on *regressions*: legacy debt is grandfathered, new debt is
+   not. CI enforces the same gate on every pull request.
 2. Use `just mutants-diff` (changed lines only) — never run full mutation
    testing on a legacy codebase.
 3. Set the coverage threshold in the `cov` recipe to today's number, and
    ratchet it up as tested code grows. Same for the CRAP `--threshold`.
 4. Write specs for new features only; legacy behavior earns specs
-   opportunistically, one `/fix` at a time.
+   opportunistically, one `/keeler:fix` at a time.
 
 The principle: **the gates guard the delta, not the past.** Every change
 must leave the codebase better; nobody is asked to repay ten years of debt

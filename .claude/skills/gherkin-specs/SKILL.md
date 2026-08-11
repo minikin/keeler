@@ -1,6 +1,6 @@
 ---
 name: gherkin-specs
-description: How to write good Given/When/Then scenarios for Keeler specs. Use during /spec when drafting or amending a spec, and during /review when checking spec conformance — covers scenario granularity, observable-behavior phrasing, and the traps that make specs untestable.
+description: How to write good Given/When/Then scenarios for Keeler specs. Use during /keeler:spec when drafting or amending a spec, and during /keeler:review when checking spec conformance — covers scenario granularity, observable-behavior phrasing, and the traps that make specs untestable.
 ---
 
 # Writing Gherkin Scenarios That Gate Real Code
@@ -43,4 +43,4 @@ And   <at most a couple more observables>
 - Two scenarios that can't both be implemented → the spec contradicts
   itself; resolve before approval, not in code.
 - A scenario the implementation satisfies "by accident" with no dedicated
-  test → conformance gap; /review must flag it.
+  test → conformance gap; /keeler:review must flag it.

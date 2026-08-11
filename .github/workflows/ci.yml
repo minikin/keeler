@@ -53,6 +53,82 @@ jobs:
         run: cargo llvm-cov nextest --all-targets --no-tests=pass --lcov --output-path lcov.info --fail-under-lines 90
       - name: CRAP gate (threshold 15)
         run: cargo crap --lcov lcov.info --path src --threshold 15 --fail-above
+      # The committed baseline is the shared reference — a change may not
+      # regress any function's score, whatever the absolute threshold says.
+      - name: CRAP delta gate (no regressions vs the committed baseline)
+        run: |
+          if [ -f crap-baseline.json ]; then
+            cargo crap --lcov lcov.info --path src --threshold 15 --fail-above \
+              --baseline crap-baseline.json --fail-regression
+          else
+            echo "no crap-baseline.json committed — skipping the delta gate"
+          fi
+
+  installer:
+    name: Installer (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov,cargo-nextest,cargo-mutants,cargo-crap,just
+      # --no-tools here: the tools are already installed above. The
+      # bootstrap path that installs them is covered by the job below.
+      - name: Binary project — install and pass the gate
+        run: |
+          cargo new "$RUNNER_TEMP/bin-project"
+          ./install.sh "$RUNNER_TEMP/bin-project" --no-tools
+          cd "$RUNNER_TEMP/bin-project" && just dev
+      - name: Library project — install, pass the gate, kill the mutants
+        run: |
+          cargo new --lib "$RUNNER_TEMP/lib-project"
+          ./install.sh "$RUNNER_TEMP/lib-project" --no-tools
+          # cargo's generated `add` trips pedantic clippy; the installer is
+          # under test here, not the stub it lands next to.
+          sed -i.bak 's/^pub fn add/#[must_use]\npub fn add/' "$RUNNER_TEMP/lib-project/src/lib.rs"
+          rm -f "$RUNNER_TEMP/lib-project/src/lib.rs.bak"
+          cd "$RUNNER_TEMP/lib-project" && just dev
+      - name: An existing CLAUDE.md survives and the import is not duplicated
+        run: |
+          cargo new --lib "$RUNNER_TEMP/claude-project"
+          printf '# CLAUDE.md\n\nProject-specific rules.\n' > "$RUNNER_TEMP/claude-project/CLAUDE.md"
+          ./install.sh "$RUNNER_TEMP/claude-project" --no-tools
+          ./install.sh "$RUNNER_TEMP/claude-project" --no-tools
+          grep -q 'Project-specific rules.' "$RUNNER_TEMP/claude-project/CLAUDE.md"
+          test "$(grep -c '@.claude/keeler.md' "$RUNNER_TEMP/claude-project/CLAUDE.md")" = "1"
+          test -f "$RUNNER_TEMP/claude-project/.claude/keeler.md"
+      - name: Re-running the installer changes nothing
+        run: |
+          cd "$RUNNER_TEMP/lib-project"
+          git init -q . && git add -A
+          before="$(git status --short | sort)"
+          cd - >/dev/null
+          ./install.sh "$RUNNER_TEMP/lib-project" --no-tools
+          cd "$RUNNER_TEMP/lib-project" && git add -A
+          [ "$(git status --short | sort)" = "$before" ] || {
+            echo "second run modified the project"; git status --short; exit 1; }
+
+  installer-bootstrap:
+    name: Installer bootstrap (installs the tools itself)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      # No tools pre-installed on purpose: this exercises the path where the
+      # installer has to bring up cargo-binstall and the whole toolchain.
+      - name: Install into a fresh project, tools and all
+        run: |
+          cargo new "$RUNNER_TEMP/bootstrap"
+          ./install.sh "$RUNNER_TEMP/bootstrap"
+          cd "$RUNNER_TEMP/bootstrap" && just dev
 
   mutants:
     name: Mutation tests

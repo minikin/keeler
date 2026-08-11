@@ -1,6 +1,6 @@
 ---
 name: property-testing
-description: Catalog of property-test invariants and proptest patterns for Rust. Use when writing tests during /tdd or strengthening tests after /mutants — whenever code has an invariant worth pinning (round-trips, ordering, idempotence, bounds, merging) or a surviving mutant points at a general gap rather than a missing example.
+description: Catalog of property-test invariants and proptest patterns for Rust. Use when writing tests during /keeler:tdd or strengthening tests after /keeler:mutants — whenever code has an invariant worth pinning (round-trips, ordering, idempotence, bounds, merging) or a surviving mutant points at a general gap rather than a missing example.
 ---
 
 # Property-Testing Patterns

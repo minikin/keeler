@@ -10,27 +10,27 @@ mutants, crap) and `just`. Tests use `proptest` for property tests.
 Every feature follows this pipeline. Do not skip stages or reorder them.
 
 ```
-problem ──▶ /spec ──▶ user approves spec ──▶ /tasks ──▶ /tdd (per task)
+problem ──▶ /keeler:spec ──▶ user approves spec ──▶ /keeler:tasks ──▶ /keeler:tdd (per task)
                 ▲                                            │
                 └── back-and-forth until approved            ▼
-                                                           /qa  (fmt, lint, tests, coverage, CRAP)
+                                                           /keeler:qa  (fmt, lint, tests, coverage, CRAP)
                                                              │
                                                              ▼
-                                                          /review
+                                                          /keeler:review
                                                              │
                                                              ▼
-                                                         /mutants ──▶ survivors? ──▶ strengthen tests,
-                                                             │            │          then /qa + /mutants again
+                                                         /keeler:mutants ──▶ survivors? ──▶ strengthen tests,
+                                                             │            │          then /keeler:qa + /keeler:mutants again
                                                              ▼            ◀──────────────┘
                                                            done (all gates green)
 ```
 
-1. **/spec** — analyze the problem, draft a Gherkin spec in `specs/`, iterate with the user until they approve it. **Never write implementation code at this stage.**
-2. **/tasks** — break the approved spec into ordered tasks, each mapped to its scenarios and test types.
-3. **/tdd** — implement one task at a time, strictly test-first (red → green → refactor). Unit tests + property tests (proptest) + acceptance tests per scenario.
-4. **/qa** — run the full quality gate: `just dev` (fmt, clippy, nextest, doc tests, coverage, cargo-crap).
-5. **/review** — spec-conformance check (scenario→test mapping, scope creep, invariant coverage) done in-project, then the built-in `code-review` skill for generic correctness/simplification — don't hand-roll what it already verifies.
-6. **/mutants** — mutation tests on changed files. Surviving mutants mean the tests are weak: strengthen the tests (never weaken the code to satisfy a mutant), then re-run /qa and /mutants until zero survivors.
+1. **/keeler:spec** — analyze the problem, draft a Gherkin spec in `specs/`, iterate with the user until they approve it. **Never write implementation code at this stage.**
+2. **/keeler:tasks** — break the approved spec into ordered tasks, each mapped to its scenarios and test types.
+3. **/keeler:tdd** — implement one task at a time, strictly test-first (red → green → refactor). Unit tests + property tests (proptest) + acceptance tests per scenario.
+4. **/keeler:qa** — run the full quality gate: `just dev` (fmt, clippy, nextest, doc tests, coverage, cargo-crap).
+5. **/keeler:review** — spec-conformance check (scenario→test mapping, scope creep, invariant coverage) done in-project, then the built-in `code-review` skill for generic correctness/simplification — don't hand-roll what it already verifies.
+6. **/keeler:mutants** — mutation tests on changed files. Surviving mutants mean the tests are weak: strengthen the tests (never weaken the code to satisfy a mutant), then re-run /keeler:qa and /keeler:mutants until zero survivors.
 
 ## Change classes
 
@@ -38,8 +38,8 @@ Not every change is a feature. Pick the lightest class that honestly fits — an
 
 | Class       | When                                                 | Pipeline                                                                                 |
 | ----------- | ---------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| **Feature** | New behavior, changed behavior, new API              | Full: `/spec → approve → /tasks → /tdd → /qa → /review → /mutants`                       |
-| **Bugfix**  | Existing behavior is wrong                           | `/fix`: failing regression test first → minimal fix → `just dev` + `just mutants-diff`   |
+| **Feature** | New behavior, changed behavior, new API              | Full: `/keeler:spec → approve → /keeler:tasks → /keeler:tdd → /keeler:qa → /keeler:review → /keeler:mutants`                       |
+| **Bugfix**  | Existing behavior is wrong                           | `/keeler:fix`: failing regression test first → minimal fix → `just dev` + `just mutants-diff`   |
 | **Trivial** | Docs, comments, config, renames — no behavior change | Fast path: `just lint` (plus `just test` if code was touched at all); no spec, no review |
 
 Rule of thumb: if you're debating whether it changes behavior, it's not trivial. If a "trivial" change makes any test fail, it wasn't trivial — reclassify.
@@ -64,7 +64,7 @@ Never bury a discovered problem in the middle of a transcript — it must reappe
 
 All feature specs live in `specs/`, written Gherkin style (Given/When/Then). Copy `specs/TEMPLATE.md` for new ones; number them `NN-slug.md`.
 
-- **Never modify a spec file without explicit permission from the user.** The one exception is the `Status:` line and task checkboxes — pipeline bookkeeping: /spec sets Approved on the user's approval, /tdd ticks tasks, /mutants sets Implemented when the final gate is clean.
+- **Never modify a spec file without explicit permission from the user.** The one exception is the `Status:` line and task checkboxes — pipeline bookkeeping: /keeler:spec sets Approved on the user's approval, /keeler:tdd ticks tasks, /keeler:mutants sets Implemented when the final gate is clean.
 - A spec's Acceptance Tests section IS the acceptance criteria — every scenario must map to at least one test named after it.
 - When a spec needs to change (scope change, new edge case), propose the change and wait for approval before editing the file.
 
@@ -82,7 +82,7 @@ All of these must be green before a feature is considered done:
 | Mutation   | `just mutants-diff`                                   | zero surviving mutants in changed files        |
 | CRAP delta | `just crap-delta`                                     | no function's CRAP score regressed vs baseline |
 
-**Baseline discipline:** before starting a feature, record a CRAP baseline with `just crap-baseline` (JSON, stable `--sort file`). After the feature, `just crap-delta` shows per-function before/after and fails on any regression — this is the "did the change make the codebase worse?" gate.
+**Baseline discipline:** `crap-baseline.json` is **committed to the repository** — it is the shared reference every developer and CI measures against, so the ratchet works for the whole team, not just one machine. `just crap-delta` shows per-function before/after and fails on any regression: the "did this change make the codebase worse?" gate. Refresh the baseline (`just crap-baseline`) only deliberately, in its own commit — a moved baseline is a visible decision, reviewable like any other diff.
 
 ## Commands
 
@@ -105,15 +105,15 @@ just dev-full   # dev + all mutants (slow)
 
 Project skills live in `.claude/skills/<name>/SKILL.md` and load automatically when their description matches the work at hand — no invocation needed:
 
-- **property-testing** — invariant catalog and proptest patterns; fires during /tdd and when a surviving mutant points at a missing law rather than a missing example.
-- **gherkin-specs** — how to write observable, testable Given/When/Then scenarios; fires during /spec and the conformance half of /review.
+- **property-testing** — invariant catalog and proptest patterns; fires during /keeler:tdd and when a surviving mutant points at a missing law rather than a missing example.
+- **gherkin-specs** — how to write observable, testable Given/When/Then scenarios; fires during /keeler:spec and the conformance half of /keeler:review.
 
 Add new skills the same way: a folder under `.claude/skills/`, frontmatter with `name` and a `description` that says *when* to use it — the description is the trigger.
 
 **Recommended user-level skills** for a Rust project on this workflow (installed globally, not shipped with the repo — install your own equivalents if missing):
 
 - **rust-best-practices** — idiomatic Rust: borrowing vs cloning, `Result` error handling, API design; consult while writing or refactoring any Rust code.
-- **clean-code** — naming, function size, structure; the go-to during the REFACTOR step of /tdd.
+- **clean-code** — naming, function size, structure; the go-to during the REFACTOR step of /keeler:tdd.
 - **rust-async-patterns** — Tokio, async traits, concurrency; the moment the project grows async code.
 
 ## Testing conventions

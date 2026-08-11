@@ -13,7 +13,7 @@ You are in the **spec stage** of the workflow (see .claude/keeler.md). Your job 
    - **Context** — the problem analysis from step 1.
    - **Acceptance Tests** — Gherkin scenarios (Given/When/Then) covering the happy path, each edge case, and each failure mode. Scenarios must describe observable behavior, not implementation.
    - **Implementation Notes** — approach sketch, key types, invariants worth a property test, and explicit **Non-goals**.
-   - Leave the **Tasks** section empty — that's for /tasks after approval.
+   - Leave the **Tasks** section empty — that's for /keeler:tasks after approval.
    - Set **Status: Draft**.
 4. **Present the spec** to the user: summarize it briefly and point out the decisions you made and the ones you left open.
-5. **Stop and wait for approval.** Iterate on feedback until the user approves. On approval, set **Status: Approved**. Only then may /tasks be run.
+5. **Stop and wait for approval.** Iterate on feedback until the user approves. On approval, set **Status: Approved**. Only then may /keeler:tasks be run.

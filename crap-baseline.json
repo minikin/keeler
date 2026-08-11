@@ -1,0 +1,27 @@
+{
+  "$schema": "https://raw.githubusercontent.com/minikin/cargo-crap/main/schemas/report-v1.json",
+  "version": "0.4.3",
+  "entries": [
+    {
+      "file": "src/lib.rs",
+      "function": "checked_total",
+      "line": 7,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0
+    }
+  ],
+  "diagnostics": {
+    "analyzed_files": 1,
+    "lcov_files": 1,
+    "matched_files": 1,
+    "source_only": {
+      "count": 0,
+      "examples": []
+    },
+    "lcov_only": {
+      "count": 0,
+      "examples": []
+    }
+  }
+}

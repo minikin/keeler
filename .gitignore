@@ -92,6 +92,5 @@ $RECYCLE.BIN/
 /target
 lcov.info
 crap-report.json
-crap-baseline.json
 mutants.out*/
 .DS_Store

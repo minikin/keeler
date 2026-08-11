@@ -24,4 +24,4 @@ Invoke the built-in `code-review` skill on the current diff. It covers correctne
 
 Merge both parts into one ranked findings list (spec-conformance findings first — a conformance gap outranks a style cleanup). For each finding: file:line, what's wrong, concrete failure scenario, suggested fix.
 
-**Do not apply fixes** — the user decides what to act on. Agreed fixes go back through /tdd (test first), then /qa, then /mutants.
+**Do not apply fixes** — the user decides what to act on. Agreed fixes go back through /keeler:tdd (test first), then /keeler:qa, then /keeler:mutants.
