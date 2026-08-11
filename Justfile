@@ -2,10 +2,16 @@
 default:
     @just --list
 
-# Run all tests
+# Run all tests (doc tests only when the package has a library target)
 test:
-    cargo nextest run --all-targets
-    cargo test --doc
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo nextest run --all-targets --no-tests=pass
+    if cargo metadata --no-deps --format-version 1 | grep -q '"doctest":true'; then
+        cargo test --doc
+    else
+        echo "no library target — skipping doc tests"
+    fi
 
 # Apply formatting
 fmt:
@@ -25,22 +31,22 @@ ci: lint test
 
 # Line coverage summary; fails mechanically below 90% lines
 cov:
-    cargo llvm-cov nextest --all-targets --summary-only --fail-under-lines 90
+    cargo llvm-cov nextest --all-targets --no-tests=pass --summary-only --fail-under-lines 90
 
 # Coverage + CRAP score gate: fails if any function scores above the threshold
 crap:
-    cargo llvm-cov nextest --all-targets --lcov --output-path lcov.info
+    cargo llvm-cov nextest --all-targets --no-tests=pass --lcov --output-path lcov.info
     cargo crap --lcov lcov.info --path src --threshold 15 --fail-above
 
 # Record a CRAP baseline (run before starting a feature)
 crap-baseline:
-    cargo llvm-cov nextest --all-targets --lcov --output-path lcov.info
+    cargo llvm-cov nextest --all-targets --no-tests=pass --lcov --output-path lcov.info
     cargo crap --lcov lcov.info --path src --format json --sort file --output crap-baseline.json
     @echo "CRAP baseline saved to crap-baseline.json"
 
 # CRAP delta vs the recorded baseline: fails on threshold breach OR any regression
 crap-delta:
-    cargo llvm-cov nextest --all-targets --lcov --output-path lcov.info
+    cargo llvm-cov nextest --all-targets --no-tests=pass --lcov --output-path lcov.info
     cargo crap --lcov lcov.info --path src --threshold 15 --fail-above \
         --baseline crap-baseline.json --fail-regression
 

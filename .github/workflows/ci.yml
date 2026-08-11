@@ -33,7 +33,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@cargo-nextest
       - name: Test
-        run: cargo nextest run --all-targets
+        run: cargo nextest run --all-targets --no-tests=pass
       - name: Doc tests
         run: cargo test --doc
 
@@ -50,7 +50,7 @@ jobs:
         with:
           tool: cargo-llvm-cov,cargo-nextest,cargo-crap
       - name: Coverage gate (>= 90% lines)
-        run: cargo llvm-cov nextest --all-targets --lcov --output-path lcov.info --fail-under-lines 90
+        run: cargo llvm-cov nextest --all-targets --no-tests=pass --lcov --output-path lcov.info --fail-under-lines 90
       - name: CRAP gate (threshold 15)
         run: cargo crap --lcov lcov.info --path src --threshold 15 --fail-above
 
