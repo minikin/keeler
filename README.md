@@ -7,9 +7,6 @@ change starts as a human-approved spec, is built test-first, and must clear
 independent gates — tests, coverage, CRAP score, review, and mutation
 testing. A defect may slip past one gate, but rarely past all of them.
 
-See [WORKFLOW.md](WORKFLOW.md) for how it works in plain words, and
-[CLAUDE.md](CLAUDE.md) for the rules the AI operates under.
-
 ## How it works
 
 Every feature begins as a Gherkin specification that a human reviews and
@@ -25,8 +22,9 @@ the tests are too weak, and the rule is absolute: strengthen the test, never
 bend the code to satisfy the tool. A per-function baseline recorded before
 each feature guarantees the codebase never gets quietly worse.
 
-Bug fixes and trivial edits take lighter roads — see
-[WORKFLOW.md](WORKFLOW.md) for the full picture with diagrams.
+Bug fixes and trivial edits take lighter roads. See
+[WORKFLOW.md](WORKFLOW.md) for the full picture with diagrams, and
+[CLAUDE.md](CLAUDE.md) for the rules the AI operates under.
 
 ## Quick start
 
