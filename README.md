@@ -76,6 +76,7 @@ recorded at the top of `.claude/keeler.md`.
 - `--no-tools` skips the tool installs. Prefer to read the script first?
   `git clone https://github.com/minikin/keeler && ./keeler/install.sh <project>`
   does exactly the same.
+- On Windows, run it from WSL or Git Bash — the installer is a shell script.
 
 ## Adopting it in an existing codebase
 

@@ -1,5 +1,7 @@
+# A placeholder crate so every gate has something real to measure — the
+# repository dogfoods its own pipeline. Replace it with your code.
 [package]
-name = "demo"
+name = "keeler-example"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"

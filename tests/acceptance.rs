@@ -1,7 +1,7 @@
 //! Acceptance tests: one test per spec scenario, named after it.
 //! Structure each test as Given / When / Then, mirroring the spec.
 
-use demo::checked_total;
+use keeler_example::checked_total;
 
 // Placeholder scenario — replace with tests named after your first
 // spec's scenarios. Scenario: Overflow never panics
