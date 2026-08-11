@@ -2,13 +2,31 @@
 
 > Named after [Leonarde Keeler](https://en.wikipedia.org/wiki/Leonarde_Keeler), builder of the first practical polygraph.
 
-A polygraph for AI-written code: spec-first, test-driven development where
-every claim the AI makes is verified by an independent channel — tests,
-coverage, complexity scoring, review, and mutation testing. You can fool one
-channel; you can't fool them all.
+Keeler is a quality-assurance workflow for AI-assisted development: every
+change starts as a human-approved spec, is built test-first, and must clear
+independent gates — tests, coverage, CRAP score, review, and mutation
+testing. A defect may slip past one gate, but rarely past all of them.
 
 See [WORKFLOW.md](WORKFLOW.md) for how it works in plain words, and
 [CLAUDE.md](CLAUDE.md) for the rules the AI operates under.
+
+## How it works
+
+Every feature begins as a Gherkin specification that a human reviews and
+approves before any code exists — that approval is the only moment
+requirements get decided. Implementation is strictly test-driven: the
+failing test is shown first, then the minimal code, then the refactor.
+
+The result must clear a series of independent verification gates: the test
+suite, mechanical line-coverage and complexity-vs-coverage (CRAP) thresholds,
+a spec-conformance review, and finally mutation testing — deliberately
+planted bugs that the tests are required to catch. A surviving mutant means
+the tests are too weak, and the rule is absolute: strengthen the test, never
+bend the code to satisfy the tool. A per-function baseline recorded before
+each feature guarantees the codebase never gets quietly worse.
+
+Bug fixes and trivial edits take lighter roads — see
+[WORKFLOW.md](WORKFLOW.md) for the full picture with diagrams.
 
 ## Quick start
 
