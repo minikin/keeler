@@ -1,0 +1,21 @@
+[package]
+name = "demo"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+publish = false
+
+[dependencies]
+
+[dev-dependencies]
+proptest = "1"
+
+# cargo-mutants builds each mutant with this profile — no debug info keeps it fast.
+[profile.mutants]
+inherits = "dev"
+debug = 0
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"

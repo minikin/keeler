@@ -1,0 +1,16 @@
+test_tool = "nextest"
+jobs = 4
+profile = "mutants"
+timeout = 60
+
+# Prevent -D warnings from failing mutants on warnings instead of test failures.
+cap_lints = true
+
+# Enable built-in skip patterns (e.g. with_capacity).
+skip_calls_defaults = true
+
+# Pure output/logging calls don't affect logic — no point mutating them.
+skip_calls = ["eprintln!", "write!", "writeln!"]
+
+# Only source logic matters — don't mutate the tests themselves.
+exclude_globs = ["tests/**/*.rs"]
