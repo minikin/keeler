@@ -7,8 +7,9 @@
 
 Keeler is a quality-assurance workflow for AI-assisted **Rust** development:
 every change starts as a human-approved spec, is built test-first, and must
-clear independent gates: tests, coverage, CRAP score, review, and mutation
-testing. A defect may slip past one gate, but rarely past all of them.
+clear independent gates — unit and property tests, coverage, CRAP score,
+review, and mutation testing that verifies the tests themselves. A defect
+may slip past one gate, but rarely past all of them.
 
 The method is language-agnostic; this implementation is wired to the Rust
 toolchain (`cargo nextest`, `cargo llvm-cov`, `cargo mutants`, `cargo crap`,
@@ -54,38 +55,26 @@ From inside any Rust project — existing or freshly `cargo new`-ed:
 curl -fsSL https://raw.githubusercontent.com/minikin/keeler/main/install.sh | bash -s .
 ```
 
-One command sets up four things:
+Prefix it with `KEELER_REF=v0.1.0` to pin a release instead of tracking
+`main`. Later, `just keeler-upgrade` re-runs the installer in place; the
+version you have is recorded at the top of `.claude/keeler.md`.
 
-|              | What it installs                                                                                        |
-| ------------ | ------------------------------------------------------------------------------------------------------- |
+|              | What it installs                                                                                       |
+| ------------ | ------------------------------------------------------------------------------------------------------ |
 | **Tools**    | `cargo-nextest`, `cargo-llvm-cov`, `cargo-mutants`, `cargo-crap`, `just` — only the ones you're missing |
 | **Workflow** | slash commands, skills, spec template, `Justfile`, gate configs, and a `keeler.yml` CI workflow         |
 | **Manifest** | `proptest` as a dev-dependency, plus the `[profile.mutants]` and `[lints.clippy]` sections              |
 | **Ignores**  | the generated artifacts, appended to `.gitignore`                                                       |
 
-Re-running is safe — nothing is duplicated, and your files are never
-overwritten (a conflicting file is copied alongside as `<name>.keeler`).
-Pass `--no-tools` to skip the tool installs.
+- Re-running is safe — nothing is duplicated and nothing of yours is
+  overwritten; a conflicting file is copied alongside as `<name>.keeler`.
+- An existing `CLAUDE.md` keeps every word: the rules install as
+  `.claude/keeler.md` and a single `@.claude/keeler.md` import is appended.
+- `--no-tools` skips the tool installs. Prefer to read the script first?
+  `git clone https://github.com/minikin/keeler && ./keeler/install.sh <project>`
+  does exactly the same.
 
-**Pin a version.** The command above tracks `main`. To install a fixed
-release — and to upgrade deliberately rather than whenever `main` moves —
-set `KEELER_REF`:
-
-```bash
-KEELER_REF=v0.1.0 curl -fsSL https://raw.githubusercontent.com/minikin/keeler/main/install.sh | bash -s .
-```
-
-Later, `just keeler-upgrade` re-runs the installer in place; the version you
-have is recorded at the top of `.claude/keeler.md`.
-
-**Already have a `CLAUDE.md`?** It stays exactly as it is. The rules install
-as `.claude/keeler.md`, and your file gets one `@.claude/keeler.md` import
-line appended — so your own instructions are never rewritten.
-
-**Other ways in:** clone first if you prefer to read before you run
-(`git clone https://github.com/minikin/keeler && ./keeler/install.sh
-<project>`); for a brand-new project use GitHub's **Use this template**
-button or `cargo generate minikin/keeler`.
+## Adopting it in an existing codebase
 
 **Legacy code will not pass the gates on day one — that's expected.** Adopt
 them incrementally:
@@ -107,7 +96,7 @@ up front.
 
 ## Skills
 
-The template ships two project skills in `.claude/skills/` that load
+Keeler installs two project skills in `.claude/skills/` that load
 themselves when relevant: **property-testing** (an invariant catalog for
 proptest — round-trips, idempotence, shape checks) and **gherkin-specs**
 (how to write scenarios that actually gate code).
@@ -134,6 +123,6 @@ once the project grows async code.
 - `src/` — implementation with unit + property tests inline
 - `tests/acceptance.rs` — one acceptance test per spec scenario
 - `.claude/keeler.md` — the workflow rules, imported by `CLAUDE.md` so your own instructions stay untouched
-- `.claude/commands/` — the workflow slash commands
+- `.claude/commands/keeler/` — the workflow slash commands, invoked as `/keeler:spec`, `/keeler:fix`, …
 - `.claude/skills/` — self-triggering knowledge: property-testing, gherkin-specs
-- `.github/workflows/ci.yml` — the same gates as physics, not discipline
+- `.github/workflows/ci.yml` — the same gates as physics, not discipline (installs as `keeler.yml` in your project)

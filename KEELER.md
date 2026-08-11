@@ -135,7 +135,8 @@ questions don't probe the examinee, they probe the instrument.
 - `Justfile` — every gate as one short command (`just dev`, `just
   mutants-diff`, `just crap-delta`), so the human can re-run anything the AI
   claims.
-- `.github/workflows/ci.yml` — the same gates in CI: lints, tests,
+- `.github/workflows/ci.yml` — the same gates in CI (installed as
+  `keeler.yml` in your project): lints, tests,
   coverage ≥ 90%, CRAP ≤ 15, and mutation tests on the changed lines of every
   PR. Locally the law is discipline; in CI it's physics.
 
