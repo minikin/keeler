@@ -1,53 +1,89 @@
 #!/usr/bin/env bash
-# Keeler installer: copies the workflow into an existing Rust project.
-# Non-destructive — never overwrites an existing file; conflicting files
-# are written next to the original as <name>.keeler for manual merge.
+# Keeler installer: sets the workflow up in a Rust project, end to end —
+# tooling, workflow files, Cargo.toml sections, .gitignore entries.
+#
+# Safe to re-run: existing files are never overwritten (conflicts are
+# written alongside as <name>.keeler), already-installed tools are skipped,
+# and Cargo.toml / .gitignore entries are added only when missing.
 #
 # Usage:
-#   ./install.sh /path/to/your/project          (from a clone)
-#   curl -fsSL https://raw.githubusercontent.com/minikin/keeler/main/install.sh \
-#       | bash -s /path/to/your/project         (no clone needed)
+#   curl -fsSL https://raw.githubusercontent.com/minikin/keeler/main/install.sh | bash -s .
+#   ./install.sh /path/to/project        # from a clone
+#   ./install.sh . --no-tools            # skip installing CLI tools
 set -euo pipefail
 
 REPO_TARBALL="${KEELER_TARBALL:-https://codeload.github.com/minikin/keeler/tar.gz/refs/heads/main}"
-DEST="${1:?usage: ./install.sh /path/to/your/project}"
+DEST="."
+WITH_TOOLS=1
+for arg in "$@"; do
+    case "$arg" in
+        --no-tools) WITH_TOOLS=0 ;;
+        -h|--help) sed -n '2,12p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        *) DEST="$arg" ;;
+    esac
+done
 
-# When run next to the repo files, install from them; when piped from curl,
-# fetch a fresh tarball into a temp dir instead.
+say() { printf '\n\033[1m%s\033[0m\n' "$*"; }
+ok()  { printf '  ✓ %s\n' "$*"; }
+note(){ printf '  · %s\n' "$*"; }
+
+[ -f "$DEST/Cargo.toml" ] || {
+    echo "error: $DEST is not a Rust project (no Cargo.toml)" >&2
+    exit 1
+}
+DEST="$(cd "$DEST" && pwd)"
+
+# --- Source: local checkout when present, otherwise fetch a tarball --------
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]:-.}")" 2>/dev/null && pwd || pwd)"
 if [ ! -f "$SRC/specs/TEMPLATE.md" ]; then
     tmp="$(mktemp -d)"
     trap 'rm -rf "$tmp"' EXIT
-    echo "Fetching Keeler..."
+    say "Fetching Keeler"
     curl -fsSL "$REPO_TARBALL" | tar -xz -C "$tmp" --strip-components=1
     SRC="$tmp"
+    ok "downloaded"
 fi
 
-if [ ! -f "$DEST/Cargo.toml" ]; then
-    echo "error: $DEST does not look like a Rust project (no Cargo.toml)" >&2
-    exit 1
+# --- 1. Tools -------------------------------------------------------------
+if [ "$WITH_TOOLS" = 1 ]; then
+    say "Checking tools"
+    missing=()
+    for t in nextest llvm-cov mutants crap; do
+        cargo "$t" --version >/dev/null 2>&1 && ok "cargo-$t" || missing+=("cargo-$t")
+    done
+    command -v just >/dev/null 2>&1 && ok "just" || missing+=("just")
+
+    if [ "${#missing[@]}" -gt 0 ]; then
+        note "installing: ${missing[*]}"
+        if ! command -v cargo-binstall >/dev/null 2>&1; then
+            note "installing cargo-binstall first"
+            cargo install cargo-binstall
+        fi
+        cargo binstall --no-confirm "${missing[@]}"
+    fi
+
+    # cargo-llvm-cov needs this rustup component; without it coverage fails
+    # with an unhelpful error.
+    if command -v rustup >/dev/null 2>&1; then
+        rustup component add llvm-tools-preview >/dev/null 2>&1 && ok "llvm-tools-preview"
+    fi
 fi
 
-copied=()
+# --- 2. Workflow files ----------------------------------------------------
+say "Installing workflow files"
+copied=0
 merges=()
-
-# Copy a file; if the destination exists, place a .keeler copy for merging.
 install_file() {
-    local rel="$1"
-    local from="$SRC/$rel" to="$DEST/$rel"
+    local rel="$1" from="$SRC/$1" to="$DEST/$1"
     mkdir -p "$(dirname "$to")"
     if [ -e "$to" ]; then
-        if ! cmp -s "$from" "$to"; then
-            cp "$from" "$to.keeler"
-            merges+=("$rel  (wrote $rel.keeler — merge by hand)")
-        fi
+        cmp -s "$from" "$to" || { cp "$from" "$to.keeler"; merges+=("$rel"); }
     else
         cp "$from" "$to"
-        copied+=("$rel")
+        copied=$((copied + 1))
     fi
 }
 
-# The workflow itself
 for f in .claude/commands/spec.md .claude/commands/tasks.md \
          .claude/commands/tdd.md .claude/commands/qa.md \
          .claude/commands/review.md .claude/commands/mutants.md \
@@ -59,49 +95,75 @@ for f in .claude/commands/spec.md .claude/commands/tasks.md \
     install_file "$f"
 done
 
-# CI under a keeler-specific name so it never clashes with existing workflows
+# CI goes in under its own name so it never clashes with existing workflows.
 mkdir -p "$DEST/.github/workflows"
 if [ -e "$DEST/.github/workflows/keeler.yml" ]; then
-    merges+=(".github/workflows/keeler.yml  (already exists — left untouched)")
+    note "keeler.yml already present — left as is"
 else
     cp "$SRC/.github/workflows/ci.yml" "$DEST/.github/workflows/keeler.yml"
-    copied+=(".github/workflows/keeler.yml")
+    copied=$((copied + 1))
+fi
+ok "$copied file(s) installed"
+[ "${#merges[@]}" -gt 0 ] && for m in "${merges[@]}"; do
+    note "$m differs — wrote $m.keeler, merge by hand"
+done
+
+# --- 3. Cargo.toml --------------------------------------------------------
+say "Configuring Cargo.toml"
+manifest="$DEST/Cargo.toml"
+if grep -q '^\[workspace\]' "$manifest" && ! grep -q '^\[package\]' "$manifest"; then
+    note "workspace root — add proptest and the profile to member crates yourself"
+else
+    if grep -q '^proptest' "$manifest" || grep -qA20 '^\[dev-dependencies\]' "$manifest" | grep -q proptest; then
+        ok "proptest already a dev-dependency"
+    else
+        (cd "$DEST" && cargo add --dev --quiet proptest) && ok "proptest added (dev-dependency)"
+    fi
+
+    # cargo-mutants builds every mutant — dropping debug info keeps it fast.
+    if grep -q '^\[profile\.mutants\]' "$manifest"; then
+        ok "[profile.mutants] present"
+    else
+        printf '\n[profile.mutants]\ninherits = "dev"\ndebug = 0\n' >> "$manifest"
+        ok "[profile.mutants] added"
+    fi
+
+    if grep -q '^\[lints\.clippy\]' "$manifest"; then
+        ok "[lints.clippy] present"
+    else
+        cat >> "$manifest" <<'TOML'
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"
+TOML
+        ok "[lints.clippy] added (pedantic)"
+    fi
 fi
 
-echo "Keeler installed into $DEST"
-echo
-echo "Copied:"
-printf '  %s\n' "${copied[@]:-none}"
-if [ "${#merges[@]}" -gt 0 ]; then
-    echo
-    echo "Needs manual merge (existing files were not touched):"
-    printf '  %s\n' "${merges[@]}"
-fi
+# --- 4. .gitignore --------------------------------------------------------
+say "Updating .gitignore"
+gitignore="$DEST/.gitignore"
+touch "$gitignore"
+added=0
+for entry in '/target' 'lcov.info' 'crap-report.json' 'crap-baseline.json' 'mutants.out*/'; do
+    grep -qxF "$entry" "$gitignore" || { printf '%s\n' "$entry" >> "$gitignore"; added=$((added + 1)); }
+done
+ok "$added entry(ies) added"
 
+# --- Done -----------------------------------------------------------------
+say "Keeler installed in $DEST"
 cat <<'NEXT'
 
-Next steps (manual, one-time):
+Next:
+  just crap-baseline    # freeze today's scores — gates then guard the delta
+  just dev              # fmt, clippy, tests, coverage, CRAP
 
-1. Cargo.toml — add, if missing:
-       [dev-dependencies]
-       proptest = "1"
+Expect `just dev` to flag things on an existing codebase — that is the
+point. Legacy debt is grandfathered by the baseline; new debt is not.
+See "Adopting Keeler in an existing project" in README.md.
 
-       [profile.mutants]     # keeps cargo-mutants builds fast
-       inherits = "dev"
-       debug = 0
-
-       [lints.clippy]        # optional but recommended
-       pedantic = { level = "warn", priority = -1 }
-
-2. Install the tools:
-       cargo install cargo-binstall
-       cargo binstall cargo-nextest cargo-llvm-cov cargo-mutants cargo-crap
-
-3. .gitignore — add: lcov.info, crap-baseline.json, crap-report.json, mutants.out*/
-
-4. Adopt the gates INCREMENTALLY — legacy code will not pass them day one.
-   See "Adopting Keeler in an existing project" in README.md:
-       just crap-baseline        # freeze today's scores as the baseline
-   From then on, gate on *regressions and new code only* (just crap-delta,
-   just mutants-diff) and ratchet absolute thresholds up over time.
+Then open the project in Claude Code and run:
+  /feature <what you want to build>
 NEXT

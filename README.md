@@ -37,43 +37,29 @@ Bug fixes and trivial edits take lighter roads. See
 
 See *Change classes* in CLAUDE.md for how to pick the right road.
 
-## Using this template
 
-1. Click **Use this template** on GitHub (enable *Template repository* in
-   the repo settings after publishing).
-2. Rename the crate in `Cargo.toml` (`name = "demo"`) to your project.
-3. Install the toolchain:
+## Install
 
-   ```bash
-   cargo install cargo-binstall
-   cargo binstall cargo-nextest cargo-llvm-cov cargo-mutants cargo-crap
-   brew install just   # or your platform's package manager
-   ```
-
-4. Verify the instrument is calibrated: `just dev` must pass on the clean
-   template (it ships with a tiny placeholder function so every gate has
-   something to measure).
-5. Start your first examination: `/feature <problem>` in Claude Code —
-   or `/spec` if you prefer to drive stage by stage.
-
-## Adopting Keeler in an existing project
-
-You don't need to start from the template — one command installs the
-workflow into any Rust project:
+From inside any Rust project — existing or freshly `cargo new`-ed:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/minikin/keeler/main/install.sh \
-    | bash -s /path/to/your/project
+curl -fsSL https://raw.githubusercontent.com/minikin/keeler/main/install.sh | bash -s .
 ```
+
+That single command does everything: installs the CLI tools it needs
+(`cargo-nextest`, `cargo-llvm-cov`, `cargo-mutants`, `cargo-crap`, `just`)
+if they are missing, copies the commands, skills, spec template, `Justfile`,
+gate configs and a `keeler.yml` CI workflow, adds `proptest` plus the
+`[profile.mutants]` and `[lints.clippy]` sections to `Cargo.toml`, and
+extends `.gitignore`. Re-running it is safe: nothing is duplicated, and your
+files are never overwritten — a conflicting file is copied alongside as
+`<name>.keeler` to merge by hand. Pass `--no-tools` to skip the tool
+installs.
 
 (Prefer to read before you run? `git clone https://github.com/minikin/keeler
 && ./keeler/install.sh /path/to/your/project` does the same from a local
-checkout.)
-
-It copies the commands, skills, spec template, Justfile, gate configs, and a
-`keeler.yml` CI workflow. It never overwrites your files — conflicts land
-next to the original as `<name>.keeler` for manual merge — and it prints the
-few manual steps (dev-dependencies, tool install, `.gitignore` entries).
+checkout. For a brand-new project, use GitHub's **Use this template** button
+or `cargo generate minikin/keeler`.)
 
 **Legacy code will not pass the gates on day one — that's expected.** Adopt
 them incrementally:
