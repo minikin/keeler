@@ -2,7 +2,7 @@
 description: Run the full quality gate — fmt, lint, tests, coverage, CRAP
 ---
 
-You are in the **QA stage** (see CLAUDE.md). Run the full fast gate and report the results honestly — never hide or hand-wave a failure.
+You are in the **QA stage** (see .claude/keeler.md). Run the full fast gate and report the results honestly — never hide or hand-wave a failure.
 
 1. Run `just dev` (fmt → lint → nextest + doc tests → coverage → cargo-crap with `--threshold 15 --fail-above`).
 2. If any step fails, show the actual output, diagnose, fix, and re-run from the failed step. Coverage/CRAP failures are usually missing tests, not broken code — prefer adding tests over restructuring.
@@ -19,4 +19,4 @@ You are in the **QA stage** (see CLAUDE.md). Run the full fast gate and report t
 | CRAP (threshold 15)            | worst function + score                   |
 | CRAP delta (if baseline)       | regressed / improved / new counts        |
 
-6. Close with the status (CLAUDE.md § Reporting): **PASS** if every gate is green and the change is ready for /review; **FAIL + gate name** otherwise; **FLAKY** if a signal was unstable.
+6. Close with the status (.claude/keeler.md § Reporting): **PASS** if every gate is green and the change is ready for /review; **FAIL + gate name** otherwise; **FLAKY** if a signal was unstable.

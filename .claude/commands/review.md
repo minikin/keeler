@@ -5,7 +5,7 @@ argument-hint: <spec file; empty = most recent Implemented/Approved spec>
 
 Spec under review: $ARGUMENTS (if empty, use the spec whose tasks were just implemented).
 
-You are in the **review stage** (see CLAUDE.md). The review has two parts: a spec-conformance pass that only this project can do, then the built-in code-review skill for everything generic.
+You are in the **review stage** (see .claude/keeler.md). The review has two parts: a spec-conformance pass that only this project can do, then the built-in code-review skill for everything generic.
 
 ## Part 1 — Spec conformance (do this yourself)
 

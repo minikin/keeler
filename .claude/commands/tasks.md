@@ -5,7 +5,7 @@ argument-hint: <spec file, e.g. specs/01-foo.md>
 
 Spec to break down: $ARGUMENTS (if empty, use the most recent spec with Status: Approved).
 
-You are in the **task breakdown stage** (see CLAUDE.md). The spec must have **Status: Approved** — if it's still Draft, stop and tell the user to approve it first (via /spec iteration).
+You are in the **task breakdown stage** (see .claude/keeler.md). The spec must have **Status: Approved** — if it's still Draft, stop and tell the user to approve it first (via /spec iteration).
 
 1. **Read the spec** and its scenarios carefully.
 2. **Break the work into ordered tasks** (T1, T2, …), each one small enough to be a single red→green→refactor cycle. For every task specify:

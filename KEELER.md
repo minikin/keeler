@@ -121,8 +121,8 @@ questions don't probe the examinee, they probe the instrument.
 - `.claude/commands/` — one slash command per stage (`/spec`, `/tasks`,
   `/tdd`, `/qa`, `/review`, `/mutants`), plus `/feature` which runs the whole
   pipeline with a hard stop at spec approval, and `/fix` for the bugfix road.
-- `CLAUDE.md` — the standing rules the AI works under: the pipeline, change
-  classes, quality bars, "never commit without confirmation", "every task
+- `.claude/keeler.md` — the standing rules the AI works under (imported by
+  `CLAUDE.md`): the pipeline, change classes, quality bars, "never commit without confirmation", "every task
   ends with an English summary that re-surfaces discovered problems".
 - `.claude/skills/` — knowledge that loads itself when relevant:
   **property-testing** (invariant catalog for the TDD and mutation stages)

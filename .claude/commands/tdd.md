@@ -5,7 +5,7 @@ argument-hint: <task, e.g. specs/01-foo.md T2; empty = next unchecked task>
 
 Task to implement: $ARGUMENTS (if empty, take the first unchecked task from the most recent Approved spec).
 
-You are in the **TDD stage** (see CLAUDE.md). Implement exactly one task, strictly test-first. Never write production code before a failing test exists.
+You are in the **TDD stage** (see .claude/keeler.md). Implement exactly one task, strictly test-first. Never write production code before a failing test exists.
 
 For the task's each behavior:
 

@@ -5,7 +5,7 @@ argument-hint: <problem description>
 
 Problem to analyze: $ARGUMENTS
 
-You are in the **spec stage** of the workflow (see CLAUDE.md). Your job is analysis and specification only — **do not write any implementation code, do not create tasks yet**.
+You are in the **spec stage** of the workflow (see .claude/keeler.md). Your job is analysis and specification only — **do not write any implementation code, do not create tasks yet**.
 
 1. **Analyze the problem.** Restate it in your own words: who has this problem, what triggers it, what the desired outcome is. List the assumptions you're making and the constraints you see (performance, error handling, edge cases).
 2. **Ask clarifying questions** if anything is ambiguous — scope, inputs, failure behavior, non-goals. Prefer asking over assuming for anything that changes the shape of the solution.

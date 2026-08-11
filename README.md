@@ -23,8 +23,8 @@ bend the code to satisfy the tool. A per-function baseline recorded before
 each feature guarantees the codebase never gets quietly worse.
 
 Bug fixes and trivial edits take lighter roads. See
-[WORKFLOW.md](WORKFLOW.md) for the full picture with diagrams, and
-[CLAUDE.md](CLAUDE.md) for the rules the AI operates under.
+[KEELER.md](KEELER.md) for the full picture with diagrams, and
+[.claude/keeler.md](.claude/keeler.md) for the rules the AI operates under.
 
 ## Quick start
 
@@ -35,7 +35,7 @@ Bug fixes and trivial edits take lighter roads. See
 - **Trivial** (docs, comments, config): fast path — `just lint`, no spec,
   no ceremony.
 
-See *Change classes* in CLAUDE.md for how to pick the right road.
+See *Change classes* in [.claude/keeler.md](.claude/keeler.md) for how to pick the right road.
 
 
 ## Install
@@ -55,6 +55,11 @@ extends `.gitignore`. Re-running it is safe: nothing is duplicated, and your
 files are never overwritten — a conflicting file is copied alongside as
 `<name>.keeler` to merge by hand. Pass `--no-tools` to skip the tool
 installs.
+
+**Already have a `CLAUDE.md`?** It is left exactly as it is. The workflow
+rules install as `.claude/keeler.md`, and your `CLAUDE.md` gets a single
+`@.claude/keeler.md` import line appended — Claude Code pulls the rules in
+from there, so your own instructions are never rewritten or duplicated.
 
 (Prefer to read before you run? `git clone https://github.com/minikin/keeler
 && ./keeler/install.sh /path/to/your/project` does the same from a local
@@ -106,6 +111,7 @@ once the project grows async code.
 - `specs/` — Gherkin specs (Given/When/Then), one per feature; `TEMPLATE.md` is the starting point
 - `src/` — implementation with unit + property tests inline
 - `tests/acceptance.rs` — one acceptance test per spec scenario
+- `.claude/keeler.md` — the workflow rules, imported by `CLAUDE.md` so your own instructions stay untouched
 - `.claude/commands/` — the workflow slash commands
 - `.claude/skills/` — self-triggering knowledge: property-testing, gherkin-specs
 - `.github/workflows/ci.yml` — the same gates as physics, not discipline

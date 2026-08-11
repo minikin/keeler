@@ -90,10 +90,44 @@ for f in .claude/commands/spec.md .claude/commands/tasks.md \
          .claude/commands/feature.md .claude/commands/fix.md \
          .claude/skills/property-testing/SKILL.md \
          .claude/skills/gherkin-specs/SKILL.md \
-         specs/TEMPLATE.md CLAUDE.md WORKFLOW.md Justfile \
+         .claude/keeler.md \
+         specs/TEMPLATE.md KEELER.md Justfile \
          .cargo-mutants.toml clippy.toml rustfmt.toml; do
     install_file "$f"
 done
+
+# CLAUDE.md is never overwritten or duplicated: the rules live in
+# .claude/keeler.md and CLAUDE.md merely imports them with one @-line, so a
+# project that already has its own CLAUDE.md keeps every word of it.
+claude_md="$DEST/CLAUDE.md"
+if [ ! -e "$claude_md" ]; then
+    cat > "$claude_md" <<'MD'
+# CLAUDE.md
+
+This file provides guidance to Claude Code when working with code in this repository.
+
+The Keeler workflow rules live in their own file so they can be updated
+without touching your project's instructions:
+
+@.claude/keeler.md
+
+<!-- Add project-specific instructions below this line. -->
+MD
+    copied=$((copied + 1))
+    ok "CLAUDE.md created (imports .claude/keeler.md)"
+elif grep -q '^@\.claude/keeler\.md' "$claude_md"; then
+    ok "CLAUDE.md already imports the Keeler rules"
+else
+    cat >> "$claude_md" <<'MD'
+
+## Keeler workflow
+
+This project follows the Keeler spec-first, test-driven workflow:
+
+@.claude/keeler.md
+MD
+    ok "CLAUDE.md left intact — appended a one-line import"
+fi
 
 # CI goes in under its own name so it never clashes with existing workflows.
 mkdir -p "$DEST/.github/workflows"
@@ -162,7 +196,7 @@ Next:
 
 Expect `just dev` to flag things on an existing codebase — that is the
 point. Legacy debt is grandfathered by the baseline; new debt is not.
-See "Adopting Keeler in an existing project" in README.md.
+See the Install section in README.md, and KEELER.md for the full workflow.
 
 Then open the project in Claude Code and run:
   /feature <what you want to build>

@@ -5,7 +5,7 @@ argument-hint: <problem description>
 
 Problem: $ARGUMENTS
 
-Orchestrate the full workflow from CLAUDE.md for this problem, stage by stage. Each stage follows its command's instructions exactly (`.claude/commands/<stage>.md`):
+Orchestrate the full workflow from .claude/keeler.md for this problem, stage by stage. Each stage follows its command's instructions exactly (`.claude/commands/<stage>.md`):
 
 0. **Baseline** — run `just crap-baseline` to snapshot the current CRAP scores; the final QA will diff against it.
 1. **Spec** — follow /spec: analyze the problem, ask clarifying questions, draft `specs/NN-<slug>.md`. **Hard stop: wait for the user to approve the spec.** Do not proceed on your own.
