@@ -52,12 +52,15 @@ See *Change classes* in [.claude/keeler.md](.claude/keeler.md) for how to pick t
 From inside any Rust project — existing or freshly `cargo new`-ed:
 
 ```bash
+# latest from main
 curl -fsSL https://raw.githubusercontent.com/minikin/keeler/main/install.sh | bash -s .
+
+# or pin a release
+KEELER_REF=v0.1.0 curl -fsSL https://raw.githubusercontent.com/minikin/keeler/main/install.sh | bash -s .
 ```
 
-Prefix it with `KEELER_REF=v0.1.0` to pin a release instead of tracking
-`main`. Later, `just keeler-upgrade` re-runs the installer in place; the
-version you have is recorded at the top of `.claude/keeler.md`.
+`just keeler-upgrade` re-runs the installer later; the version you have is
+recorded at the top of `.claude/keeler.md`.
 
 |              | What it installs                                                                                       |
 | ------------ | ------------------------------------------------------------------------------------------------------ |
