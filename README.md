@@ -4,7 +4,7 @@
 
 Keeler is a quality-assurance workflow for AI-assisted development: every
 change starts as a human-approved spec, is built test-first, and must clear
-independent gates — tests, coverage, CRAP score, review, and mutation
+independent gates: tests, coverage, CRAP score, review, and mutation
 testing. A defect may slip past one gate, but rarely past all of them.
 
 ## How it works
