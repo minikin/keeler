@@ -129,4 +129,5 @@ once the project grows async code.
 - `.claude/keeler.md` — the workflow rules, imported by `CLAUDE.md` so your own instructions stay untouched
 - `.claude/commands/keeler/` — the workflow slash commands, invoked as `/keeler:spec`, `/keeler:fix`, …
 - `.claude/skills/` — self-triggering knowledge: property-testing, gherkin-specs
-- `.github/workflows/ci.yml` — the same gates as physics, not discipline (installs as `keeler.yml` in your project)
+- `templates/keeler.yml` — the gates as physics, not discipline; installed into your project as `.github/workflows/keeler.yml`
+- `.github/workflows/ci.yml` — this repository's own CI, which additionally tests the installer

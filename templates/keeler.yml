@@ -1,0 +1,102 @@
+# The Keeler gates, installed as .github/workflows/keeler.yml.
+#
+# Every step goes through a `just` recipe, so CI runs exactly what `just dev`
+# runs on your machine — a gate that passes locally and fails here (or the
+# reverse) would make both untrustworthy.
+#
+# Expect red on an existing codebase: that is the point. See "Adopting it in
+# an existing codebase" in Keeler's README for how to ratchet the thresholds
+# instead of repaying the debt up front.
+name: Keeler gates
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lints:
+    name: Lints
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@just
+      - run: just lint
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest,just
+      - run: just test
+
+  quality:
+    name: Coverage + CRAP gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov,cargo-nextest,cargo-crap,just
+      - name: Coverage gate
+        run: just cov
+      # The committed baseline is the shared reference: a change may not
+      # regress any function's score, whatever the absolute threshold says.
+      # Without one, only the threshold applies — run `just crap-baseline`
+      # and commit the result to turn the ratchet on.
+      - name: CRAP gate
+        run: |
+          if [ -f crap-baseline.json ]; then
+            just crap-delta
+          else
+            echo "no crap-baseline.json committed — threshold only, no delta gate"
+            just crap
+          fi
+
+  mutants:
+    name: Mutation tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants,cargo-nextest
+      # Changed lines only on a pull request: full mutation testing on an
+      # existing codebase takes hours and reports debt you did not just write.
+      - name: Mutation tests (changed lines only)
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          git diff "origin/${BASE_REF}...HEAD" -- 'src/*.rs' 'src/**/*.rs' > pr.diff
+          if [ ! -s pr.diff ]; then
+            echo "No changed src lines — skipping mutants."
+            exit 0
+          fi
+          cargo mutants --in-diff pr.diff
+      - name: Upload mutants output
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v5
+        with:
+          name: mutants-out
+          path: mutants.out/

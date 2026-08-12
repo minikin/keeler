@@ -9,6 +9,25 @@ Installations pin a version with `KEELER_REF` and record it at the top of
 
 ## [Unreleased]
 
+### Fixed
+
+- The installed CI workflow no longer carries Keeler's own repository jobs.
+  `install.sh` copied `.github/workflows/ci.yml` verbatim, so every adopting
+  project inherited the `version`, `installer` and `installer-bootstrap`
+  jobs — which read `VERSION`, `CHANGELOG.md` and `./install.sh`, none of
+  which exist in a user's project — and went red on its first push. The
+  shipped workflow now comes from `templates/keeler.yml` and runs only the
+  gates: lints, test, coverage + CRAP, mutation testing.
+- An existing `.github/workflows/keeler.yml` is no longer left untouched on
+  re-install. It now follows the same rule as every other installed file:
+  identical means silence, different means the new workflow lands alongside
+  as `keeler.yml.keeler` to merge by hand. Projects were previously stranded
+  on whatever workflow they first installed, so no gate fix ever reached
+  them — including the one above.
+- The shipped `test` job no longer runs `cargo test --doc` directly, which
+  failed with "no library targets found" in binary-only projects. Every job
+  now goes through the `just` recipes, so CI runs what `just dev` runs.
+
 ## [0.1.0] — 2026-08-11
 
 First release: the workflow, the gates, and a one-command installer.

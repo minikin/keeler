@@ -80,8 +80,9 @@ fi
 say "Installing workflow files"
 copied=0
 merges=()
+# install_file <source path> [destination path, when it differs from the source]
 install_file() {
-    local rel="$1" from="$SRC/$1" to="$DEST/$1"
+    local from="$SRC/$1" rel="${2:-$1}" to="$DEST/${2:-$1}"
     mkdir -p "$(dirname "$to")"
     if [ -e "$to" ]; then
         cmp -s "$from" "$to" || { cp "$from" "$to.keeler"; merges+=("$rel"); }
@@ -148,13 +149,11 @@ MD
 fi
 
 # CI goes in under its own name so it never clashes with existing workflows.
-mkdir -p "$DEST/.github/workflows"
-if [ -e "$DEST/.github/workflows/keeler.yml" ]; then
-    note "keeler.yml already present — left as is"
-else
-    cp "$SRC/.github/workflows/ci.yml" "$DEST/.github/workflows/keeler.yml"
-    copied=$((copied + 1))
-fi
+# Like every other installed file, a project's own copy is never rewritten:
+# when the gates change, the new workflow lands alongside as .keeler so the
+# project can merge it. Leaving it untouched instead would strand every
+# existing project on the workflow it first installed.
+install_file templates/keeler.yml .github/workflows/keeler.yml
 ok "$copied file(s) installed"
 [ "${#merges[@]}" -gt 0 ] && for m in "${merges[@]}"; do
     note "$m differs — wrote $m.keeler, merge by hand"
