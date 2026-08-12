@@ -101,21 +101,24 @@ for f in .claude/commands/keeler/spec.md .claude/commands/keeler/tasks.md \
          .claude/commands/keeler/feature.md .claude/commands/keeler/fix.md \
          .claude/skills/property-testing/SKILL.md \
          .claude/skills/gherkin-specs/SKILL.md \
-         .claude/keeler.md \
          specs/TEMPLATE.md KEELER.md Justfile \
          .cargo-mutants.toml clippy.toml rustfmt.toml; do
     install_file "$f"
 done
 
-# An upgrade replaces the rules wholesale — they are ours to own, and the
-# version marker inside must match what we just installed. The copy being
-# replaced is kept as .bak: the file is Keeler's, but a project that edited
-# it anyway must not lose the text silently. Project-specific instructions
-# belong in CLAUDE.md, which is never touched.
-if [ -e "$DEST/.claude/keeler.md.keeler" ]; then
-    cp "$DEST/.claude/keeler.md" "$DEST/.claude/keeler.md.bak"
-    mv "$DEST/.claude/keeler.md.keeler" "$DEST/.claude/keeler.md"
-    merges=("${merges[@]/.claude\/keeler.md}")
+# The rules file is not installed like the others: it is ours to own, so an
+# upgrade replaces it wholesale and the version marker inside always matches
+# what we just installed. The copy being replaced is kept as .bak — the file
+# is Keeler's, but a project that edited it anyway must not lose the text
+# silently. Project-specific instructions belong in CLAUDE.md, never touched.
+rules="$DEST/.claude/keeler.md"
+mkdir -p "$(dirname "$rules")"
+if [ ! -e "$rules" ]; then
+    cp "$SRC/.claude/keeler.md" "$rules"
+    copied=$((copied + 1))
+elif ! cmp -s "$SRC/.claude/keeler.md" "$rules"; then
+    cp "$rules" "$rules.bak"
+    cp "$SRC/.claude/keeler.md" "$rules"
     note "workflow rules updated to $KEELER_VERSION (previous kept as .claude/keeler.md.bak)"
 fi
 

@@ -133,10 +133,17 @@ jobs:
           ./install.sh "$RUNNER_TEMP/rules-project" --no-tools
           rules="$RUNNER_TEMP/rules-project/.claude/keeler.md"
           printf '\n<!-- our team also requires X -->\n' >> "$rules"
-          ./install.sh "$RUNNER_TEMP/rules-project" --no-tools
+          printf '\n# team recipe\n' >> "$RUNNER_TEMP/rules-project/Justfile"
+          ./install.sh "$RUNNER_TEMP/rules-project" --no-tools > upgrade.log 2>&1 || {
+            cat upgrade.log; exit 1; }
+          cat upgrade.log
           grep -q 'our team also requires X' "$rules.bak"
           cmp "$rules" .claude/keeler.md
           test ! -e "$rules.keeler"
+          # An ordinary conflict is still reported, and every note names the
+          # file it wrote — a nameless one means a mangled bookkeeping list.
+          grep -q 'Justfile differs' upgrade.log
+          ! grep -qE '·[[:space:]]+differs — wrote' upgrade.log
 
       # Leaving an existing keeler.yml untouched would strand every project
       # on the workflow it first installed — gate fixes would never arrive.

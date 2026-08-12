@@ -18,6 +18,11 @@ Installations pin a version with `KEELER_REF` and record it at the top of
   which exist in a user's project — and went red on its first push. The
   shipped workflow now comes from `templates/keeler.yml` and runs only the
   gates: lints, test, coverage + CRAP, mutation testing.
+- Upgrades no longer print a conflict note with no filename in it
+  (`·  differs — wrote .keeler, merge by hand`). The rules file is now
+  installed on its own terms rather than being installed like every other
+  file and then undone, which is what left an empty entry in the list of
+  conflicts to report.
 - Upgrading no longer discards local edits to `.claude/keeler.md` without a
   trace. The rules file is still Keeler's to replace — that is how rule
   changes reach existing projects — but the copy it replaces is now kept as
