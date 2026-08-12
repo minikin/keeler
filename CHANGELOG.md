@@ -9,6 +9,35 @@ Installations pin a version with `KEELER_REF` and record it at the top of
 
 ## [Unreleased]
 
+### Fixed
+
+- The installed CI workflow no longer carries Keeler's own repository jobs.
+  `install.sh` copied `.github/workflows/ci.yml` verbatim, so every adopting
+  project inherited the `version`, `installer` and `installer-bootstrap`
+  jobs — which read `VERSION`, `CHANGELOG.md` and `./install.sh`, none of
+  which exist in a user's project — and went red on its first push. The
+  shipped workflow now comes from `templates/keeler.yml` and runs only the
+  gates: lints, test, coverage + CRAP, mutation testing.
+- Upgrades no longer print a conflict note with no filename in it
+  (`·  differs — wrote .keeler, merge by hand`). The rules file is now
+  installed on its own terms rather than being installed like every other
+  file and then undone, which is what left an empty entry in the list of
+  conflicts to report.
+- Upgrading no longer discards local edits to `.claude/keeler.md` without a
+  trace. The rules file is still Keeler's to replace — that is how rule
+  changes reach existing projects — but the copy it replaces is now kept as
+  `.claude/keeler.md.bak`. The README said "nothing of yours is overwritten",
+  which was not true of this one file; it now says what actually happens.
+- An existing `.github/workflows/keeler.yml` is no longer left untouched on
+  re-install. It now follows the same rule as every other installed file:
+  identical means silence, different means the new workflow lands alongside
+  as `keeler.yml.keeler` to merge by hand. Projects were previously stranded
+  on whatever workflow they first installed, so no gate fix ever reached
+  them — including the one above.
+- The shipped `test` job no longer runs `cargo test --doc` directly, which
+  failed with "no library targets found" in binary-only projects. Every job
+  now goes through the `just` recipes, so CI runs what `just dev` runs.
+
 ## [0.1.0] — 2026-08-11
 
 First release: the workflow, the gates, and a one-command installer.

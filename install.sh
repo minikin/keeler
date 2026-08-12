@@ -80,8 +80,9 @@ fi
 say "Installing workflow files"
 copied=0
 merges=()
+# install_file <source path> [destination path, when it differs from the source]
 install_file() {
-    local rel="$1" from="$SRC/$1" to="$DEST/$1"
+    local from="$SRC/$1" rel="${2:-$1}" to="$DEST/${2:-$1}"
     mkdir -p "$(dirname "$to")"
     if [ -e "$to" ]; then
         cmp -s "$from" "$to" || { cp "$from" "$to.keeler"; merges+=("$rel"); }
@@ -100,18 +101,25 @@ for f in .claude/commands/keeler/spec.md .claude/commands/keeler/tasks.md \
          .claude/commands/keeler/feature.md .claude/commands/keeler/fix.md \
          .claude/skills/property-testing/SKILL.md \
          .claude/skills/gherkin-specs/SKILL.md \
-         .claude/keeler.md \
          specs/TEMPLATE.md KEELER.md Justfile \
          .cargo-mutants.toml clippy.toml rustfmt.toml; do
     install_file "$f"
 done
 
-# An upgrade replaces the rules wholesale — they are ours to own, and the
-# version marker inside must match what we just installed.
-if [ -e "$DEST/.claude/keeler.md.keeler" ]; then
-    mv "$DEST/.claude/keeler.md.keeler" "$DEST/.claude/keeler.md"
-    merges=("${merges[@]/.claude\/keeler.md}")
-    note "workflow rules updated to $KEELER_VERSION"
+# The rules file is not installed like the others: it is ours to own, so an
+# upgrade replaces it wholesale and the version marker inside always matches
+# what we just installed. The copy being replaced is kept as .bak — the file
+# is Keeler's, but a project that edited it anyway must not lose the text
+# silently. Project-specific instructions belong in CLAUDE.md, never touched.
+rules="$DEST/.claude/keeler.md"
+mkdir -p "$(dirname "$rules")"
+if [ ! -e "$rules" ]; then
+    cp "$SRC/.claude/keeler.md" "$rules"
+    copied=$((copied + 1))
+elif ! cmp -s "$SRC/.claude/keeler.md" "$rules"; then
+    cp "$rules" "$rules.bak"
+    cp "$SRC/.claude/keeler.md" "$rules"
+    note "workflow rules updated to $KEELER_VERSION (previous kept as .claude/keeler.md.bak)"
 fi
 
 # CLAUDE.md is never overwritten or duplicated: the rules live in
@@ -148,13 +156,11 @@ MD
 fi
 
 # CI goes in under its own name so it never clashes with existing workflows.
-mkdir -p "$DEST/.github/workflows"
-if [ -e "$DEST/.github/workflows/keeler.yml" ]; then
-    note "keeler.yml already present — left as is"
-else
-    cp "$SRC/.github/workflows/ci.yml" "$DEST/.github/workflows/keeler.yml"
-    copied=$((copied + 1))
-fi
+# Like every other installed file, a project's own copy is never rewritten:
+# when the gates change, the new workflow lands alongside as .keeler so the
+# project can merge it. Leaving it untouched instead would strand every
+# existing project on the workflow it first installed.
+install_file templates/keeler.yml .github/workflows/keeler.yml
 ok "$copied file(s) installed"
 [ "${#merges[@]}" -gt 0 ] && for m in "${merges[@]}"; do
     note "$m differs — wrote $m.keeler, merge by hand"

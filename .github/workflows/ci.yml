@@ -125,6 +125,39 @@ jobs:
           grep -q 'Project-specific rules.' "$RUNNER_TEMP/claude-project/CLAUDE.md"
           test "$(grep -c '@.claude/keeler.md' "$RUNNER_TEMP/claude-project/CLAUDE.md")" = "1"
           test -f "$RUNNER_TEMP/claude-project/.claude/keeler.md"
+      # The rules file is the one file an upgrade replaces. It may not take
+      # a project's edits down with it without leaving them recoverable.
+      - name: Upgrading the rules keeps the replaced copy as .bak
+        run: |
+          cargo new --lib "$RUNNER_TEMP/rules-project"
+          ./install.sh "$RUNNER_TEMP/rules-project" --no-tools
+          rules="$RUNNER_TEMP/rules-project/.claude/keeler.md"
+          printf '\n<!-- our team also requires X -->\n' >> "$rules"
+          printf '\n# team recipe\n' >> "$RUNNER_TEMP/rules-project/Justfile"
+          ./install.sh "$RUNNER_TEMP/rules-project" --no-tools > upgrade.log 2>&1 || {
+            cat upgrade.log; exit 1; }
+          cat upgrade.log
+          grep -q 'our team also requires X' "$rules.bak"
+          cmp "$rules" .claude/keeler.md
+          test ! -e "$rules.keeler"
+          # An ordinary conflict is still reported, and every note names the
+          # file it wrote — a nameless one means a mangled bookkeeping list.
+          grep -q 'Justfile differs' upgrade.log
+          ! grep -qE '·[[:space:]]+differs — wrote' upgrade.log
+
+      # Leaving an existing keeler.yml untouched would strand every project
+      # on the workflow it first installed — gate fixes would never arrive.
+      - name: An outdated workflow is offered as .keeler, never silently kept
+        run: |
+          cargo new --lib "$RUNNER_TEMP/upgrade-project"
+          ./install.sh "$RUNNER_TEMP/upgrade-project" --no-tools
+          workflow="$RUNNER_TEMP/upgrade-project/.github/workflows/keeler.yml"
+          printf '\n# hand-edited by the project\n' >> "$workflow"
+          ./install.sh "$RUNNER_TEMP/upgrade-project" --no-tools
+          test -f "$workflow.keeler"
+          cmp "$workflow.keeler" templates/keeler.yml
+          grep -q 'hand-edited by the project' "$workflow"
+
       - name: Re-running the installer changes nothing
         run: |
           cd "$RUNNER_TEMP/lib-project"

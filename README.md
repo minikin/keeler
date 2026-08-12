@@ -69,8 +69,13 @@ recorded at the top of `.claude/keeler.md`.
 | **Manifest** | `proptest` as a dev-dependency, plus the `[profile.mutants]` and `[lints.clippy]` sections              |
 | **Ignores**  | the generated artifacts, appended to `.gitignore`                                                       |
 
-- Re-running is safe — nothing is duplicated and nothing of yours is
-  overwritten; a conflicting file is copied alongside as `<name>.keeler`.
+- Re-running is safe — nothing is duplicated, and a file you have changed is
+  never overwritten: the new version is copied alongside as `<name>.keeler`
+  for you to merge.
+- The one exception is `.claude/keeler.md`, the rules file Keeler owns: an
+  upgrade replaces it, so rule changes actually reach you. Your copy is kept
+  as `.claude/keeler.md.bak`. Put project-specific instructions in
+  `CLAUDE.md` — that file is never rewritten.
 - An existing `CLAUDE.md` keeps every word: the rules install as
   `.claude/keeler.md` and a single `@.claude/keeler.md` import is appended.
 - `--no-tools` skips the tool installs. Prefer to read the script first?
@@ -129,4 +134,5 @@ once the project grows async code.
 - `.claude/keeler.md` — the workflow rules, imported by `CLAUDE.md` so your own instructions stay untouched
 - `.claude/commands/keeler/` — the workflow slash commands, invoked as `/keeler:spec`, `/keeler:fix`, …
 - `.claude/skills/` — self-triggering knowledge: property-testing, gherkin-specs
-- `.github/workflows/ci.yml` — the same gates as physics, not discipline (installs as `keeler.yml` in your project)
+- `templates/keeler.yml` — the gates as physics, not discipline; installed into your project as `.github/workflows/keeler.yml`
+- `.github/workflows/ci.yml` — this repository's own CI, which additionally tests the installer
