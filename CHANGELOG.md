@@ -18,6 +18,11 @@ Installations pin a version with `KEELER_REF` and record it at the top of
   which exist in a user's project — and went red on its first push. The
   shipped workflow now comes from `templates/keeler.yml` and runs only the
   gates: lints, test, coverage + CRAP, mutation testing.
+- Upgrading no longer discards local edits to `.claude/keeler.md` without a
+  trace. The rules file is still Keeler's to replace — that is how rule
+  changes reach existing projects — but the copy it replaces is now kept as
+  `.claude/keeler.md.bak`. The README said "nothing of yours is overwritten",
+  which was not true of this one file; it now says what actually happens.
 - An existing `.github/workflows/keeler.yml` is no longer left untouched on
   re-install. It now follows the same rule as every other installed file:
   identical means silence, different means the new workflow lands alongside

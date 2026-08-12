@@ -108,11 +108,15 @@ for f in .claude/commands/keeler/spec.md .claude/commands/keeler/tasks.md \
 done
 
 # An upgrade replaces the rules wholesale — they are ours to own, and the
-# version marker inside must match what we just installed.
+# version marker inside must match what we just installed. The copy being
+# replaced is kept as .bak: the file is Keeler's, but a project that edited
+# it anyway must not lose the text silently. Project-specific instructions
+# belong in CLAUDE.md, which is never touched.
 if [ -e "$DEST/.claude/keeler.md.keeler" ]; then
+    cp "$DEST/.claude/keeler.md" "$DEST/.claude/keeler.md.bak"
     mv "$DEST/.claude/keeler.md.keeler" "$DEST/.claude/keeler.md"
     merges=("${merges[@]/.claude\/keeler.md}")
-    note "workflow rules updated to $KEELER_VERSION"
+    note "workflow rules updated to $KEELER_VERSION (previous kept as .claude/keeler.md.bak)"
 fi
 
 # CLAUDE.md is never overwritten or duplicated: the rules live in

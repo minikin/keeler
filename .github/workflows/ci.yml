@@ -125,6 +125,19 @@ jobs:
           grep -q 'Project-specific rules.' "$RUNNER_TEMP/claude-project/CLAUDE.md"
           test "$(grep -c '@.claude/keeler.md' "$RUNNER_TEMP/claude-project/CLAUDE.md")" = "1"
           test -f "$RUNNER_TEMP/claude-project/.claude/keeler.md"
+      # The rules file is the one file an upgrade replaces. It may not take
+      # a project's edits down with it without leaving them recoverable.
+      - name: Upgrading the rules keeps the replaced copy as .bak
+        run: |
+          cargo new --lib "$RUNNER_TEMP/rules-project"
+          ./install.sh "$RUNNER_TEMP/rules-project" --no-tools
+          rules="$RUNNER_TEMP/rules-project/.claude/keeler.md"
+          printf '\n<!-- our team also requires X -->\n' >> "$rules"
+          ./install.sh "$RUNNER_TEMP/rules-project" --no-tools
+          grep -q 'our team also requires X' "$rules.bak"
+          cmp "$rules" .claude/keeler.md
+          test ! -e "$rules.keeler"
+
       # Leaving an existing keeler.yml untouched would strand every project
       # on the workflow it first installed — gate fixes would never arrive.
       - name: An outdated workflow is offered as .keeler, never silently kept
