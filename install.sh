@@ -172,7 +172,9 @@ manifest="$DEST/Cargo.toml"
 if grep -q '^\[workspace\]' "$manifest" && ! grep -q '^\[package\]' "$manifest"; then
     note "workspace root — add proptest and the profile to member crates yourself"
 else
-    if grep -q '^proptest' "$manifest" || grep -qA20 '^\[dev-dependencies\]' "$manifest" | grep -q proptest; then
+    # Matches both declaration forms — `proptest = …` and the
+    # `[dev-dependencies.proptest]` table — without catching proptest-derive.
+    if grep -qE '^proptest[[:space:]]*=|^\[dev-dependencies\.proptest\]' "$manifest"; then
         ok "proptest already a dev-dependency"
     else
         (cd "$DEST" && cargo add --dev --quiet proptest) && ok "proptest added (dev-dependency)"
@@ -207,8 +209,13 @@ touch "$gitignore"
 added=0
 # crap-baseline.json is deliberately NOT ignored: it is the shared
 # reference the delta gate measures against, so it belongs in git.
+# Slash placement doesn't change what these patterns cover here, so a
+# project's `target/` already covers our `/target` — equivalent forms must
+# not pile up as duplicates.
 for entry in '/target' 'lcov.info' 'crap-report.json' 'mutants.out*/'; do
-    grep -qxF "$entry" "$gitignore" || { printf '%s\n' "$entry" >> "$gitignore"; added=$((added + 1)); }
+    core="${entry#/}"; core="${core%/}"
+    grep -qxF -e "$core" -e "/$core" -e "$core/" -e "/$core/" "$gitignore" \
+        || { printf '%s\n' "$entry" >> "$gitignore"; added=$((added + 1)); }
 done
 ok "$added entry(ies) added"
 
