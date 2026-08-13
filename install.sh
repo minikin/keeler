@@ -64,9 +64,11 @@ if [ "$WITH_TOOLS" = 1 ]; then
         note "installing: ${missing[*]}"
         if ! command -v cargo-binstall >/dev/null 2>&1; then
             note "installing cargo-binstall first"
-            cargo install cargo-binstall
+            cargo install --locked cargo-binstall
         fi
-        cargo binstall --no-confirm "${missing[@]}"
+        # --locked is passed through to cargo-install when binstall falls back
+        # to compiling from source; nextest refuses to build without it.
+        cargo binstall --no-confirm --locked "${missing[@]}"
     fi
 
     # cargo-llvm-cov needs this rustup component; without it coverage fails
