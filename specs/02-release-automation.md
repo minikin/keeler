@@ -1,20 +1,20 @@
 # Spec 02 — Releases are cut by machine, verified by hash
 
-**Status:** Draft
+**Status:** Approved
 **Effort:** Small
 **Module:** `.github/workflows/release.yml`, `scripts/`, `Justfile`, `README.md`, `SECURITY.md`
 
 ## Context
 
-Installations already pin releases — `KEELER_REF=v0.1.0` resolves through
-codeload, the CHANGELOG keeps per-version sections with compare links, and
-the version-consistency CI job enforces `VERSION` ↔ rules-file marker ↔
-CHANGELOG agreement on every push. But the release end of that contract is
-held together by hand: the `v0.1.0` tag exists with **no GitHub release**
-behind it — no notes, no assets, and nothing for a cautious adopter to
-verify `install.sh` against before piping it into bash. Cutting a release
-today means remembering an unwritten checklist, and nothing stops a tag
-whose name disagrees with `VERSION` from shipping.
+Installations are designed to pin releases — `KEELER_REF=v0.1.0` resolves
+through codeload, the CHANGELOG keeps per-version sections with compare
+links, and the version-consistency CI job enforces `VERSION` ↔ rules-file
+marker ↔ CHANGELOG agreement on every push. But the release end of that
+contract does not exist: the repository has **no tags and no releases** —
+nothing for `KEELER_REF` to actually pin, no notes, no assets, and nothing
+for a cautious adopter to verify `install.sh` against before piping it into
+bash. Cutting a release today means remembering an unwritten checklist, and
+nothing stops a tag whose name disagrees with `VERSION` from shipping.
 
 Who hits this: adopters who want to pin *and verify* what they run
 (`SECURITY.md` currently answers `curl | bash` concerns only with "read it
@@ -179,14 +179,16 @@ SECURITY.md's `curl | bash` paragraph points at it. `CONTRIBUTING.md` gains
 the release checklist: move Unreleased → `[X.Y.Z] — date` with compare
 links, bump `VERSION` + marker, merge, tag, push tag.
 
-**v0.2.0.** First consumer of the machinery, cut after this spec ships:
-today's Unreleased section (spec 01 + quick wins + the installer fixes)
-becomes its notes.
+**v0.1.0.** First consumer of the machinery, cut after this spec ships —
+the version everything already claims (`VERSION`, the rules-file marker,
+the CHANGELOG section) but that never got a tag or release. Release prep
+folds today's Unreleased entries (spec 01, the installer fixes, the quick
+wins) into the existing `[0.1.0]` section, refreshes its date, and the tag
+push does the rest.
 
 ### Non-goals
 
 - Signing or provenance attestation (Sigstore, GPG) — future layer.
 - Publishing to crates.io, Homebrew, or any registry.
 - Automated version bumping or release-PR generation.
-- Backfilling a GitHub release for v0.1.0.
 - Changing what adopters receive — the release workflow is repo-only.
