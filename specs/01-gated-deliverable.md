@@ -208,6 +208,26 @@ And   the installed Justfile still provides the cov, crap, crap-baseline,
       crap-delta and mutants recipes
 ```
 
+### Scenario: Every workflow file in the repository is installed
+
+```
+Given the repository's command and skill trees
+When  Keeler is installed into a fresh project
+Then  every file of every kind under those trees exists in the project
+And   a path merely mentioned in an installer comment does not count as
+      shipped
+```
+
+### Scenario: The source-compile fallback is exercised deterministically
+
+```
+Given a CI run that forces binstall's compile strategy with nextest absent
+      and no tool cache to satisfy the probe
+When  the installer runs
+Then  it reports installing nextest through its own tool path
+And   the compiled tool works
+```
+
 ### Scenario: The repository presents no placeholder to replace
 
 ```
@@ -308,6 +328,13 @@ And   Cargo.toml describes a test harness for the installer
       two commits back with a docs-only tip still runs mutants; an
       untracked src file with a space in its name does not break the gate.
       Deps: T2.
+- [x] **T17 — The guards that shipped as a chore get their scenarios.**
+      (review finding 10 of the quick-wins branch — retroactive coverage,
+      approved) Scenarios: _Every workflow file in the repository is
+      installed_ (owned by the same-named harness test, which asserts on
+      the installed tree) and _The source-compile fallback is exercised
+      deterministically_ (owned by CI's `installer-locked-fallback` job —
+      like the bootstrap job, it is observable only in CI). Deps: none.
 - [x] **T16 — Housekeeping the review demanded.** (findings 1, 6, 7, 8, 10)
       CI test job runs `just test` (doc-test guard) and provisions
       shellcheck; the shellcheck defect test asserts on SC2086; the proptest
@@ -370,6 +397,8 @@ with them — there is nothing here to baseline. None of this touches
   alternatives.
 - Shipping an example crate, or any change to what adopters receive. The
   gates users get must come out of this unchanged.
-- Testing the tool-installation path (`cargo binstall`, `rustup component`).
-  It stays covered by the existing bootstrap job in CI.
+- Unit-testing the tool-installation path (`cargo binstall`, `rustup
+  component`) in the harness. It is covered in CI by the bootstrap job and
+  the forced source-compile fallback job (see _The source-compile fallback
+  is exercised deterministically_).
 - Windows support for the installer.
