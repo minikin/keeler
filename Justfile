@@ -19,12 +19,18 @@ fmt:
 
 # Check formatting and lints (mirrors CI). In the Keeler repository itself
 # (keyed on templates/keeler.yml, which is never installed under that name)
-# the deliverable is shell, so shellcheck gates install.sh. An adopter's own
-# install.sh is not Keeler's to judge — no shellcheck outside this repo.
+# the deliverable is shell, so shellcheck gates install.sh and the release
+# scripts. An adopter's own shell is not Keeler's to judge — no shellcheck
+# outside this repo.
 lint:
+    #!/usr/bin/env bash
+    set -euo pipefail
     cargo fmt --all -- --check
     cargo clippy --all-targets -- -D warnings
-    if [ -e templates/keeler.yml ]; then shellcheck install.sh; fi
+    if [ -e templates/keeler.yml ]; then
+        shopt -s nullglob
+        shellcheck install.sh scripts/*.sh
+    fi
 
 # Fast compile check without building test binaries
 check:

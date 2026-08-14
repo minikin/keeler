@@ -33,6 +33,22 @@ macOS, a from-scratch bootstrap (the installer installing its own tools,
 including the forced source-compile fallback), and version consistency
 (`VERSION` ↔ the marker in `.claude/keeler.md` ↔ a `CHANGELOG.md` entry).
 
+## Cutting a release
+
+Releases are cut by machine (`.github/workflows/release.yml`); the human
+part is the prep commit:
+
+1. Fold `[Unreleased]` into a `## [X.Y.Z] — YYYY-MM-DD` section in
+   `CHANGELOG.md` and update the compare links.
+2. Set `VERSION` and the `keeler-version` marker in `.claude/keeler.md` to
+   `X.Y.Z` (the version CI job holds these three in agreement).
+3. Merge, then tag: `git tag vX.Y.Z && git push origin vX.Y.Z`.
+
+The workflow re-checks that the tag tells the truth, runs the gates,
+extracts that section as the release notes, and attaches `install.sh` plus
+its SHA256. A tag that disagrees with `VERSION` fails the workflow and
+publishes nothing. Reruns never overwrite a published release.
+
 ## Conventions
 
 - Commit messages: imperative, `fix:`/`feat:`/`chore:` prefixes.
