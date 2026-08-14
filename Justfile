@@ -28,7 +28,8 @@ lint:
     cargo fmt --all -- --check
     cargo clippy --all-targets -- -D warnings
     if [ -e templates/keeler.yml ]; then
-        shopt -s nullglob
+        # No nullglob: if scripts/*.sh stops matching, shellcheck fails on
+        # the literal glob — a gate that vanishes silently is no gate.
         shellcheck install.sh scripts/*.sh
     fi
 

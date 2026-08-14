@@ -19,11 +19,33 @@ fn run_script(script: &str, args: &[&str]) -> std::process::Output {
         .expect("failed to spawn bash")
 }
 
-/// Writes `content` to a unique temp file and returns its path.
-fn temp_file(name: &str, content: &str) -> PathBuf {
-    let path = std::env::temp_dir().join(format!("keeler-{name}-{}", std::process::id()));
+/// A fixture file in its own temp directory, removed on drop — no test run
+/// leaves droppings in $TMPDIR, pass or fail.
+struct TempPath(PathBuf);
+
+impl std::ops::Deref for TempPath {
+    type Target = std::path::Path;
+    fn deref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl Drop for TempPath {
+    fn drop(&mut self) {
+        if let Some(dir) = self.0.parent() {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+}
+
+/// Writes `content` to a fixture file in a fresh per-name directory.
+fn temp_file(name: &str, content: &str) -> TempPath {
+    let dir = std::env::temp_dir().join(format!("keeler-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("fixture");
     std::fs::write(&path, content).unwrap();
-    path
+    TempPath(path)
 }
 
 const FIXTURE_CHANGELOG: &str = "\
@@ -42,6 +64,7 @@ Preamble text that belongs to no version.
 ### Changed
 
 - the second release entry
+[breaking]: the --foo flag was removed
 
 ### Fixed
 
@@ -76,7 +99,8 @@ fn the_release_notes_are_exactly_the_versions_changelog_section() {
     );
     assert!(
         notes.contains("the second release entry")
-            && notes.contains("another second release entry"),
+            && notes.contains("another second release entry")
+            && notes.contains("[breaking]: the --foo flag was removed"),
         "the section's own entries are missing:\n{notes}",
     );
     // ... and it contains no heading, entry, or link line from any other
@@ -216,6 +240,28 @@ fn run_guard(dir: &std::path::Path, tag: &str) -> std::process::Output {
         .current_dir(dir)
         .output()
         .expect("failed to spawn bash")
+}
+
+#[test]
+fn a_lookalike_changelog_heading_does_not_satisfy_the_guard() {
+    // Given VERSION 0.1.0 but a CHANGELOG whose only heading merely
+    // pattern-matches it when dots are treated as wildcards
+    let dir = release_fixture("guard-lookalike", "0.1.0");
+    std::fs::write(
+        dir.join("CHANGELOG.md"),
+        "# Changelog\n\n## [0x1y0] — 2026-08-14\n\n- an entry\n",
+    )
+    .unwrap();
+
+    // When the guard runs for the honest tag
+    let output = run_guard(&dir, "v0.1.0");
+
+    // Then it refuses: there is no real 0.1.0 section
+    assert!(
+        !output.status.success(),
+        "a lookalike heading satisfied the CHANGELOG check",
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

@@ -23,7 +23,9 @@ if [ "$marker" != "$version" ]; then
     exit 1
 fi
 
-if ! grep -q "^## \[$version\]" CHANGELOG.md; then
+# Literal prefix match, anchored to line start: the version's dots are not
+# wildcards, so a lookalike heading must not pass.
+if ! awk -v pfx="## [$version]" 'substr($0, 1, length(pfx)) == pfx { found = 1 } END { exit !found }' CHANGELOG.md; then
     echo "release-guard: CHANGELOG.md has no section for $version" >&2
     exit 1
 fi
