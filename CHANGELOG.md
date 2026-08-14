@@ -9,25 +9,66 @@ Installations pin a version with `KEELER_REF` and record it at the top of
 
 ## [Unreleased]
 
-### Changed
+## [0.1.0] — 2026-08-14
 
-- The repository's own gates now measure the deliverable, not a placeholder
-  (spec 01). The example crate is gone; `tests/installer.rs` drives
-  `install.sh` against generated projects — offline, property-tested —
-  and `shellcheck` statically gates the installer. Recipes report honestly
-  when there is nothing to measure: `cov`/`crap` probe cargo metadata for
-  targets (so workspace members are still measured), and `mutants-diff`
-  says when a change is outside its reach instead of measuring a
-  placeholder. What adopters receive is unchanged and test-enforced.
+First release: the workflow, the gates, a one-command installer — and the
+repository that holds itself to the same standard it installs.
 
 ### Added
 
+- **The pipeline** — `/keeler:spec` → approval → `/keeler:tasks` →
+  `/keeler:tdd` → `/keeler:qa` → `/keeler:review` → `/keeler:mutants`, with
+  `/keeler:feature` orchestrating the whole run and `/keeler:fix` covering
+  the bugfix road (reproduce with a failing test before touching code).
+  Commands are namespaced, so they never collide with a project's own.
+- **Change classes** — feature, bugfix and a documented fast path for
+  trivial edits, so the pipeline is not bypassed for small changes.
+- **Quality gates** — `rustfmt`, `clippy` (pedantic), `cargo-nextest`,
+  line coverage (`cargo-llvm-cov`, ≥ 90%), CRAP score (`cargo-crap`,
+  threshold 15), and mutation testing (`cargo-mutants`, changed lines only).
+- **The CRAP baseline ratchet** — `crap-baseline.json` is committed and
+  shared in adopting projects, and the delta gate fails on any per-function
+  regression, locally and in CI. Legacy debt is grandfathered; new debt is
+  not.
+- **Skills** — `property-testing` (invariant catalog for proptest) and
+  `gherkin-specs` (scenario-writing rules) load themselves when relevant.
+- **Installer** — one command sets up tools, workflow files, `Cargo.toml`
+  sections and `.gitignore` entries in any Rust project. Idempotent; an
+  existing `CLAUDE.md` is never rewritten (a single `@.claude/keeler.md`
+  import is appended instead). `KEELER_REF` pins a version;
+  `just keeler-upgrade` re-runs it later.
+- **CI** — the same gates as GitHub Actions, plus jobs that install Keeler
+  into fresh binary and library projects on Linux and macOS, verify
+  idempotency and `CLAUDE.md` preservation, and exercise the path where the
+  installer bootstraps the toolchain itself.
+- **Docs** — `README.md` for getting started, `KEELER.md` for the workflow
+  in plain words with diagrams, `.claude/keeler.md` as the rules the agent
+  operates under.
+- **Release machinery** (spec 02) — pushing a tag `vX.Y.Z` cuts the GitHub
+  release mechanically, after the repository proves the tag honest: tag ↔
+  `VERSION` ↔ rules marker ↔ CHANGELOG agreement, gates before publishing,
+  notes extracted as exactly the version's CHANGELOG section, and
+  `install.sh` + its SHA256 attached so adopters can pin *and verify*
+  (`sha256sum -c`). A lying tag publishes nothing; reruns never overwrite
+  a published release.
 - `CONTRIBUTING.md`, `SECURITY.md`, dependabot for actions and crates, and
-  a committed `Cargo.lock`.
+  a committed `Cargo.lock` with a CI freshness gate.
 - A CI job that forces `cargo binstall`'s source-compile fallback, so the
   `--locked` path stays proven even when release downloads are healthy.
 - A harness test that fails when any file under the command or skill trees
   does not land in an installed project.
+
+### Changed
+
+- The repository's own gates measure the deliverable, not a placeholder
+  (spec 01). The example crate is gone; `tests/installer.rs` drives
+  `install.sh` against generated projects — offline, property-tested —
+  and `shellcheck` statically gates the installer and the release scripts.
+  Recipes report honestly when there is nothing to measure: `cov`/`crap`
+  probe cargo metadata for targets (so workspace members are still
+  measured), and `mutants-diff` says when a change is outside its reach
+  instead of measuring a placeholder. What adopters receive is unchanged
+  and test-enforced.
 
 ### Fixed
 
@@ -57,40 +98,6 @@ Installations pin a version with `KEELER_REF` and record it at the top of
 - The shipped `test` job no longer runs `cargo test --doc` directly, which
   failed with "no library targets found" in binary-only projects. Every job
   now goes through the `just` recipes, so CI runs what `just dev` runs.
-
-## [0.1.0] — 2026-08-11
-
-First release: the workflow, the gates, and a one-command installer.
-
-### Added
-
-- **The pipeline** — `/keeler:spec` → approval → `/keeler:tasks` →
-  `/keeler:tdd` → `/keeler:qa` → `/keeler:review` → `/keeler:mutants`, with
-  `/keeler:feature` orchestrating the whole run and `/keeler:fix` covering
-  the bugfix road (reproduce with a failing test before touching code).
-  Commands are namespaced, so they never collide with a project's own.
-- **Change classes** — feature, bugfix and a documented fast path for
-  trivial edits, so the pipeline is not bypassed for small changes.
-- **Quality gates** — `rustfmt`, `clippy` (pedantic), `cargo-nextest`,
-  line coverage (`cargo-llvm-cov`, ≥ 90%), CRAP score (`cargo-crap`,
-  threshold 15), and mutation testing (`cargo-mutants`, changed lines only).
-- **The CRAP baseline ratchet** — `crap-baseline.json` is committed and
-  shared, and the delta gate fails on any per-function regression, locally
-  and in CI. Legacy debt is grandfathered; new debt is not.
-- **Skills** — `property-testing` (invariant catalog for proptest) and
-  `gherkin-specs` (scenario-writing rules) load themselves when relevant.
-- **Installer** — one command sets up tools, workflow files, `Cargo.toml`
-  sections and `.gitignore` entries in any Rust project. Idempotent; an
-  existing `CLAUDE.md` is never rewritten (a single `@.claude/keeler.md`
-  import is appended instead). `KEELER_REF` pins a version;
-  `just keeler-upgrade` re-runs it later.
-- **CI** — the same gates as GitHub Actions, plus jobs that install Keeler
-  into fresh binary and library projects on Linux and macOS, verify
-  idempotency and `CLAUDE.md` preservation, and exercise the path where the
-  installer bootstraps the toolchain itself.
-- **Docs** — `README.md` for getting started, `KEELER.md` for the workflow
-  in plain words with diagrams, `.claude/keeler.md` as the rules the agent
-  operates under.
 
 [Unreleased]: https://github.com/minikin/keeler/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/minikin/keeler/releases/tag/v0.1.0

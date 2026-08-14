@@ -71,19 +71,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       # VERSION is the single source of truth; the marker installed into
-      # every project must agree with it, or users cannot tell what they run.
-      - name: VERSION matches the marker in .claude/keeler.md
-        run: |
-          version="$(tr -d '[:space:]' < VERSION)"
-          marker="$(sed -n 's/^<!-- keeler-version: \(.*\) -->$/\1/p' .claude/keeler.md)"
-          echo "VERSION=$version marker=$marker"
-          [ -n "$marker" ] || { echo "no keeler-version marker in .claude/keeler.md"; exit 1; }
-          [ "$version" = "$marker" ] || { echo "VERSION and the marker disagree"; exit 1; }
-      - name: CHANGELOG has an entry for this version
-        run: |
-          version="$(tr -d '[:space:]' < VERSION)"
-          grep -q "^## \[$version\]" CHANGELOG.md || {
-            echo "CHANGELOG.md has no section for $version"; exit 1; }
+      # every project must agree with it, or users cannot tell what they
+      # run. One owner for that law: the same guard the release workflow
+      # runs at tag time (the constructed tag makes its tag-check a no-op).
+      - name: VERSION, marker and CHANGELOG agree
+        run: scripts/release-guard.sh "v$(tr -d '[:space:]' < VERSION)"
 
   installer:
     name: Installer (${{ matrix.os }})
@@ -206,10 +198,14 @@ jobs:
         env:
           BINSTALL_STRATEGIES: compile
         run: |
+          # Provenance without log-scraping: nextest must be absent before
+          # and working after, so only the installer's own tool path can
+          # explain it — and the installer's exit code is the step's,
+          # unpiped (the default Actions shell has no pipefail).
+          if cargo nextest --version >/dev/null 2>&1; then
+            echo "nextest already present — the fallback would not be exercised"
+            exit 1
+          fi
           cargo new "$RUNNER_TEMP/fallback"
-          ./install.sh "$RUNNER_TEMP/fallback" | tee install.log
-          # Provenance, not just presence: the installer itself must have
-          # reported nextest missing and gone through its binstall path —
-          # a binary that merely exists on PATH proves nothing.
-          grep -q "installing: cargo-nextest" install.log
+          ./install.sh "$RUNNER_TEMP/fallback"
           cargo nextest --version

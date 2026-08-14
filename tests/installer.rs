@@ -331,6 +331,13 @@ fn a_statically_detectable_shell_defect_fails_the_gate() {
     project.install();
     std::fs::create_dir_all(project.path().join("templates")).unwrap();
     std::fs::write(project.path().join("templates/keeler.yml"), "").unwrap();
+    // The repo shape includes scripts/ — the gate globs it without nullglob.
+    std::fs::create_dir_all(project.path().join("scripts")).unwrap();
+    std::fs::write(
+        project.path().join("scripts/noop.sh"),
+        "#!/usr/bin/env bash\ntrue\n",
+    )
+    .unwrap();
     std::fs::write(
         project.path().join("install.sh"),
         "#!/usr/bin/env bash\nfiles=$1\nls $files\n",

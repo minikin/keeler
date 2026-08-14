@@ -14,16 +14,19 @@ changelog="${2:?usage: release-notes.sh <version> <changelog-file>}"
 
 awk -v ver="$version" '
     BEGIN { pfx = "## [" ver "]" }
-    /^## /               { on = (substr($0, 1, length(pfx)) == pfx); found = found || on; next }
-    /^\[[^]]*\]: /       { next }   # link-reference block
-    on                   { lines[++n] = $0 }
+    /^## / { on = (substr($0, 1, length(pfx)) == pfx); found = found || on; next }
+    on     { lines[++n] = $0 }
     END {
         if (!found) {
             print "release-notes: no CHANGELOG section for version " ver > "/dev/stderr"
             exit 1
         }
-        start = 1; while (start <= n && lines[start] ~ /^[[:space:]]*$/) start++
-        end = n;   while (end >= start && lines[end] ~ /^[[:space:]]*$/) end--
+        # Only the trailing link-reference block is scenery, and only the
+        # last section can have collected it — a link-style line inside the
+        # body is content and stays. Strip that block, then edge blanks.
+        end = n
+        while (end >= 1 && (lines[end] ~ /^[[:space:]]*$/ || lines[end] ~ /^\[[^]]*\]: /)) end--
+        start = 1; while (start <= end && lines[start] ~ /^[[:space:]]*$/) start++
         for (i = start; i <= end; i++) print lines[i]
     }
 ' "$changelog"
