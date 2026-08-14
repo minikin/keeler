@@ -15,8 +15,11 @@ run via `KEELER_REF`; the version installed is recorded at the top of
 ## Scope worth knowing
 
 - `install.sh` is distributed over `curl | bash`. If that bothers you (it
-  should, a little), clone and read it first — the installer behaves
-  identically run from a checkout: `git clone … && ./keeler/install.sh <project>`.
+  should, a little), you have two better options: clone and read it first —
+  the installer behaves identically run from a checkout — or verify a
+  pinned release before running it: download `install.sh` and
+  `install.sh.sha256` from the release page, then `sha256sum -c
+  install.sh.sha256` (`shasum -a 256 -c` on macOS).
 - The installer writes only into the project you point it at and never
   overwrites your files — conflicts land alongside as `<name>.keeler`. The
   one exception is `.claude/keeler.md`, the rules file Keeler owns: an

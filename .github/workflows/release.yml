@@ -1,0 +1,52 @@
+# Cuts a GitHub release when a version tag is pushed — but only after the
+# repository proves the tag honest. A tag that lies about its version, or a
+# CHANGELOG with no matching section, fails the workflow and publishes
+# nothing: never a wrong release.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  release:
+    name: Cut the release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest,just
+      - name: Ensure shellcheck
+        run: |
+          if ! command -v shellcheck >/dev/null; then
+            sudo apt-get update && sudo apt-get install -y shellcheck
+          fi
+      # GITHUB_REF_NAME is the tag; the guard re-checks the same consistency
+      # the version CI job enforces, at the moment it matters most.
+      - name: The tag tells the truth
+        run: scripts/release-guard.sh "$GITHUB_REF_NAME"
+      - name: Gates before anything is published
+        run: just ci
+      - name: Release notes are the CHANGELOG section
+        run: scripts/release-notes.sh "$(tr -d '[:space:]' < VERSION)" CHANGELOG.md > notes.md
+      - name: Checksum for install.sh
+        run: scripts/checksum.sh install.sh > install.sh.sha256
+      # `create` fails if the release already exists — a published release
+      # is never overwritten, edited, or clobbered by a rerun.
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file notes.md \
+            install.sh install.sh.sha256

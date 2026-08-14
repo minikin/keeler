@@ -359,6 +359,45 @@ fn a_statically_detectable_shell_defect_fails_the_gate() {
 }
 
 #[test]
+fn release_scripts_are_gated_like_the_installer() {
+    // Given the Keeler repository shape with a defective script under
+    // scripts/ (and an install.sh that is itself clean)
+    let project = TempProject::new("script-defect", MANIFEST_WITH_PROPTEST);
+    project.install();
+    std::fs::create_dir_all(project.path().join("templates")).unwrap();
+    std::fs::write(project.path().join("templates/keeler.yml"), "").unwrap();
+    std::fs::copy(
+        repo_root().join("install.sh"),
+        project.path().join("install.sh"),
+    )
+    .unwrap();
+    std::fs::create_dir_all(project.path().join("scripts")).unwrap();
+    std::fs::write(
+        project.path().join("scripts/bad.sh"),
+        "#!/usr/bin/env bash\nls $1\n",
+    )
+    .unwrap();
+
+    // When the lint gate runs in this repository
+    let output = project.run_just("lint");
+    let report = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    // Then it fails naming the file and line
+    assert!(
+        !output.status.success(),
+        "the lint gate passed a defective release script:\n{report}",
+    );
+    assert!(
+        report.contains("bad.sh line 2") && report.contains("SC2086"),
+        "the report does not name the file and line:\n{report}",
+    );
+}
+
+#[test]
 fn the_repositorys_own_installer_passes_shellcheck() {
     // Given the install.sh this repository ships
     // When shellcheck examines it
@@ -1051,6 +1090,26 @@ fn every_workflow_file_in_the_repository_is_installed() {
     assert!(
         missing.is_empty(),
         "these files exist in the repository but never land in an installed project: {missing:?}",
+    );
+}
+
+#[test]
+fn the_release_workflow_is_not_shipped_to_adopters() {
+    // Given a fresh Rust project, when Keeler is installed into it
+    let project = TempProject::new("no-release-workflow", MANIFEST_WITH_PROPTEST);
+    project.install();
+
+    // Then no release workflow lands in the project
+    let installed = project.tree_snapshot();
+    let foreign: Vec<&String> = installed
+        .keys()
+        .filter(|path| {
+            path.starts_with(".github/workflows/") && *path != ".github/workflows/keeler.yml"
+        })
+        .collect();
+    assert!(
+        foreign.is_empty(),
+        "the installer shipped workflows beyond keeler.yml: {foreign:?}",
     );
 }
 

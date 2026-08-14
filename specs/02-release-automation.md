@@ -1,6 +1,6 @@
 # Spec 02 — Releases are cut by machine, verified by hash
 
-**Status:** Approved
+**Status:** Implemented
 **Effort:** Small
 **Module:** `.github/workflows/release.yml`, `scripts/`, `Justfile`, `README.md`, `SECURITY.md`
 
@@ -38,7 +38,7 @@ shellcheck; workflow YAML cannot.
 appears) is only observable on GitHub. The spec therefore pins every piece
 the harness *can* observe — extraction, checksum round-trip, refusal
 conditions, workflow shape — and leaves the final integration to the first
-real tag, `v0.2.0`.
+real tag, `v0.1.0`.
 
 **Rejected alternatives.** Release-on-every-merge (release-please style):
 wrong cadence for a workflow tool people pin; versions here are deliberate.
@@ -146,7 +146,47 @@ Then  no release workflow lands in the project
 
 ## Tasks
 
-_Empty until /keeler:tasks runs against an approved spec._
+- [x] **T1 — CHANGELOG section extraction, exact and loud.**
+      Scenarios: _The release notes are exactly the version's CHANGELOG
+      section_, _Extracting notes for an absent version fails loudly_.
+      Tests: acceptance on fixture changelogs; property — extraction
+      totality: over a generated changelog with sections S₁…Sₙ, each
+      extraction is disjoint from every other section's entries and
+      concatenating all extractions plus headings/links loses nothing but
+      blank lines. Deliverable: `scripts/release-notes.sh`. Deps: none.
+- [x] **T2 — A checksum that round-trips.**
+      Scenarios: _The published checksum verifies the script_. Tests:
+      acceptance — `sha256sum -c` succeeds against the produced file for
+      identical bytes and fails for differing bytes. Deliverable:
+      `scripts/checksum.sh` (sha256sum/shasum portability). Deps: none.
+- [x] **T3 — Release scripts join the shell gate.**
+      Scenarios: _Release scripts are gated like the installer_. Tests:
+      acceptance — a defective script under `scripts/` fails `just lint`
+      naming file and line; the shipped recipe stays repo-keyed so
+      adopters are untouched. Deps: T1 (first script to gate).
+- [x] **T4 — The tag must tell the truth.**
+      Scenarios: _A tag that disagrees with VERSION is refused_. Tests:
+      acceptance — the guard script exits non-zero naming both versions
+      when tag ≠ `v$(cat VERSION)`, zero on agreement. Deliverable:
+      `scripts/release-guard.sh` (tag/VERSION/marker/CHANGELOG agreement).
+      Deps: none.
+- [x] **T5 — The release workflow, assembled.**
+      Scenarios: _A pushed tag that matches VERSION produces the release_
+      (the end-to-end contract — observable only on GitHub, like the
+      bootstrap jobs; the first real tag is its integration test), _The
+      gates run before anything is published_, _A release is never
+      overwritten_, _The release workflow is not shipped to adopters_.
+      Tests: static acceptance on `release.yml` — tag trigger, guard +
+      `just ci` ordered before `gh release create`, `create` (never
+      `edit`/`--clobber`), notes and assets from the T1/T2 scripts; and a
+      harness assertion that no release workflow lands in an installed
+      project. Deps: T1, T2, T4.
+- [x] **T6 — The verify story, documented.**
+      Scenarios: _The verification story is documented where adopters
+      look_. Tests: acceptance — README's install section and SECURITY.md
+      both name the pin-and-verify path (`sha256sum -c` against the
+      release assets); CONTRIBUTING.md carries the release checklist.
+      Deps: T5.
 
 ---
 

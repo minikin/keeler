@@ -102,6 +102,14 @@ The installer is safe to re-run, and it keeps its hands off your files:
 - `--no-tools` skips the tool installs. Prefer to read the script first?
   `git clone https://github.com/minikin/keeler && ./keeler/install.sh <project>`
   does exactly the same.
+- Prefer to **verify** before running? Every release ships `install.sh`
+  with its SHA256:
+
+  ```bash
+  gh release download v0.1.0 --repo minikin/keeler --pattern 'install.sh*'
+  sha256sum -c install.sh.sha256    # shasum -a 256 -c on macOS
+  bash install.sh .
+  ```
 - On Windows, run it from WSL or Git Bash — the installer is a shell script.
 
 ## Adopting it in an existing codebase
