@@ -14,7 +14,7 @@ jobs:
     name: Lints
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -35,7 +35,7 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       # `just` because the harness tests drive the shipped Justfile's recipes.
@@ -65,7 +65,7 @@ jobs:
     name: Version consistency
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       # VERSION is the single source of truth; the marker installed into
       # every project must agree with it, or users cannot tell what they run.
       - name: VERSION matches the marker in .claude/keeler.md
@@ -89,7 +89,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: llvm-tools-preview
@@ -170,7 +170,7 @@ jobs:
     name: Installer bootstrap (installs the tools itself)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       # No tools pre-installed on purpose: this exercises the path where the
       # installer has to bring up cargo-binstall and the whole toolchain.
@@ -184,7 +184,7 @@ jobs:
     name: Installer source-compile fallback (binstall --locked)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       # Pre-install everything except nextest and just, then force binstall's
