@@ -25,6 +25,25 @@ fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
+/// Every file under `dir`, recursively — the one tree walker every test
+/// shares, so traversal policy can never diverge between them. Finder
+/// droppings (`.DS_Store`) are nobody's files.
+fn files_under(dir: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    let mut pending = vec![dir.to_path_buf()];
+    while let Some(current) = pending.pop() {
+        for entry in std::fs::read_dir(&current).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if path.file_name().is_none_or(|name| name != ".DS_Store") {
+                files.push(path);
+            }
+        }
+    }
+    files
+}
+
 /// The workflow `install.sh` copies to `.github/workflows/keeler.yml`, read
 /// out of the installer itself so this test follows the installer instead of
 /// drifting from it.
@@ -160,33 +179,21 @@ impl TempProject {
     }
 
     /// Every file in the project as `relative path → bytes`, excluding the
-    /// test's own scaffolding (the stub-cargo bin/ and its call log). Two
-    /// equal snapshots mean two byte-identical trees.
+    /// test's own scaffolding (the stub bin/ and the call logs). Two equal
+    /// snapshots mean two byte-identical trees.
     fn tree_snapshot(&self) -> std::collections::BTreeMap<String, Vec<u8>> {
-        fn walk(
-            root: &Path,
-            dir: &Path,
-            snapshot: &mut std::collections::BTreeMap<String, Vec<u8>>,
-        ) {
-            for entry in std::fs::read_dir(dir).unwrap() {
-                let path = entry.unwrap().path();
-                let rel = path
-                    .strip_prefix(root)
-                    .unwrap()
-                    .to_string_lossy()
-                    .into_owned();
-                if rel == "bin" || rel == "cargo-calls.log" || rel == "network-calls.log" {
-                    continue;
-                }
-                if path.is_dir() {
-                    walk(root, &path, snapshot);
-                } else {
-                    snapshot.insert(rel, std::fs::read(&path).unwrap());
-                }
-            }
-        }
         let mut snapshot = std::collections::BTreeMap::new();
-        walk(&self.dir, &self.dir, &mut snapshot);
+        for path in files_under(&self.dir) {
+            let rel = path
+                .strip_prefix(&self.dir)
+                .unwrap()
+                .to_string_lossy()
+                .into_owned();
+            if rel.starts_with("bin/") || rel == "cargo-calls.log" || rel == "network-calls.log" {
+                continue;
+            }
+            snapshot.insert(rel, std::fs::read(&path).unwrap());
+        }
         snapshot
     }
 
@@ -1018,36 +1025,32 @@ fn a_gitignore_missing_its_final_newline_still_converges() {
     );
 }
 
-/// Guards the installer's hard-coded file list: a command or skill added to
-/// the repository but not to install.sh would silently never ship, and the
-/// omission would only surface when a user's agent failed to find it.
+/// Guards the installer's hard-coded file list behaviorally: every file of
+/// every kind under the command and skill trees must actually land in an
+/// installed project — a path merely mentioned in a comment of install.sh
+/// does not count, and a skill's non-Markdown companion assets count too.
 #[test]
 fn every_workflow_file_in_the_repository_is_installed() {
-    let installer = std::fs::read_to_string(repo_root().join("install.sh")).unwrap();
+    let project = TempProject::new("ship-everything", MANIFEST_WITH_PROPTEST);
+    project.install();
+    let installed = project.tree_snapshot();
+
     let mut missing = Vec::new();
     for dir in [".claude/commands/keeler", ".claude/skills"] {
-        let mut pending = vec![repo_root().join(dir)];
-        while let Some(current) = pending.pop() {
-            for entry in std::fs::read_dir(&current).unwrap() {
-                let path = entry.unwrap().path();
-                if path.is_dir() {
-                    pending.push(path);
-                } else if path.extension().is_some_and(|ext| ext == "md") {
-                    let rel = path
-                        .strip_prefix(repo_root())
-                        .unwrap()
-                        .to_string_lossy()
-                        .into_owned();
-                    if !installer.contains(&rel) {
-                        missing.push(rel);
-                    }
-                }
+        for path in files_under(&repo_root().join(dir)) {
+            let rel = path
+                .strip_prefix(repo_root())
+                .unwrap()
+                .to_string_lossy()
+                .into_owned();
+            if !installed.contains_key(&rel) {
+                missing.push(rel);
             }
         }
     }
     assert!(
         missing.is_empty(),
-        "these workflow files exist in the repository but install.sh never ships them: {missing:?}",
+        "these files exist in the repository but never land in an installed project: {missing:?}",
     );
 }
 

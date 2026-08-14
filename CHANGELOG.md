@@ -26,8 +26,8 @@ Installations pin a version with `KEELER_REF` and record it at the top of
   a committed `Cargo.lock`.
 - A CI job that forces `cargo binstall`'s source-compile fallback, so the
   `--locked` path stays proven even when release downloads are healthy.
-- A harness test that fails when a workflow file exists in the repository
-  but `install.sh` does not ship it.
+- A harness test that fails when any file under the command or skill trees
+  does not land in an installed project.
 
 ### Fixed
 

@@ -49,6 +49,10 @@ jobs:
           if ! command -v shellcheck >/dev/null; then
             sudo apt-get update && sudo apt-get install -y shellcheck
           fi
+      # The committed lockfile must actually match Cargo.toml — nothing
+      # else passes --locked, so this is the freshness gate.
+      - name: Lockfile is fresh
+        run: cargo metadata --format-version 1 --locked > /dev/null
       # Through `just test`, not bare cargo: the recipe knows this crate has
       # no library target and skips doc tests honestly.
       - name: Test
@@ -186,18 +190,26 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      # Pre-install everything except nextest and just, then force binstall's
-      # compile strategy: the installer must survive the source fallback,
-      # which once broke because nextest refuses to build without --locked —
-      # a path a healthy network never exercises.
+      # No rust-cache here, deliberately: it caches ~/.cargo/bin, so a
+      # second run would restore the compiled nextest, the installer's tool
+      # probe would find nothing missing, and the fallback this job exists
+      # to prove would never execute again. (The bootstrap job omits the
+      # cache for the same reason.)
+      #
+      # Everything except nextest is pre-installed as a binary: nextest is
+      # the tool whose source build once broke without --locked, and
+      # compiling the others would prove nothing more.
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-binstall,cargo-llvm-cov,cargo-mutants,cargo-crap
+          tool: cargo-binstall,cargo-llvm-cov,cargo-mutants,cargo-crap,just
       - name: Install with the compile strategy forced
         env:
           BINSTALL_STRATEGIES: compile
         run: |
           cargo new "$RUNNER_TEMP/fallback"
-          ./install.sh "$RUNNER_TEMP/fallback"
-          cd "$RUNNER_TEMP/fallback" && just --version && cargo nextest --version
+          ./install.sh "$RUNNER_TEMP/fallback" | tee install.log
+          # Provenance, not just presence: the installer itself must have
+          # reported nextest missing and gone through its binstall path —
+          # a binary that merely exists on PATH proves nothing.
+          grep -q "installing: cargo-nextest" install.log
+          cargo nextest --version
