@@ -1,10 +1,11 @@
 //! Regression tests for what `install.sh` ships into a user's project.
 //!
-//! These read the installer and the files it copies — no project is created,
-//! so they run in milliseconds under the normal test gate. The end-to-end
-//! installer jobs in CI cover the rest.
+//! The workflow tests read the installer and the files it copies. The
+//! behavioral tests run `install.sh --no-tools` against a generated project
+//! with a stub `cargo` on PATH, so they stay fast and never touch the
+//! network. The end-to-end installer jobs in CI cover the rest.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Jobs a project that adopts Keeler can actually run: they need nothing but
 /// the project's own sources and the tools the installer set up.
@@ -66,6 +67,151 @@ fn job_names(workflow: &str) -> Vec<String> {
         }
     }
     names
+}
+
+/// A throwaway project for one test run, removed on drop. The `cargo` on its
+/// PATH is a stub that logs every invocation to `cargo-calls.log` — any real
+/// `cargo` call the installer makes shows up there instead of on the network.
+struct TempProject {
+    dir: PathBuf,
+}
+
+impl TempProject {
+    fn new(name: &str, manifest: &str) -> Self {
+        let dir = std::env::temp_dir().join(format!("keeler-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("bin")).unwrap();
+        std::fs::write(dir.join("Cargo.toml"), manifest).unwrap();
+
+        let shim = dir.join("bin/cargo");
+        std::fs::write(
+            &shim,
+            "#!/usr/bin/env bash\necho \"$@\" >> \"$(dirname \"$0\")/../cargo-calls.log\"\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        Self { dir }
+    }
+
+    fn path(&self) -> &Path {
+        &self.dir
+    }
+
+    /// Runs `install.sh <project> --no-tools` with the stub cargo first on
+    /// PATH; panics if the installer fails.
+    fn install(&self) -> String {
+        let path_var = std::env::var("PATH").unwrap();
+        let output = std::process::Command::new("bash")
+            .arg(repo_root().join("install.sh"))
+            .arg(&self.dir)
+            .arg("--no-tools")
+            .env(
+                "PATH",
+                format!("{}:{path_var}", self.dir.join("bin").display()),
+            )
+            .output()
+            .expect("failed to run install.sh");
+        assert!(
+            output.status.success(),
+            "install.sh failed:\n{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    }
+
+    fn cargo_calls(&self) -> String {
+        std::fs::read_to_string(self.dir.join("cargo-calls.log")).unwrap_or_default()
+    }
+}
+
+impl Drop for TempProject {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+#[test]
+fn proptest_declared_as_a_table_is_detected() {
+    // Given a project that declares proptest in table form
+    let project = TempProject::new(
+        "proptest-table",
+        "[package]\nname = \"probe\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+         [dev-dependencies.proptest]\nversion = \"1\"\n",
+    );
+
+    // When the installer runs
+    let stdout = project.install();
+
+    // Then it sees the existing dependency and never reaches for cargo add
+    assert!(
+        stdout.contains("proptest already a dev-dependency"),
+        "table-form proptest went undetected:\n{stdout}",
+    );
+    assert!(
+        !project.cargo_calls().contains("add"),
+        "installer ran `cargo add` for a dependency the project already has: {}",
+        project.cargo_calls(),
+    );
+}
+
+#[test]
+fn proptest_derive_alone_is_not_mistaken_for_proptest() {
+    // Given a project whose only matching-prefix dependency is proptest-derive
+    let project = TempProject::new(
+        "proptest-derive",
+        "[package]\nname = \"probe\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+         [dev-dependencies]\nproptest-derive = \"0.5\"\n",
+    );
+
+    // When the installer runs
+    let stdout = project.install();
+
+    // Then proptest itself is still added
+    assert!(
+        !stdout.contains("proptest already a dev-dependency"),
+        "proptest-derive was mistaken for proptest:\n{stdout}",
+    );
+    assert!(
+        project.cargo_calls().contains("add --dev --quiet proptest"),
+        "installer never added proptest: {:?}",
+        project.cargo_calls(),
+    );
+}
+
+#[test]
+fn equivalent_gitignore_patterns_are_not_duplicated() {
+    // Given a project that already ignores target/ the standard Rust way
+    let project = TempProject::new(
+        "gitignore-dup",
+        "[package]\nname = \"probe\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+         [dev-dependencies]\nproptest = \"1\"\n",
+    );
+    std::fs::write(project.path().join(".gitignore"), "target/\n").unwrap();
+
+    // When the installer runs
+    project.install();
+
+    // Then no equivalent target pattern is appended ...
+    let gitignore = std::fs::read_to_string(project.path().join(".gitignore")).unwrap();
+    let target_lines: Vec<&str> = gitignore
+        .lines()
+        .filter(|line| line.trim_matches('/') == "target")
+        .collect();
+    assert_eq!(
+        target_lines,
+        ["target/"],
+        "installer duplicated an existing target pattern:\n{gitignore}",
+    );
+    // ... while genuinely missing entries still land
+    assert!(
+        gitignore.lines().any(|line| line == "lcov.info"),
+        "missing entries were not appended:\n{gitignore}",
+    );
 }
 
 #[test]
