@@ -1,0 +1,12 @@
+# Keeps the pinned actions and the harness's few crates from going stale —
+# upload-artifact was once bumped by hand; this removes that chore.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly

@@ -9,6 +9,26 @@ Installations pin a version with `KEELER_REF` and record it at the top of
 
 ## [Unreleased]
 
+### Changed
+
+- The repository's own gates now measure the deliverable, not a placeholder
+  (spec 01). The example crate is gone; `tests/installer.rs` drives
+  `install.sh` against generated projects — offline, property-tested —
+  and `shellcheck` statically gates the installer. Recipes report honestly
+  when there is nothing to measure: `cov`/`crap` probe cargo metadata for
+  targets (so workspace members are still measured), and `mutants-diff`
+  says when a change is outside its reach instead of measuring a
+  placeholder. What adopters receive is unchanged and test-enforced.
+
+### Added
+
+- `CONTRIBUTING.md`, `SECURITY.md`, dependabot for actions and crates, and
+  a committed `Cargo.lock`.
+- A CI job that forces `cargo binstall`'s source-compile fallback, so the
+  `--locked` path stays proven even when release downloads are healthy.
+- A harness test that fails when a workflow file exists in the repository
+  but `install.sh` does not ship it.
+
 ### Fixed
 
 - The installed CI workflow no longer carries Keeler's own repository jobs.

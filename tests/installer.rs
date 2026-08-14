@@ -1018,6 +1018,39 @@ fn a_gitignore_missing_its_final_newline_still_converges() {
     );
 }
 
+/// Guards the installer's hard-coded file list: a command or skill added to
+/// the repository but not to install.sh would silently never ship, and the
+/// omission would only surface when a user's agent failed to find it.
+#[test]
+fn every_workflow_file_in_the_repository_is_installed() {
+    let installer = std::fs::read_to_string(repo_root().join("install.sh")).unwrap();
+    let mut missing = Vec::new();
+    for dir in [".claude/commands/keeler", ".claude/skills"] {
+        let mut pending = vec![repo_root().join(dir)];
+        while let Some(current) = pending.pop() {
+            for entry in std::fs::read_dir(&current).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    pending.push(path);
+                } else if path.extension().is_some_and(|ext| ext == "md") {
+                    let rel = path
+                        .strip_prefix(repo_root())
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned();
+                    if !installer.contains(&rel) {
+                        missing.push(rel);
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "these workflow files exist in the repository but install.sh never ships them: {missing:?}",
+    );
+}
+
 #[test]
 fn the_repository_presents_no_placeholder_to_replace() {
     // Given a clone of the Keeler repository, when its Rust sources are

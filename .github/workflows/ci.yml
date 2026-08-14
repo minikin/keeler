@@ -179,3 +179,25 @@ jobs:
           cargo new "$RUNNER_TEMP/bootstrap"
           ./install.sh "$RUNNER_TEMP/bootstrap"
           cd "$RUNNER_TEMP/bootstrap" && just dev
+
+  installer-locked-fallback:
+    name: Installer source-compile fallback (binstall --locked)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Pre-install everything except nextest and just, then force binstall's
+      # compile strategy: the installer must survive the source fallback,
+      # which once broke because nextest refuses to build without --locked —
+      # a path a healthy network never exercises.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-binstall,cargo-llvm-cov,cargo-mutants,cargo-crap
+      - name: Install with the compile strategy forced
+        env:
+          BINSTALL_STRATEGIES: compile
+        run: |
+          cargo new "$RUNNER_TEMP/fallback"
+          ./install.sh "$RUNNER_TEMP/fallback"
+          cd "$RUNNER_TEMP/fallback" && just --version && cargo nextest --version
