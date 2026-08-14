@@ -38,8 +38,13 @@ note(){ printf '  · %s\n' "$*"; }
 DEST="$(cd "$DEST" && pwd)"
 
 # --- Source: local checkout when present, otherwise fetch a tarball --------
-SRC="$(cd "$(dirname "${BASH_SOURCE[0]:-.}")" 2>/dev/null && pwd || pwd)"
-if [ ! -f "$SRC/specs/TEMPLATE.md" ]; then
+if ! SRC="$(cd "$(dirname "${BASH_SOURCE[0]:-.}")" 2>/dev/null && pwd)"; then
+    SRC="$(pwd)"
+fi
+# The sentinel must be repo-only: Keeler ships specs/TEMPLATE.md into every
+# project, so probing for a shipped file would mistake an already-Keelered
+# project for the source and turn every piped upgrade into a silent no-op.
+if [ ! -f "$SRC/VERSION" ] || [ ! -f "$SRC/templates/keeler.yml" ]; then
     tmp="$(mktemp -d)"
     trap 'rm -rf "$tmp"' EXIT
     say "Fetching Keeler"
@@ -208,6 +213,11 @@ fi
 say "Updating .gitignore"
 gitignore="$DEST/.gitignore"
 touch "$gitignore"
+# A final line with no newline would glue the first appended entry onto it —
+# breaking both the entry and the next run's already-present check.
+if [ -s "$gitignore" ] && [ -n "$(tail -c1 "$gitignore")" ]; then
+    echo >> "$gitignore"
+fi
 added=0
 # crap-baseline.json is deliberately NOT ignored: it is the shared
 # reference the delta gate measures against, so it belongs in git.

@@ -5,47 +5,63 @@
 
 > Named after [Leonarde Keeler](https://en.wikipedia.org/wiki/Leonarde_Keeler), builder of the first practical polygraph.
 
-Keeler is a quality-assurance workflow for AI-assisted **Rust** development:
-every change starts as a human-approved spec, is built test-first, and must
-clear independent gates — unit and property tests, coverage, CRAP score,
-review, and mutation testing that verifies the tests themselves. A defect
-may slip past one gate, but rarely past all of them.
+Keeler is a quality workflow for **Rust** projects built with AI.
 
-The method is language-agnostic; this implementation is wired to the Rust
-toolchain (`cargo nextest`, `cargo llvm-cov`, `cargo mutants`, `cargo crap`,
-`proptest`, `just`). Porting it means swapping the `Justfile` recipes and the
-tool names in the commands — the pipeline and its rules stay as they are.
+The rules are simple: no code before a spec you approved, no bugfix without
+a failing test first, and no change is done until it passes a set of gates
+that check each other — tests, coverage, complexity, review, and mutation
+testing that checks the tests themselves. Any single gate can be fooled.
+All of them together — rarely.
+
+Keeler doesn't ask the AI to be careful. It makes carelessness fail the
+build.
 
 ## How it works
 
-Every feature begins as a Gherkin specification that a human reviews and
-approves before any code exists — that approval is the only moment
-requirements get decided. Implementation is strictly test-driven: the
-failing test is shown first, then the minimal code, then the refactor.
+**1. Spec first.** Every feature starts as a Gherkin spec (Given/When/Then)
+in `specs/`. A human reads it and approves it — that is the only moment
+requirements get decided. No code exists yet.
 
-The result must clear a series of independent verification gates: the test
-suite, mechanical line-coverage and complexity-vs-coverage (CRAP) thresholds,
-a spec-conformance review, and finally mutation testing — deliberately
-planted bugs that the tests are required to catch. A surviving mutant means
-the tests are too weak, and the rule is absolute: strengthen the test, never
-bend the code to satisfy the tool. A per-function baseline recorded before
-each feature guarantees the codebase never gets quietly worse.
+**2. Tests first.** Implementation is strict TDD: the failing test is shown
+first, then the minimal code, then the refactor. Property tests
+([proptest](https://proptest-rs.github.io/proptest/)) pin the invariants
+examples can't.
 
-Bug fixes and trivial edits take lighter roads. See
-[KEELER.md](KEELER.md) for the full picture with diagrams, and
-[.claude/keeler.md](.claude/keeler.md) for the rules the AI operates under.
+**3. Gates.** The result must pass every gate, and each catches what the
+others miss:
+
+| Gate       | What it catches                                              |
+| ---------- | ------------------------------------------------------------ |
+| Format     | style drift (`rustfmt`)                                      |
+| Lints      | warnings and footguns (`clippy`, pedantic, zero tolerance)   |
+| Tests      | broken behavior (`nextest` + doc tests)                      |
+| Coverage   | untested lines in changed code                               |
+| CRAP       | complex code hiding behind missing tests                     |
+| Review     | scope creep and spec mismatches                              |
+| Mutation   | weak tests — bugs planted on purpose must be caught          |
+| CRAP delta | any function getting worse than the committed baseline       |
+
+One rule is absolute: **a surviving mutant means the test is weak.
+Strengthen the test — never bend the code to satisfy the tool.**
+
+The method is language-agnostic; this implementation is wired to the Rust
+toolchain. Porting it means swapping the `Justfile` recipes and tool names —
+the pipeline and its rules stay the same.
 
 ## Quick start
 
-- **Feature:** `/keeler:spec → approve → /keeler:tasks → /keeler:tdd → /keeler:qa → /keeler:review → /keeler:mutants` —
-  or `/keeler:feature <problem>` to run the whole examination end to end.
-- **Bugfix:** `/keeler:fix` — reproduce with a failing regression test first, then
-  fix minimally.
-- **Trivial** (docs, comments, config): fast path — `just lint`, no spec,
-  no ceremony.
+Three roads, by weight of the change:
 
-See *Change classes* in [.claude/keeler.md](.claude/keeler.md) for how to pick the right road.
+- **Feature:** `/keeler:spec → approve → /keeler:tasks → /keeler:tdd →
+  /keeler:qa → /keeler:review → /keeler:mutants` — or just
+  `/keeler:feature <problem>` to run the whole pipeline end to end.
+- **Bugfix:** `/keeler:fix` — reproduce with a failing regression test
+  first, then fix minimally.
+- **Trivial** (docs, comments, config): `just lint` and done — no spec, no
+  ceremony.
 
+See [KEELER.md](KEELER.md) for the full picture with diagrams, and
+[.claude/keeler.md](.claude/keeler.md) for the rules the AI operates under.
 
 ## Install
 
@@ -62,22 +78,27 @@ KEELER_REF=v0.1.0 curl -fsSL https://raw.githubusercontent.com/minikin/keeler/ma
 `just keeler-upgrade` re-runs the installer later; the version you have is
 recorded at the top of `.claude/keeler.md`.
 
-|              | What it installs                                                                                       |
-| ------------ | ------------------------------------------------------------------------------------------------------ |
-| **Tools**    | `cargo-nextest`, `cargo-llvm-cov`, `cargo-mutants`, `cargo-crap`, `just` — only the ones you're missing |
-| **Workflow** | slash commands, skills, spec template, `Justfile`, gate configs, and a `keeler.yml` CI workflow         |
-| **Manifest** | `proptest` as a dev-dependency, plus the `[profile.mutants]` and `[lints.clippy]` sections              |
-| **Ignores**  | the generated artifacts, appended to `.gitignore`                                                       |
+|              | What it installs                                                                                        |
+| ------------ | ------------------------------------------------------------------------------------------------------- |
+| **Tools**    | `cargo-nextest`, `cargo-llvm-cov`, `cargo-mutants`, `cargo-crap`, `just` — only the ones you're missing  |
+| **Workflow** | slash commands, skills, spec template, `Justfile`, gate configs                                          |
+| **CI**       | `.github/workflows/keeler.yml` — the gates and nothing else, kept separate from your own workflows       |
+| **Manifest** | `proptest` as a dev-dependency, plus the `[profile.mutants]` and `[lints.clippy]` sections               |
+| **Ignores**  | the generated artifacts, appended to `.gitignore` — duplicates and equivalent patterns are skipped       |
 
-- Re-running is safe — nothing is duplicated, and a file you have changed is
-  never overwritten: the new version is copied alongside as `<name>.keeler`
-  for you to merge.
-- The one exception is `.claude/keeler.md`, the rules file Keeler owns: an
-  upgrade replaces it, so rule changes actually reach you. Your copy is kept
-  as `.claude/keeler.md.bak`. Put project-specific instructions in
-  `CLAUDE.md` — that file is never rewritten.
-- An existing `CLAUDE.md` keeps every word: the rules install as
-  `.claude/keeler.md` and a single `@.claude/keeler.md` import is appended.
+The installer is safe to re-run, and it keeps its hands off your files:
+
+- **Your files are never overwritten.** If a file you changed differs from
+  what Keeler ships, the new version lands alongside it as `<name>.keeler`,
+  and the run names every such file so you can merge on your own terms.
+- **One exception:** `.claude/keeler.md`, the rules file Keeler owns. An
+  upgrade replaces it — that is how rule changes reach you — and your
+  previous copy is kept as `.claude/keeler.md.bak`. Project-specific
+  instructions belong in `CLAUDE.md`, which is never rewritten: an existing
+  `CLAUDE.md` keeps every word and gains a single `@.claude/keeler.md`
+  import line.
+- **Nothing is duplicated.** Manifest sections and `.gitignore` entries are
+  added only when missing — a second run has nothing to do.
 - `--no-tools` skips the tool installs. Prefer to read the script first?
   `git clone https://github.com/minikin/keeler && ./keeler/install.sh <project>`
   does exactly the same.
@@ -123,16 +144,24 @@ once the project grows async code.
 - [cargo-nextest](https://nexte.st) — test runner
 - [cargo-llvm-cov](https://github.com/taiki-e/cargo-llvm-cov) — coverage
 - [cargo-crap](https://github.com/minikin/cargo-crap) — CRAP score gate (complexity × uncoverage)
-- [cargo-mutants](https://mutants.rs) — mutation testing (the control questions)
+- [cargo-mutants](https://mutants.rs) — mutation testing
 - [proptest](https://proptest-rs.github.io/proptest/) — property-based tests
 
-## Layout
+## This repository
 
-- `specs/` — Gherkin specs (Given/When/Then), one per feature; `TEMPLATE.md` is the starting point
-- `src/` — implementation with unit + property tests inline
-- `tests/acceptance.rs` — one acceptance test per spec scenario
-- `.claude/keeler.md` — the workflow rules, imported by `CLAUDE.md` so your own instructions stay untouched
-- `.claude/commands/keeler/` — the workflow slash commands, invoked as `/keeler:spec`, `/keeler:fix`, …
-- `.claude/skills/` — self-triggering knowledge: property-testing, gherkin-specs
-- `templates/keeler.yml` — the gates as physics, not discipline; installed into your project as `.github/workflows/keeler.yml`
-- `.github/workflows/ci.yml` — this repository's own CI, which additionally tests the installer
+What you're looking at is both the product and its test bench:
+
+- `install.sh` — the deliverable: the script that sets everything up in
+  your project
+- `templates/keeler.yml` — the CI workflow adopters receive
+- `specs/` — Gherkin specs; `TEMPLATE.md` is the starting point for yours
+- `.claude/keeler.md` — the workflow rules, imported by `CLAUDE.md`
+- `.claude/commands/keeler/` — the slash commands (`/keeler:spec`,
+  `/keeler:fix`, …)
+- `.claude/skills/` — self-triggering knowledge: property-testing,
+  gherkin-specs
+- `tests/installer.rs` — the harness: tests that drive `install.sh` against
+  generated projects, offline — the gates here measure the deliverable, not
+  a placeholder
+- `.github/workflows/ci.yml` — this repository's CI: lints + shellcheck,
+  the harness suite, and end-to-end installer tests on Linux and macOS

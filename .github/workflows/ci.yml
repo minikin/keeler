@@ -23,6 +23,13 @@ jobs:
         run: cargo fmt --all -- --check
       - name: clippy
         run: cargo clippy --all-targets -- -D warnings
+      # The deliverable is shell — shellcheck is its static gate.
+      - name: shellcheck
+        run: |
+          if ! command -v shellcheck >/dev/null; then
+            sudo apt-get update && sudo apt-get install -y shellcheck
+          fi
+          shellcheck install.sh
 
   test:
     name: Test
@@ -31,38 +38,28 @@ jobs:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@cargo-nextest
-      - name: Test
-        run: cargo nextest run --all-targets --no-tests=pass
-      - name: Doc tests
-        run: cargo test --doc
-
-  quality:
-    name: Coverage + CRAP gate
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: llvm-tools-preview
-      - uses: Swatinem/rust-cache@v2
+      # `just` because the harness tests drive the shipped Justfile's recipes.
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-llvm-cov,cargo-nextest,cargo-crap
-      - name: Coverage gate (>= 90% lines)
-        run: cargo llvm-cov nextest --all-targets --no-tests=pass --lcov --output-path lcov.info --fail-under-lines 90
-      - name: CRAP gate (threshold 15)
-        run: cargo crap --lcov lcov.info --path src --threshold 15 --fail-above
-      # The committed baseline is the shared reference — a change may not
-      # regress any function's score, whatever the absolute threshold says.
-      - name: CRAP delta gate (no regressions vs the committed baseline)
+          tool: cargo-nextest,just
+      # The harness tests assert shellcheck behavior — don't rely on the
+      # runner image happening to preinstall it.
+      - name: Ensure shellcheck
         run: |
-          if [ -f crap-baseline.json ]; then
-            cargo crap --lcov lcov.info --path src --threshold 15 --fail-above \
-              --baseline crap-baseline.json --fail-regression
-          else
-            echo "no crap-baseline.json committed — skipping the delta gate"
+          if ! command -v shellcheck >/dev/null; then
+            sudo apt-get update && sudo apt-get install -y shellcheck
           fi
+      # Through `just test`, not bare cargo: the recipe knows this crate has
+      # no library target and skips doc tests honestly.
+      - name: Test
+        run: just test
+
+  # No coverage, CRAP or mutation job here: this repository's crate is the
+  # installer's test harness, and those gates would only measure a
+  # placeholder — a green that cannot go red. The deliverable (install.sh
+  # and the files it ships) is gated by the harness tests above, shellcheck
+  # in the lints job, and the end-to-end installer jobs below. Adopters
+  # still get every gate via templates/keeler.yml.
 
   version:
     name: Version consistency
@@ -182,36 +179,3 @@ jobs:
           cargo new "$RUNNER_TEMP/bootstrap"
           ./install.sh "$RUNNER_TEMP/bootstrap"
           cd "$RUNNER_TEMP/bootstrap" && just dev
-
-  mutants:
-    name: Mutation tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-mutants,cargo-nextest
-      - name: Mutation tests (changed lines only, PRs)
-        if: github.event_name == 'pull_request'
-        env:
-          BASE_REF: ${{ github.base_ref }}
-        run: |
-          git diff "origin/${BASE_REF}...HEAD" -- 'src/*.rs' 'src/**/*.rs' > pr.diff
-          if [ ! -s pr.diff ]; then
-            echo "No changed src lines — skipping mutants."
-            exit 0
-          fi
-          cargo mutants --in-diff pr.diff
-      - name: Mutation tests (full, main)
-        if: github.event_name == 'push'
-        run: cargo mutants
-      - name: Upload mutants output
-        if: always()
-        uses: actions/upload-artifact@v5
-        with:
-          name: mutants-out
-          path: mutants.out/

@@ -1,7 +1,8 @@
-# A placeholder crate so every gate has something real to measure — the
-# repository dogfoods its own pipeline. Replace it with your code.
+# The test harness for Keeler's deliverable — install.sh and the files it
+# ships. There is no library here: tests/ drives the installer as a
+# subprocess, and the gates this repository runs measure that suite.
 [package]
-name = "keeler-example"
+name = "keeler-harness"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
