@@ -1,5 +1,7 @@
-# Keeps the pinned actions and the harness's few crates from going stale —
-# upload-artifact was once bumped by hand; this removes that chore.
+# Keeps ci.yml's action pins and the harness's few crates fresh. Honest
+# limit: Dependabot only scans .github/workflows/, so the pins in
+# templates/keeler.yml — the workflow shipped to adopters — still need a
+# deliberate hand bump when they go stale.
 version: 2
 updates:
   - package-ecosystem: github-actions
