@@ -9,6 +9,15 @@ Installations pin a version with `KEELER_REF` and record it at the top of
 
 ## [Unreleased]
 
+### Changed
+
+- The shipped workflow rules no longer talk about Keeler itself. Notes
+  about this repository's own divergences — a shell deliverable, per-area
+  test files, no CRAP baseline — were sitting in `.claude/keeler.md`,
+  which installs into every adopting project and should describe only the
+  project it lands in. They now live in Keeler's own `CLAUDE.md`, the file
+  the installer reserves for project-specific instructions.
+
 ## [0.1.0] — 2026-08-14
 
 First release: the workflow, the gates, a one-command installer — and the

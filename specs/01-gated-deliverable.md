@@ -259,7 +259,7 @@ And   Cargo.toml describes a test harness for the installer
       repo's shell scripts only when any are present (a project with none —
       every adopter — skips it, keeping the shipped gates unchanged);
       `install.sh` itself comes out clean. Deps: none.
-- [ ] **T4 — What adopters receive is pinned: every gate, no repo-only
+- [x] **T4 — What adopters receive is pinned: every gate, no repo-only
       references.**
       Scenarios: _A defect in the shipped workflow fails the gate_, _An
       adopting project still receives every gate_. Tests: acceptance —
