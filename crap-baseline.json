@@ -3,6 +3,51 @@
   "version": "0.4.3",
   "entries": [
     {
+      "file": "/Users/mnkn/GitHub/keeler/keeler/src/lib.rs",
+      "function": "carried_bytes",
+      "line": 71,
+      "cyclomatic": 6.0,
+      "coverage": 93.75,
+      "crap": 6.0087890625,
+      "crate": "keeler"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler/src/lib.rs",
+      "function": "collect",
+      "line": 58,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "keeler"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler/src/lib.rs",
+      "function": "embedded_single",
+      "line": 91,
+      "cyclomatic": 9.0,
+      "coverage": 90.9090909090909,
+      "crap": 9.060856498873028,
+      "crate": "keeler"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler/src/lib.rs",
+      "function": "lay_down",
+      "line": 123,
+      "cyclomatic": 6.0,
+      "coverage": 93.33333333333333,
+      "crap": 6.010666666666666,
+      "crate": "keeler"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler/src/lib.rs",
+      "function": "shipped_files",
+      "line": 42,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "keeler"
+    },
+    {
       "file": "/Users/mnkn/GitHub/keeler/xtask/src/changelog.rs",
       "function": "NotesError::fmt",
       "line": 17,
@@ -166,9 +211,9 @@
     }
   ],
   "diagnostics": {
-    "analyzed_files": 5,
-    "lcov_files": 5,
-    "matched_files": 5,
+    "analyzed_files": 6,
+    "lcov_files": 6,
+    "matched_files": 6,
     "source_only": {
       "count": 0,
       "examples": []
