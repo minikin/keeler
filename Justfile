@@ -17,19 +17,18 @@ test:
 fmt:
     cargo fmt --all
 
-# Check formatting and lints (mirrors CI). In the Keeler repository itself
-# (keyed on templates/keeler.yml, which is never installed under that name)
-# the deliverable is shell, so shellcheck gates install.sh and the release
-# scripts. An adopter's own shell is not Keeler's to judge — no shellcheck
-# outside this repo.
+# Check formatting and lints (mirrors CI): your formatting, your clippy.
+# The shellcheck branch below is inert in your project — it is keyed on a
+# marker file only Keeler's own repository has. Your shell scripts are
+# yours to gate, not Keeler's.
 lint:
     #!/usr/bin/env bash
     set -euo pipefail
     cargo fmt --all -- --check
     cargo clippy --all-targets -- -D warnings
     if [ -e templates/keeler.yml ]; then
-        # No nullglob: if scripts/*.sh stops matching, shellcheck fails on
-        # the literal glob — a gate that vanishes silently is no gate.
+        # No nullglob: if the glob stops matching, shellcheck fails on the
+        # literal pattern — a gate that vanishes silently is no gate.
         shellcheck install.sh scripts/*.sh
     fi
 

@@ -43,6 +43,13 @@ Installations pin a version with `KEELER_REF` and record it at the top of
 
 ### Changed
 
+- The shipped `Justfile` no longer explains Keeler's own repository to the
+  projects it lands in. Its `lint` recipe carried a comment about the
+  Keeler repository's shell deliverable, `templates/keeler.yml` and the
+  release scripts — internals of no use to an adopter reading their own
+  Justfile. The comment now says what the recipe does for *them*, and that
+  the shellcheck branch is inert in their project.
+
 - The shipped workflow rules no longer talk about Keeler itself. Notes
   about this repository's own divergences — a shell deliverable, per-area
   test files, no CRAP baseline — were sitting in `.claude/keeler.md`,
