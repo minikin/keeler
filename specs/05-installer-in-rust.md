@@ -211,7 +211,7 @@ published to crates.io; both are installed from the repository itself.
       totality: the set of `.keeler` files written equals the set
       reported; own-content preservation: for any pre-existing file
       outside the three append targets, the bytes are unchanged. Deps: T1.
-- [ ] **T3 — The manifest and the .gitignore.**
+- [x] **T3 — The manifest and the .gitignore.**
       Scenarios: contributes to _Every spec 01 scenario holds_ (T5).
       Tests: acceptance — proptest added as a dev-dependency, detected in
       both declaration forms (`proptest = …` and

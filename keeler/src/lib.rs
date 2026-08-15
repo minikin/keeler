@@ -4,6 +4,9 @@
 //! down needs no network, no tarball and no clone to copy from. The binary
 //! is the source.
 
+pub mod gitignore;
+pub mod manifest;
+
 use include_dir::{Dir, include_dir};
 
 /// The command definitions, embedded whole: a command added to the
@@ -271,6 +274,48 @@ fn with_suffix(path: &std::path::Path, suffix: &str) -> std::path::PathBuf {
 fn write(target: &std::path::Path, bytes: &[u8]) -> Result<(), Failure> {
     std::fs::write(target, bytes)
         .map_err(|why| format!("cannot write {}: {why}", target.display()).into())
+}
+
+/// Adds the sections Keeler's gates need to the project's `Cargo.toml`.
+///
+/// Only ever appends, and only what is missing — the manifest is the
+/// project's own file. A workspace root is left alone with a note saying
+/// why.
+///
+/// # Errors
+///
+/// Returns an error naming the manifest if it cannot be read or written.
+pub fn configure(project: &std::path::Path) -> Result<manifest::Changes, Failure> {
+    let path = project.join("Cargo.toml");
+    let before = std::fs::read_to_string(&path)
+        .map_err(|why| format!("cannot read {}: {why}", path.display()))?;
+    let (after, changes) = manifest::configured(&before);
+    if after != before {
+        write(&path, after.as_bytes())?;
+    }
+    Ok(changes)
+}
+
+/// Adds Keeler's build artifacts to the project's `.gitignore`.
+///
+/// Append-only, and only what is missing; their entries and formatting are
+/// left as they are.
+///
+/// # Errors
+///
+/// Returns an error naming the file if it cannot be read or written.
+pub fn configure_gitignore(project: &std::path::Path) -> Result<Vec<String>, Failure> {
+    let path = project.join(".gitignore");
+    let before = match std::fs::read_to_string(&path) {
+        Ok(before) => before,
+        Err(why) if why.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(why) => return Err(format!("cannot read {}: {why}", path.display()).into()),
+    };
+    let (after, added) = gitignore::extended(&before);
+    if after != before {
+        write(&path, after.as_bytes())?;
+    }
+    Ok(added)
 }
 
 #[cfg(test)]
