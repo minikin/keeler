@@ -18,6 +18,10 @@ Installations pin a version with `KEELER_REF` and record it at the top of
   rather than listed, so it cannot drift from what `install.sh` does. CI
   will point it at pinned real-world clones; the script never clones, so
   the local suite stays offline.
+- The checker also holds the installer to its workspace contract: a root
+  with no `[package]` of its own must be told that its manifest is the
+  project's to manage, since Keeler cannot add proptest and the mutants
+  profile to member crates on its behalf.
 
 ### Changed
 

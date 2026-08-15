@@ -8,8 +8,9 @@
 # it takes a directory that already exists, which is what keeps the local
 # suite offline (spec 03).
 #
-# What it asserts, so far: the installer exits zero, and every file a clean
-# install produces exists in the project afterwards.
+# What it asserts, so far: the installer exits zero, every file a clean
+# install produces exists in the project afterwards, and a workspace root is
+# told that its manifest is the project's own to manage.
 #
 # The tracked file set is *derived*, never listed: a reference install into
 # an empty crate says what a correct install produces, so the set cannot
@@ -40,6 +41,21 @@ install_sh="${KEELER_INSTALL_SH:-$repo/install.sh}"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
+# Every refusal says what went wrong and shows the evidence behind it, so a
+# CI failure is readable without rerunning anything locally.
+fail() {
+    printf 'integration-check: %s\n' "$@" >&2
+    exit 1
+}
+
+fail_with_log() {
+    local log="$1"
+    shift
+    printf 'integration-check: %s\n' "$@" >&2
+    cat "$log" >&2
+    exit 1
+}
+
 # Every file in a directory, relative and sorted. `.git` is the project's
 # own business and never part of the install set.
 list_files() {
@@ -54,10 +70,19 @@ printf '[package]\nname = "keeler-reference"\nversion = "0.0.0"\nedition = "2021
 printf 'pub fn reference() {}\n' > "$reference/src/lib.rs"
 list_files "$reference" > "$work/reference-before"
 
-if ! bash "$repo/install.sh" "$reference" --no-tools > "$work/reference.log" 2>&1; then
-    echo "integration-check: the reference install failed — the checker cannot judge anything" >&2
-    cat "$work/reference.log" >&2
-    exit 1
+# The reference must describe what the installer *copies*, not what its
+# tools leave behind. A real `cargo add` writes Cargo.lock; a workspace
+# root skips `cargo add` entirely, so it would then be failed for missing a
+# file Keeler never installs. A no-op cargo keeps the reference to the file
+# set alone — and makes it identical on every machine.
+mkdir -p "$work/stub"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$work/stub/cargo"
+chmod +x "$work/stub/cargo"
+
+if ! PATH="$work/stub:$PATH" bash "$repo/install.sh" "$reference" --no-tools \
+    > "$work/reference.log" 2>&1; then
+    fail_with_log "$work/reference.log" \
+        "the reference install failed — the checker cannot judge anything"
 fi
 list_files "$reference" > "$work/reference-after"
 
@@ -65,15 +90,12 @@ list_files "$reference" > "$work/reference-after"
 comm -13 "$work/reference-before" "$work/reference-after" > "$work/tracked"
 
 if [ ! -s "$work/tracked" ]; then
-    echo "integration-check: the reference install added no files — the checker is blind" >&2
-    exit 1
+    fail "the reference install added no files — the checker is blind"
 fi
 
 # --- 2. Install into the project under test -------------------------------
 if ! bash "$install_sh" "$project" --no-tools > "$work/install.log" 2>&1; then
-    echo "integration-check: the installer exited non-zero on $project" >&2
-    cat "$work/install.log" >&2
-    exit 1
+    fail_with_log "$work/install.log" "the installer exited non-zero on $project"
 fi
 
 # --- 3. Completeness ------------------------------------------------------
@@ -86,9 +108,23 @@ while IFS= read -r rel; do
 done < "$work/tracked"
 
 if [ "${#missing[@]}" -gt 0 ]; then
-    echo "integration-check: the install is incomplete — these tracked files never landed:" >&2
+    echo "integration-check: the install is incomplete — these never landed:" >&2
     printf '  %s\n' "${missing[@]}" >&2
     exit 1
 fi
 
 echo "integration-check: $tracked_count tracked files present in $project"
+
+# --- 4. A workspace root must be told it is one ---------------------------
+# Keeler cannot add proptest and the mutants profile to a root that has no
+# [package] of its own — the member crates need them. The installer says so
+# rather than silently doing nothing, and a silent installer leaves the
+# project half-configured with no hint of it.
+if grep -q '^\[workspace\]' "$project/Cargo.toml" && ! grep -q '^\[package\]' "$project/Cargo.toml"; then
+    if ! grep -q 'workspace root' "$work/install.log"; then
+        fail_with_log "$work/install.log" \
+            "this is a workspace root, but the installer never reported the" \
+            "root manifest as the project's own to manage"
+    fi
+    echo "integration-check: the workspace root was told to manage its own manifest"
+fi

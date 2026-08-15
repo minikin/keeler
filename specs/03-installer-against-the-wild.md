@@ -123,7 +123,7 @@ is pinned by both a passing and a failing case.
       file it exits non-zero naming the missing path. Deliverable:
       `scripts/integration-check.sh` (snapshot → install → assert exit
       zero + every tracked file present). Deps: none.
-- [ ] **T2 — The checker recognizes a workspace root.**
+- [x] **T2 — The checker recognizes a workspace root.**
       Scenarios: _The installer lands cleanly on a real workspace_.
       Tests: acceptance — over a generated workspace-root project
       (`[workspace]`, no `[package]`) the checker passes and asserts the

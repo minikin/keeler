@@ -44,6 +44,26 @@ impl Fixture {
         fixture
     }
 
+    /// A workspace root with a member crate and no `[package]` of its own —
+    /// the shape `serde-rs/serde` has, generated.
+    fn workspace(name: &str) -> Self {
+        let fixture = Self::empty(name);
+        let project = fixture.project();
+        std::fs::create_dir_all(project.join("member/src")).unwrap();
+        std::fs::write(
+            project.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"member\"]\nresolver = \"2\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            project.join("member/Cargo.toml"),
+            "[package]\nname = \"member\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        std::fs::write(project.join("member/src/lib.rs"), "pub fn member() {}\n").unwrap();
+        fixture
+    }
+
     fn empty(name: &str) -> Self {
         let root = std::env::temp_dir().join(format!("keeler-wild-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
@@ -70,6 +90,22 @@ impl Fixture {
              echo \"harness: network access refused: curl $*\" >&2\nexit 7\n",
         );
         fixture
+    }
+
+    /// Makes the stub `cargo` leave a lockfile behind on `cargo add`, the
+    /// way a real one does. CI runs with a real cargo, so the reference
+    /// install produces artifacts the installer never copied.
+    fn cargo_writes_a_lockfile(&self) {
+        let real_cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+        self.write_script(
+            "bin/cargo",
+            &format!(
+                "#!/usr/bin/env bash\n\
+                 echo \"$@\" >> \"$(dirname \"$0\")/../cargo-calls.log\"\n\
+                 if [ \"$1\" = metadata ]; then exec \"{real_cargo}\" \"$@\"; fi\n\
+                 if [ \"$1\" = add ]; then echo '# generated' > Cargo.lock; fi\n",
+            ),
+        );
     }
 
     fn write_script(&self, rel: &str, body: &str) -> PathBuf {
@@ -245,5 +281,84 @@ fn an_installer_that_skips_a_file_is_caught() {
     assert!(
         report.contains("Justfile"),
         "the checker did not name the missing file:\n{report}",
+    );
+}
+
+#[test]
+fn the_installer_lands_cleanly_on_a_real_workspace() {
+    // Given a workspace root with member crates — the shape a pinned
+    // real-world workspace clone presents
+    let fixture = Fixture::workspace("workspace");
+
+    // When Keeler is installed into it under the contract checker
+    let output = fixture.check();
+    let report = combined(&output);
+
+    // Then the installer exits zero
+    assert!(
+        output.status.success(),
+        "the checker rejected a clean workspace root:\n{report}",
+    );
+
+    // And it reports the workspace-root manifest as the project's own to
+    // manage — the member crates need proptest and the profile themselves
+    assert!(
+        report.contains("workspace root"),
+        "the checker did not confirm the workspace-root report:\n{report}",
+    );
+}
+
+#[test]
+fn an_installer_silent_about_a_workspace_root_is_caught() {
+    // Given an installer that installs correctly but never tells a
+    // workspace root that its manifest is the project's own to manage
+    let fixture = Fixture::workspace("silent-workspace");
+    let defective = fixture.write_script(
+        "bin/silent-install.sh",
+        &format!(
+            "#!/usr/bin/env bash\n\
+             set -uo pipefail\n\
+             bash {} \"$@\" 2>&1 | grep -v 'workspace root'\n\
+             exit \"${{PIPESTATUS[0]}}\"\n",
+            repo_root().join("install.sh").display(),
+        ),
+    );
+
+    // When the contract checker runs against it
+    let output = fixture.check_with(Some(&defective));
+    let report = combined(&output);
+
+    // Then the check fails, saying what it expected to be told
+    assert!(
+        !output.status.success(),
+        "the checker passed an installer that said nothing about the workspace root:\n{report}",
+    );
+    assert!(
+        report.contains("workspace root"),
+        "the checker did not name the missing report:\n{report}",
+    );
+}
+
+#[test]
+fn a_lockfile_the_installer_never_copied_is_not_demanded() {
+    // Given an environment where installing leaves a lockfile behind — a
+    // real cargo does exactly this when the installer adds proptest
+    let fixture = Fixture::workspace("lockfile");
+    fixture.cargo_writes_a_lockfile();
+
+    // When the checker runs over a workspace root, where the installer
+    // skips `cargo add` and so no lockfile appears
+    let output = fixture.check();
+    let report = combined(&output);
+
+    // Then it does not demand a file the installer never copied: the
+    // tracked set is what Keeler installs, not what its tools leave around
+    assert!(
+        output.status.success(),
+        "the checker demanded a tool's side effect:\n{report}",
+    );
+    assert!(
+        !report.contains("Cargo.lock"),
+        "the checker treated a generated lockfile as part of the install set:\n{report}",
     );
 }
