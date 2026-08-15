@@ -9,22 +9,7 @@ Installations pin a version with `KEELER_REF` and record it at the top of
 
 ## [Unreleased]
 
-### Fixed
-
-- The mutation gate can see a workspace member. `cargo mutants` without
-  `--workspace` reports "Found 0 mutants" for a member crate's file and
-  passes having tested nothing, and `mutants-diff` watched only
-  `src/*.rs`, which no member's sources match. Both are fixed, so the gate
-  measures instead of reporting the change out of reach.
-
-- The shipped gates no longer miss a workspace. `just test` ran only the
-  root package, so in a project whose root manifest is itself a package a
-  member crate's tests never ran at all; `just crap` hard-coded
-  `--path src` and failed with "path does not exist" on any workspace root
-  that has no `src/` of its own. Both now ask cargo where the code is
-  (`--workspace`). Found while making Keeler's own repository a workspace —
-  and spec 01's workspace scenario could not see it, because its test runs
-  against a stub cargo. That test now pins the flag.
+## [0.2.0] — 2026-08-15
 
 ### Added
 
@@ -45,7 +30,6 @@ Installations pin a version with `KEELER_REF` and record it at the top of
   disagreement instead of stopping at the first, so one refusal is enough
   to fix everything that is wrong.
 
-### Added
 
 - `scripts/integration-check.sh` — the contract checker from spec 03. It
   installs Keeler into a project directory and asserts the installer's
@@ -104,6 +88,23 @@ Installations pin a version with `KEELER_REF` and record it at the top of
   which installs into every adopting project and should describe only the
   project it lands in. They now live in Keeler's own `CLAUDE.md`, the file
   the installer reserves for project-specific instructions.
+
+### Fixed
+
+- The mutation gate can see a workspace member. `cargo mutants` without
+  `--workspace` reports "Found 0 mutants" for a member crate's file and
+  passes having tested nothing, and `mutants-diff` watched only
+  `src/*.rs`, which no member's sources match. Both are fixed, so the gate
+  measures instead of reporting the change out of reach.
+
+- The shipped gates no longer miss a workspace. `just test` ran only the
+  root package, so in a project whose root manifest is itself a package a
+  member crate's tests never ran at all; `just crap` hard-coded
+  `--path src` and failed with "path does not exist" on any workspace root
+  that has no `src/` of its own. Both now ask cargo where the code is
+  (`--workspace`). Found while making Keeler's own repository a workspace —
+  and spec 01's workspace scenario could not see it, because its test runs
+  against a stub cargo. That test now pins the flag.
 
 ## [0.1.0] — 2026-08-14
 
@@ -195,5 +196,6 @@ repository that holds itself to the same standard it installs.
   failed with "no library targets found" in binary-only projects. Every job
   now goes through the `just` recipes, so CI runs what `just dev` runs.
 
-[Unreleased]: https://github.com/minikin/keeler/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/minikin/keeler/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/minikin/keeler/releases/tag/v0.2.0
 [0.1.0]: https://github.com/minikin/keeler/releases/tag/v0.1.0
