@@ -1243,10 +1243,11 @@ fn the_repository_presents_no_placeholder_to_replace() {
         !repo_root().join("tests/acceptance.rs").exists(),
         "tests/acceptance.rs still tests the placeholder",
     );
-    assert!(
-        !repo_root().join("crap-baseline.json").exists(),
-        "crap-baseline.json still baselines the placeholder",
-    );
+    // A baseline is no longer evidence of a placeholder: the xtask crate is
+    // real code with a real job — the release runs on it — so there is
+    // something to baseline and the file is back, deliberately (spec 04).
+    // What the scenario forbids is a source file that exists only to be
+    // measured, and the check for that is the absence of src/ above.
     // ... and Cargo.toml describes a test harness for the installer
     let manifest = std::fs::read_to_string(repo_root().join("Cargo.toml")).unwrap();
     assert!(
