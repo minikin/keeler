@@ -140,7 +140,7 @@ is pinned by both a passing and a failing case.
       checker fails and names that file; the three documented append
       targets (`CLAUDE.md`, `.gitignore`, `Cargo.toml`) are the only
       permitted diffs. Deps: T1.
-- [ ] **T4 — A second run must change nothing.**
+- [x] **T4 — A second run must change nothing.**
       Scenarios: _A second run over a real project changes nothing_.
       Tests: acceptance — the checker installs twice and compares tree
       snapshots, passing on a byte-identical second run; against a

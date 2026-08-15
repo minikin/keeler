@@ -8,9 +8,11 @@
 # it takes a directory that already exists, which is what keeps the local
 # suite offline (spec 03).
 #
-# What it asserts, so far: the installer exits zero, every file a clean
-# install produces exists in the project afterwards, and a workspace root is
-# told that its manifest is the project's own to manage.
+# What it asserts: the installer exits zero; every file a clean install
+# produces exists in the project afterwards; nothing the project already had
+# changed, bar the three documented append targets; every conflict is named
+# and matches the .keeler files on disk; a workspace root is told that its
+# manifest is the project's own to manage; and a second run moves nothing.
 #
 # The tracked file set is *derived*, never listed: a reference install into
 # an empty crate says what a correct install produces, so the set cannot
@@ -180,3 +182,24 @@ if grep -q '^\[workspace\]' "$project/Cargo.toml" && ! grep -q '^\[package\]' "$
     fi
     echo "integration-check: the workspace root was told to manage its own manifest"
 fi
+
+# --- 8. A second run must change nothing ----------------------------------
+# Installing twice is the ordinary case — an upgrade, a re-run after a
+# failure, a CI step that does not know the project already has Keeler. The
+# second run has no exemptions: not one byte may move, including the three
+# files the first run was allowed to append to.
+after_first="$work/after-first"
+mkdir -p "$after_first"
+(cd "$project" && tar -cf - --exclude=./.git .) | (cd "$after_first" && tar -xf -)
+
+if ! bash "$install_sh" "$project" --no-tools > "$work/install-2.log" 2>&1; then
+    fail_with_log "$work/install-2.log" "the installer exited non-zero on its second run"
+fi
+
+if ! diff -rq -x .git "$after_first" "$project" > "$work/second-run-diff" 2>&1; then
+    echo "integration-check: the second run changed the project:" >&2
+    cat "$work/second-run-diff" >&2
+    exit 1
+fi
+
+echo "integration-check: the second run changed nothing"

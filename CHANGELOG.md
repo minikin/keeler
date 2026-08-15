@@ -24,6 +24,10 @@ Installations pin a version with `KEELER_REF` and record it at the top of
   the conflicts the installer reports must match the `.keeler` files on
   disk exactly — an unnamed one is a surprise, a named one that does not
   exist is a lie.
+- The checker installs a second time and requires the tree to be
+  byte-identical afterwards. The second run has no exemptions: not one
+  byte may move, including the three files the first run was allowed to
+  append to.
 - The checker also holds the installer to its workspace contract: a root
   with no `[package]` of its own must be told that its manifest is the
   project's to manage, since Keeler cannot add proptest and the mutants

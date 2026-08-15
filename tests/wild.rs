@@ -526,3 +526,54 @@ fn a_conflict_left_out_of_the_report_is_caught() {
         "the checker did not name the unreported conflict:\n{report}",
     );
 }
+
+#[test]
+fn a_second_run_over_a_real_project_changes_nothing() {
+    // Given a lived-in project that Keeler was just installed into
+    let fixture = Fixture::lived_in("second-run");
+
+    // When the installer runs again under the contract checker
+    let output = fixture.check();
+    let report = combined(&output);
+
+    // Then the working tree is byte-identical to its state after the first
+    // run
+    assert!(
+        output.status.success(),
+        "the checker rejected an idempotent install:\n{report}",
+    );
+    assert!(
+        report.contains("second run changed nothing"),
+        "the checker never re-ran the installer:\n{report}",
+    );
+}
+
+#[test]
+fn an_installer_that_drifts_on_every_run_is_caught() {
+    // Given an installer that appends to the project every time it runs
+    let fixture = Fixture::lived_in("drifting");
+    let defective = fixture.write_script(
+        "bin/drifting-install.sh",
+        &format!(
+            "#!/usr/bin/env bash\n\
+             set -euo pipefail\n\
+             bash {} \"$@\"\n\
+             printf 'one-more-line\\n' >> \"$1/.gitignore\"\n",
+            repo_root().join("install.sh").display(),
+        ),
+    );
+
+    // When the contract checker runs against it
+    let output = fixture.check_with(Some(&defective));
+    let report = combined(&output);
+
+    // Then the check fails, naming the file that drifted
+    assert!(
+        !output.status.success(),
+        "the checker passed a non-idempotent installer:\n{report}",
+    );
+    assert!(
+        report.contains(".gitignore"),
+        "the checker did not name the drifting path:\n{report}",
+    );
+}
