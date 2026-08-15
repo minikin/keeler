@@ -930,6 +930,24 @@ fn a_workspace_with_rust_targets_is_still_measured() {
         "a measurable workspace was reported as having nothing to measure:\n{stdout}",
     );
     assert!(output.status.success());
+
+    // And the CRAP gate asks cargo where the sources are instead of
+    // assuming a src/ at the root: a workspace root has none, and the
+    // hard-coded path failed with "path does not exist" rather than
+    // measuring the members.
+    let crap = project.run_just("crap");
+    let calls = project.cargo_calls();
+    assert!(
+        calls
+            .lines()
+            .any(|call| call.starts_with("crap ") && call.contains("--workspace")),
+        "the CRAP gate does not ask cargo for the workspace members:\n{calls}",
+    );
+    assert!(
+        !calls.contains("--path src"),
+        "the CRAP gate still assumes a src/ at the project root:\n{calls}",
+    );
+    assert!(crap.status.success());
 }
 
 #[test]

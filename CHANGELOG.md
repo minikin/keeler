@@ -9,6 +9,23 @@ Installations pin a version with `KEELER_REF` and record it at the top of
 
 ## [Unreleased]
 
+### Fixed
+
+- The shipped gates no longer miss a workspace. `just test` ran only the
+  root package, so in a project whose root manifest is itself a package a
+  member crate's tests never ran at all; `just crap` hard-coded
+  `--path src` and failed with "path does not exist" on any workspace root
+  that has no `src/` of its own. Both now ask cargo where the code is
+  (`--workspace`). Found while making Keeler's own repository a workspace —
+  and spec 01's workspace scenario could not see it, because its test runs
+  against a stub cargo. That test now pins the flag.
+
+### Added
+
+- `cargo xtask` — a repository task runner (bin + lib, never published,
+  never installed into an adopting project). Spec 04 moves the release
+  logic into it, out of shell.
+
 ### Added
 
 - `scripts/integration-check.sh` — the contract checker from spec 03. It

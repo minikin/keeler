@@ -2,13 +2,16 @@
 default:
     @just --list
 
-# Run all tests (doc tests only when the package has a library target)
+# Run all tests (doc tests only when a package has a library target).
+# --workspace, not the default: in a project whose root manifest is itself a
+# package, cargo tests only that package and a member crate's tests never
+# run. A test that is never run is not a test.
 test:
     #!/usr/bin/env bash
     set -euo pipefail
-    cargo nextest run --all-targets --no-tests=pass
+    cargo nextest run --workspace --all-targets --no-tests=pass
     if cargo metadata --no-deps --format-version 1 | grep -q '"doctest":true'; then
-        cargo test --doc
+        cargo test --workspace --doc
     else
         echo "no library target — skipping doc tests"
     fi
@@ -25,7 +28,7 @@ lint:
     #!/usr/bin/env bash
     set -euo pipefail
     cargo fmt --all -- --check
-    cargo clippy --all-targets -- -D warnings
+    cargo clippy --workspace --all-targets -- -D warnings
     if [ -e templates/keeler.yml ]; then
         # No nullglob: if the glob stops matching, shellcheck fails on the
         # literal pattern — a gate that vanishes silently is no gate.
@@ -34,12 +37,15 @@ lint:
 
 # Fast compile check without building test binaries
 check:
-    cargo check --all-targets
+    cargo check --workspace --all-targets
 
 # All static checks + tests
 ci: lint test
 
 # Coverage and CRAP need compilable Rust targets somewhere in the project.
+# They ask cargo where the sources are (--workspace) rather than assuming a
+# src/ at the root: a workspace root has none, and hard-coding the path made
+# the gate fail with "path does not exist" instead of measuring the members.
 # Ask cargo, not the filesystem: a workspace root has no src/ of its own yet
 # its members must be measured, while a crate that is only a test harness
 # has nothing to measure — and the honest report of that fact must not read
@@ -52,23 +58,23 @@ cov:
     #!/usr/bin/env bash
     set -euo pipefail
     {{_has_rust_targets}} || { echo "{{_no_src_msg}}"; exit 0; }
-    cargo llvm-cov nextest --all-targets --no-tests=pass --summary-only --fail-under-lines 90
+    cargo llvm-cov nextest --workspace --all-targets --no-tests=pass --summary-only --fail-under-lines 90
 
 # Coverage + CRAP score gate: fails if any function scores above the threshold
 crap:
     #!/usr/bin/env bash
     set -euo pipefail
     {{_has_rust_targets}} || { echo "{{_no_src_msg}}"; exit 0; }
-    cargo llvm-cov nextest --all-targets --no-tests=pass --lcov --output-path lcov.info
-    cargo crap --lcov lcov.info --path src --threshold 15 --fail-above
+    cargo llvm-cov nextest --workspace --all-targets --no-tests=pass --lcov --output-path lcov.info
+    cargo crap --lcov lcov.info --workspace --threshold 15 --fail-above
 
 # Record a CRAP baseline (run before starting a feature)
 crap-baseline:
     #!/usr/bin/env bash
     set -euo pipefail
     {{_has_rust_targets}} || { echo "{{_no_src_msg}}"; exit 0; }
-    cargo llvm-cov nextest --all-targets --no-tests=pass --lcov --output-path lcov.info
-    cargo crap --lcov lcov.info --path src --format json --sort file --output crap-baseline.json
+    cargo llvm-cov nextest --workspace --all-targets --no-tests=pass --lcov --output-path lcov.info
+    cargo crap --lcov lcov.info --workspace --format json --sort file --output crap-baseline.json
     echo "CRAP baseline saved to crap-baseline.json"
 
 # CRAP delta vs the recorded baseline: fails on threshold breach OR any regression
@@ -76,8 +82,8 @@ crap-delta:
     #!/usr/bin/env bash
     set -euo pipefail
     {{_has_rust_targets}} || { echo "{{_no_src_msg}}"; exit 0; }
-    cargo llvm-cov nextest --all-targets --no-tests=pass --lcov --output-path lcov.info
-    cargo crap --lcov lcov.info --path src --threshold 15 --fail-above \
+    cargo llvm-cov nextest --workspace --all-targets --no-tests=pass --lcov --output-path lcov.info
+    cargo crap --lcov lcov.info --workspace --threshold 15 --fail-above \
         --baseline crap-baseline.json --fail-regression
 
 # Full local gate: format, lint, tests, coverage, CRAP
