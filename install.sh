@@ -91,8 +91,12 @@ merges=()
 install_file() {
     local from="$SRC/$1" rel="${2:-$1}" to="$DEST/${2:-$1}"
     mkdir -p "$(dirname "$to")"
-    if [ -e "$to" ]; then
-        cmp -s "$from" "$to" || { cp "$from" "$to.keeler"; merges+=("$rel"); }
+    # -L as well as -e: `-e` is false for a symlink whose target does not
+    # exist, and `cp` would then write *through* the link — outside the
+    # project, which is the one boundary this script promises to keep. A
+    # symlink is the project's own content whatever it points at.
+    if [ -e "$to" ] || [ -L "$to" ]; then
+        cmp -s "$from" "$to" 2>/dev/null || { cp "$from" "$to.keeler"; merges+=("$rel"); }
     else
         cp "$from" "$to"
         copied=$((copied + 1))
@@ -120,7 +124,7 @@ done
 # silently. Project-specific instructions belong in CLAUDE.md, never touched.
 rules="$DEST/.claude/keeler.md"
 mkdir -p "$(dirname "$rules")"
-if [ ! -e "$rules" ]; then
+if [ ! -e "$rules" ] && [ ! -L "$rules" ]; then
     cp "$SRC/.claude/keeler.md" "$rules"
     copied=$((copied + 1))
 elif ! cmp -s "$SRC/.claude/keeler.md" "$rules"; then
@@ -176,6 +180,19 @@ done
 # --- 3. Cargo.toml --------------------------------------------------------
 say "Configuring Cargo.toml"
 manifest="$DEST/Cargo.toml"
+# Kept so a broken edit can be undone rather than shipped.
+manifest_backup="$(mktemp)"
+cp "$manifest" "$manifest_backup"
+trap 'rm -f "$manifest_backup"' EXIT
+# Whether cargo could read it *before* we touched it. A project with no
+# sources yet cannot be parsed either, and refusing to install into one
+# would punish a state we did not create — so the check below only fires
+# when the edits are what broke it.
+manifest_read_before=1
+if command -v cargo >/dev/null 2>&1; then
+    cargo metadata --manifest-path "$manifest" --no-deps --format-version 1 \
+        >/dev/null 2>&1 || manifest_read_before=0
+fi
 if grep -q '^\[workspace\]' "$manifest" && ! grep -q '^\[package\]' "$manifest"; then
     note "workspace root — add proptest and the profile to member crates yourself"
 else
@@ -195,7 +212,14 @@ else
         ok "[profile.mutants] added"
     fi
 
-    if grep -q '^\[lints\.clippy\]' "$manifest"; then
+    # A [lints] table of any shape means the project already decides its
+    # lints — often by inheriting them (`workspace = true`), which cargo
+    # refuses to let a manifest override. Appending [lints.clippy] beside
+    # one makes the file unparseable and every cargo command in the project
+    # fail, and a second run does not repair it: the grep matches and skips.
+    if grep -q '^\[lints\]' "$manifest"; then
+        note "[lints] already set here — add Keeler's clippy lints yourself if you want them"
+    elif grep -q '^\[lints\.clippy\]' "$manifest"; then
         ok "[lints.clippy] present"
     else
         cat >> "$manifest" <<'TOML'
@@ -206,6 +230,21 @@ allow_attributes = "warn"
 allow_attributes_without_reason = "warn"
 TOML
         ok "[lints.clippy] added (pedantic)"
+    fi
+fi
+
+# The manifest is the project's build. Nothing above is worth leaving a
+# file cargo cannot read, so if the edits broke it, put it back and say so
+# rather than reporting success over a project that no longer builds.
+if [ "$manifest_read_before" = 1 ] && command -v cargo >/dev/null 2>&1; then
+    if ! cargo metadata --manifest-path "$DEST/Cargo.toml" --no-deps \
+        --format-version 1 >/dev/null 2>&1; then
+        if [ -f "$manifest_backup" ]; then
+            cp "$manifest_backup" "$DEST/Cargo.toml"
+        fi
+        echo "error: the Cargo.toml edits left a manifest cargo cannot read" >&2
+        echo "       the file has been restored; nothing else was undone" >&2
+        exit 1
     fi
 fi
 

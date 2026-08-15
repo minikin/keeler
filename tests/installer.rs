@@ -314,9 +314,15 @@ fn mutation_testing_reports_what_it_did_not_measure() {
         "`just mutants-diff` failed on an out-of-reach change:\n{stdout}{}",
         String::from_utf8_lossy(&output.stderr),
     );
-    // And it does not run mutants to report counts as evidence for it
+    // And it does not run mutants to report counts as evidence for it.
+    // The check is on the invocation, not the substring: the fixture's own
+    // directory is called keeler-mutants-reach-<pid>, so any call that
+    // mentions a path here contains the word.
     assert!(
-        !project.cargo_calls().contains("mutants"),
+        !project
+            .cargo_calls()
+            .lines()
+            .any(|call| call.starts_with("mutants")),
         "mutants ran on a change it cannot measure: {}",
         project.cargo_calls(),
     );
@@ -1320,4 +1326,72 @@ fn installed_workflow_gates_only_the_users_project() {
             path.display(),
         );
     }
+}
+
+#[test]
+fn a_manifest_that_inherits_its_lints_is_left_able_to_build() {
+    // Given the standard modern idiom: a package that takes its lints from
+    // the workspace
+    let project = TempProject::new(
+        "inherited-lints",
+        "[package]\nname = \"a\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+         [lints]\nworkspace = true\n\n\
+         [workspace]\nmembers = []\n\n\
+         [workspace.lints.clippy]\npedantic = \"warn\"\n",
+    );
+    std::fs::create_dir_all(project.path().join("src")).unwrap();
+    std::fs::write(project.path().join("src/lib.rs"), "pub fn a() {}\n").unwrap();
+
+    // When Keeler is installed
+    project.install();
+
+    // Then cargo can still read the manifest. Appending [lints.clippy]
+    // beside an inherited [lints] is not a merge — cargo refuses the file
+    // outright, every command in the project fails, and re-running the
+    // installer does not repair it because the grep matches the second
+    // time and skips.
+    let metadata =
+        std::process::Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
+            .args([
+                "metadata",
+                "--no-deps",
+                "--format-version",
+                "1",
+                "--manifest-path",
+            ])
+            .arg(project.path().join("Cargo.toml"))
+            .output()
+            .expect("failed to run cargo metadata");
+    assert!(
+        metadata.status.success(),
+        "the installer left a manifest cargo cannot read:\n{}",
+        String::from_utf8_lossy(&metadata.stderr),
+    );
+}
+
+#[test]
+fn a_symlink_is_the_projects_own_content_not_a_place_to_write() {
+    // Given a project where one of the installed names is a symlink
+    // pointing outside it, at a file that does not exist yet
+    let project = TempProject::new("symlink", MANIFEST_WITH_PROPTEST);
+    let outside = project.path().join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    let target = outside.join("theirs.md");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&target, project.path().join("KEELER.md")).unwrap();
+
+    // When Keeler is installed
+    let report = project.install();
+
+    // Then nothing is written through the link. `-e` is false for a
+    // dangling symlink, so a plain existence test writes outside the
+    // project — the one boundary the installer promises to keep.
+    assert!(
+        !target.exists(),
+        "the installer wrote outside the project, through a symlink",
+    );
+    assert!(
+        project.path().join("KEELER.md.keeler").is_file(),
+        "the symlink was not treated as the project's own content:\n{report}",
+    );
 }
