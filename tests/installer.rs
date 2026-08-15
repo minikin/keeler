@@ -1395,3 +1395,197 @@ fn a_symlink_is_the_projects_own_content_not_a_place_to_write() {
         "the symlink was not treated as the project's own content:\n{report}",
     );
 }
+
+/// Replaces the stub `cargo` so a chosen subcommand fails.
+fn cargo_fails_at(project: &TempProject, subcommand: &str) {
+    let stub = project.path().join("bin/cargo");
+    let real = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+    std::fs::write(
+        &stub,
+        format!(
+            "#!/usr/bin/env bash\n\
+             echo \"$@\" >> \"$(dirname \"$0\")/../cargo-calls.log\"\n\
+             if [ \"$1\" = metadata ]; then exec \"{real}\" \"$@\"; fi\n\
+             if [ \"$1\" = \"{subcommand}\" ]; then echo 'cargo: boom' >&2; exit 101; fi\n"
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+}
+
+#[test]
+fn a_failed_dependency_add_is_not_reported_as_success() {
+    // Given a project where adding proptest will fail
+    let project = TempProject::new(
+        "add-fails",
+        "[package]\nname = \"a\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    );
+    cargo_fails_at(&project, "add");
+
+    // When Keeler is installed
+    let output = project.try_install();
+
+    // Then the run fails and names what went wrong. `&&` swallows the
+    // failure under `set -e`, so the script used to print "Keeler
+    // installed" and exit 0 over a project whose first `just dev` cannot
+    // compile.
+    let report = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert!(
+        !output.status.success(),
+        "a failed add reported success:\n{report}"
+    );
+    assert!(
+        report.contains("proptest"),
+        "the failure does not name it:\n{report}"
+    );
+}
+
+#[test]
+fn a_projects_own_conflict_file_is_not_overwritten() {
+    // Given a project that already has both its own KEELER.md and its own
+    // KEELER.md.keeler — the ordinary state after one upgrade
+    let project = TempProject::new("keeler-collision", MANIFEST_WITH_PROPTEST);
+    std::fs::write(project.path().join("KEELER.md"), "theirs\n").unwrap();
+    std::fs::write(project.path().join("KEELER.md.keeler"), "from last time\n").unwrap();
+
+    // When Keeler is installed
+    project.install();
+
+    // Then last time's copy survives. Overwriting it loses whatever the
+    // project had not merged yet, silently and with no conflict reported.
+    assert_eq!(
+        std::fs::read_to_string(project.path().join("KEELER.md.keeler")).unwrap(),
+        "from last time\n",
+    );
+}
+
+#[test]
+fn an_upgrade_does_not_destroy_the_previous_upgrades_backup() {
+    // Given a project upgraded once already, whose rules were edited again
+    let project = TempProject::new("bak-collision", MANIFEST_WITH_PROPTEST);
+    std::fs::create_dir_all(project.path().join(".claude")).unwrap();
+    std::fs::write(project.path().join(".claude/keeler.md"), "second edit\n").unwrap();
+    std::fs::write(
+        project.path().join(".claude/keeler.md.bak"),
+        "the original\n",
+    )
+    .unwrap();
+
+    // When Keeler is installed
+    project.install();
+
+    // Then the first backup is still there. The whole point of keeping the
+    // replaced text is that it is not lost; a second upgrade overwriting
+    // the first one's .bak loses the original for good.
+    assert_eq!(
+        std::fs::read_to_string(project.path().join(".claude/keeler.md.bak")).unwrap(),
+        "the original\n",
+    );
+}
+
+#[test]
+fn a_dependency_declared_elsewhere_is_not_mistaken_for_a_dev_dependency() {
+    // Given a package whose workspace declares proptest, but which does
+    // not depend on it itself
+    let project = TempProject::new(
+        "workspace-dep",
+        "[package]\nname = \"a\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+         [workspace]\nmembers = []\n\n[workspace.dependencies]\nproptest = \"1\"\n",
+    );
+    project.install();
+
+    // Then proptest is still added to this package: a declaration in
+    // another table is not one the package's tests can use, and the grep
+    // that matched it left the project unable to compile them.
+    assert!(
+        project
+            .cargo_calls()
+            .lines()
+            .any(|call| call.starts_with("add ")),
+        "proptest was never added:\n{}",
+        project.cargo_calls(),
+    );
+}
+
+#[test]
+fn proptest_inherited_from_the_workspace_is_already_declared() {
+    // Given the idiomatic workspace-member form
+    let project = TempProject::new(
+        "inherited-proptest",
+        "[package]\nname = \"a\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+         [dev-dependencies]\nproptest.workspace = true\n",
+    );
+    project.install();
+
+    // Then nothing is added — and nothing reaches the registry to find
+    // that out
+    assert!(
+        !project
+            .cargo_calls()
+            .lines()
+            .any(|call| call.starts_with("add ")),
+        "proptest was added over an inherited declaration:\n{}",
+        project.cargo_calls(),
+    );
+}
+
+#[test]
+fn help_works_the_way_the_documentation_says_to_run_it() {
+    // Given the documented entry point: the script piped into bash, where
+    // it has no file of its own to read
+    let output = std::process::Command::new("bash")
+        .arg("-c")
+        .arg(format!(
+            "cat {} | bash -s -- --help",
+            repo_root().join("install.sh").display()
+        ))
+        .output()
+        .expect("failed to run install.sh");
+
+    // Then it prints its usage. Reading the script back from
+    // BASH_SOURCE[0] aborts under `set -u` when there is no file.
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert!(output.status.success(), "--help failed when piped:\n{said}");
+    assert!(said.contains("--no-tools"), "the usage is missing:\n{said}");
+}
+
+#[test]
+fn a_mistyped_flag_is_refused_rather_than_taken_for_a_path() {
+    // Given a typo in a flag
+    let project = TempProject::new("mistyped", MANIFEST_WITH_PROPTEST);
+    let output = std::process::Command::new("bash")
+        .arg(repo_root().join("install.sh"))
+        .arg(project.path())
+        .arg("--no-tool")
+        .output()
+        .expect("failed to run install.sh");
+
+    // Then it is refused as an option. Taken as a path it silently
+    // replaces the destination the user actually gave.
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert!(
+        !output.status.success(),
+        "a mistyped flag was accepted:\n{said}"
+    );
+    assert!(said.contains("--no-tool"), "{said}");
+    assert!(
+        !project.path().join("KEELER.md").exists(),
+        "it installed anyway"
+    );
+}
