@@ -10,5 +10,8 @@ publish = false
 
 [dependencies]
 
+[dev-dependencies]
+proptest = "1"
+
 [lints]
 workspace = true

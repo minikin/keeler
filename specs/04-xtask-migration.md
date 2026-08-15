@@ -121,7 +121,7 @@ without paying a subprocess per case.
       `xtask/` (bin + lib, `publish = false`), the root manifest gaining
       `[workspace] members = ["xtask"]`, `.cargo/config.toml` with the
       alias. Deps: none.
-- [ ] **T2 — `cargo xtask release-notes`, the CHANGELOG parser in Rust.**
+- [x] **T2 — `cargo xtask release-notes`, the CHANGELOG parser in Rust.**
       Scenarios: none of its own — contributes to _The xtask commands honor
       every spec 02 contract_, owned by T5. Tests: unit beside the parser
       (exact section, absent version, the trailing link block, a link-style

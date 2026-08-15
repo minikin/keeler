@@ -25,6 +25,10 @@ Installations pin a version with `KEELER_REF` and record it at the top of
 - `cargo xtask` — a repository task runner (bin + lib, never published,
   never installed into an adopting project). Spec 04 moves the release
   logic into it, out of shell.
+- `cargo xtask release-notes <version> <changelog>` — the CHANGELOG parser
+  in Rust, byte-for-byte identical to the awk it will replace. Its
+  extraction-totality property now runs in-process, so it checks 256 cases
+  in the time the subprocess version needed for 12.
 
 ### Added
 
