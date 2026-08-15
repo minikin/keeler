@@ -43,6 +43,12 @@ Installations pin a version with `KEELER_REF` and record it at the top of
 
 ### Changed
 
+- A gate now scans every installed file for prose about the Keeler
+  repository — its test files, spec numbers and divergences — and fails
+  naming the file, line and marker. Two leaks got in by hand before this
+  existed; the scan reproduces both. It matches prose, never mechanism, so
+  the shipped `Justfile` may still name `templates/keeler.yml` and the
+  upgrade URL.
 - The shipped `Justfile` no longer explains Keeler's own repository to the
   projects it lands in. Its `lint` recipe carried a comment about the
   Keeler repository's shell deliverable, `templates/keeler.yml` and the

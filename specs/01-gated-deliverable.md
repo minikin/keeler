@@ -197,6 +197,15 @@ When  the property suite runs with no network available
 Then  every case completes
 ```
 
+### Scenario: What adopters receive describes their project, not ours
+
+```
+Given a freshly installed project
+When  the files Keeler put there are read
+Then  none of them describes the Keeler repository's own internals — its
+      test files, its spec numbers, its divergences from the rules it ships
+```
+
 ### Scenario: An adopting project still receives every gate
 
 ```
@@ -342,6 +351,15 @@ And   Cargo.toml describes a test harness for the installer
       TempProject::git pins the global config away; the approved
       divergence note is recorded in this repository's own CLAUDE.md, not
       in the rules file it ships. Deps: none.
+- [x] **T18 — The deliverable is scanned for talk about us.**
+      Scenarios: _What adopters receive describes their project, not ours_.
+      Tests: acceptance — a prose scanner over every installed file, naming
+      file, line and marker on failure; pinned by a synthetic defect so the
+      scan can fail, and run over a real installed tree. Markers are prose
+      about this repository ("Keeler repository", "documented divergence",
+      `tests/installer`, "spec 0N"), never mechanism: the shellcheck branch
+      keyed on `templates/keeler.yml` and the upgrade URL are legitimately
+      in the shipped Justfile. Deps: none.
 
 ---
 

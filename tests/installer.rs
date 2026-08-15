@@ -520,6 +520,89 @@ fn repo_only_references(workflow: &str) -> Vec<String> {
     findings
 }
 
+/// Prose that only makes sense inside the Keeler repository. Deliberately
+/// prose and not paths: the shipped `Justfile` legitimately names
+/// `templates/keeler.yml` (the marker its shellcheck branch is keyed on) and
+/// the upgrade URL ending in `install.sh`. What must never ship is *talk
+/// about this repository* — an adopter reading their own files should find
+/// their project described, not ours.
+const REPO_ONLY_PROSE: [&str; 7] = [
+    "keeler repository",
+    "this repository itself",
+    "documented divergence",
+    "tests/installer",
+    "tests/release",
+    "tests/wild",
+    "spec 0",
+];
+
+/// Findings for every line of `text` that describes this repository, each
+/// naming the line and the marker found. Empty means the file speaks only
+/// about the project it landed in.
+fn repo_only_prose(text: &str) -> Vec<String> {
+    let mut findings = Vec::new();
+    for (index, line) in text.lines().enumerate() {
+        let lowered = line.to_lowercase();
+        for marker in REPO_ONLY_PROSE {
+            if lowered.contains(marker) {
+                findings.push(format!(
+                    "line {}: `{marker}` in `{}`",
+                    index + 1,
+                    line.trim()
+                ));
+            }
+        }
+    }
+    findings
+}
+
+#[test]
+fn a_shipped_file_that_talks_about_us_fails_the_gate() {
+    // Given a shipped file carrying a comment about this repository — the
+    // real one that shipped in the Justfile until it was caught
+    let defective = "lint:\n    # In the Keeler repository itself the deliverable is shell\n";
+
+    // When the quality gate examines it
+    let findings = repo_only_prose(defective);
+
+    // Then it fails, naming the marker and the line it sits on
+    assert!(
+        findings
+            .iter()
+            .any(|f| f.contains("keeler repository") && f.contains("line 2")),
+        "the gate did not name the reference and its line: {findings:?}",
+    );
+}
+
+#[test]
+fn what_adopters_receive_describes_their_project_not_ours() {
+    // Given a freshly installed project
+    let project = TempProject::new("no-talk-about-us", MANIFEST_WITH_PROPTEST);
+    project.install();
+
+    // When the files Keeler put there are read — everything but the
+    // project's own manifest, sources and lockfile
+    let mut leaks = Vec::new();
+    for (rel, bytes) in project.tree_snapshot() {
+        if rel == "Cargo.toml" || rel == "Cargo.lock" || rel.starts_with("src/") {
+            continue;
+        }
+        let Ok(text) = String::from_utf8(bytes) else {
+            continue;
+        };
+        for finding in repo_only_prose(&text) {
+            leaks.push(format!("{rel}: {finding}"));
+        }
+    }
+
+    // Then none of them describes the Keeler repository's own internals
+    assert!(
+        leaks.is_empty(),
+        "installed files describe this repository instead of the adopter's:\n{}",
+        leaks.join("\n"),
+    );
+}
+
 #[test]
 fn a_defect_in_the_shipped_workflow_fails_the_gate() {
     // Given a shipped workflow that references a file which exists only in
