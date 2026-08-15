@@ -162,6 +162,24 @@ Then  the file is not rewritten and no .keeler or .bak appears
 And   the run reports it as neither written nor in conflict
 ```
 
+### Scenario: What cannot be read is never replaced
+
+```
+Given a file Keeler would install or edit
+When  it exists but cannot be read
+Then  it is left exactly as it is
+And   the run says which file and why, rather than guessing
+```
+
+### Scenario: Configuring a manifest needs no network
+
+```
+Given a project whose manifest lacks proptest
+When  Keeler configures it
+Then  the dependency is added without resolving anything over the network
+And   cargo can still read the manifest afterwards
+```
+
 ### Scenario: The upgrade path works after the installer moves
 
 ```
@@ -226,7 +244,9 @@ published to crates.io; both are installed from the repository itself.
       Scenarios: contributes to _Every spec 01 scenario holds_ (T5).
       Tests: acceptance — missing tools are installed and present ones
       skipped, `--no-tools` installs none, and a directory without a
-      `Cargo.toml` is refused before anything is written. The tool calls
+      `Cargo.toml` is refused before anything is written. The command
+      prints the run's notes, which spec 03's contract checker greps for
+      ("workspace root") — a silent binary fails that job against serde. The tool calls
       stay process orchestration, so this is the one place a stub `cargo`
       still earns its keep. Deps: T1.
 - [ ] **T5 — The switch: the suite drives the library, install.sh goes.**

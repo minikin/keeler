@@ -289,7 +289,8 @@ pub fn configure(project: &std::path::Path) -> Result<manifest::Changes, Failure
     let path = project.join("Cargo.toml");
     let before = std::fs::read_to_string(&path)
         .map_err(|why| format!("cannot read {}: {why}", path.display()))?;
-    let (after, changes) = manifest::configured(&before);
+    let (after, changes) = manifest::configured(&before)
+        .map_err(|why| format!("cannot parse {}: {why}", path.display()))?;
     if after != before {
         write(&path, after.as_bytes())?;
     }

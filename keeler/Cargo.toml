@@ -25,6 +25,11 @@ repository = "https://github.com/minikin/keeler"
 # Carries the shipped tree inside the binary, so installing needs no
 # network, no tarball and no clone to copy from.
 include_dir = "0.7"
+# Editing a manifest by appending text produced files cargo refuses to
+# read — a second [dev-dependencies] table, a [lints.clippy] beside an
+# inherited [lints]. This is the parser cargo add itself uses, and it
+# preserves the project's formatting and comments.
+toml_edit = "0.22"
 
 [dev-dependencies]
 proptest = "1"

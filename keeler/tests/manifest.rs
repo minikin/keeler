@@ -170,7 +170,7 @@ fn gitignore_entries_are_added_once() {
 }
 
 #[test]
-fn an_equivalent_pattern_is_not_duplicated() {
+fn equivalent_gitignore_patterns_are_not_duplicated() {
     // Given a project already ignoring the same paths, written its own way
     let project = Project::new("gitignore-equivalent");
     std::fs::write(project.join(".gitignore"), "target/\nlcov.info\n").unwrap();
@@ -187,7 +187,7 @@ fn an_equivalent_pattern_is_not_duplicated() {
 }
 
 #[test]
-fn a_gitignore_with_no_final_newline_still_converges() {
+fn a_gitignore_missing_its_final_newline_still_converges() {
     // Given a .gitignore whose last line has no newline — a real one often
     // does not
     let project = Project::new("gitignore-no-newline");
@@ -252,7 +252,7 @@ proptest::proptest! {
     /// leaves the tree byte-identical. This is the law that makes re-running
     /// safe to suggest — an upgrade, a retry, a CI step that does not know.
     #[test]
-    fn installing_twice_leaves_the_tree_identical(
+    fn installing_twice_leaves_the_second_run_with_nothing_to_do(
         gitignore in proptest::option::of("[a-z/.\n]{0,40}"),
         has_proptest in proptest::bool::ANY,
         trailing_newline in proptest::bool::ANY,
@@ -342,4 +342,129 @@ fn an_unreadable_gitignore_is_refused_rather_than_replaced() {
         .to_string();
     assert!(error.contains(".gitignore"), "{error}");
     assert_eq!(project.read(".gitignore"), "their entries\n");
+}
+
+/// Cargo's own verdict on the manifest — the only oracle that catches both
+/// broken syntax and rules a TOML parser cannot know, like a `[lints]`
+/// table that may not be overridden.
+fn cargo_accepts(project: &Path) -> Result<(), String> {
+    let out = std::process::Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
+        .args([
+            "metadata",
+            "--no-deps",
+            "--format-version",
+            "1",
+            "--manifest-path",
+        ])
+        .arg(project.join("Cargo.toml"))
+        .output()
+        .expect("failed to run cargo metadata");
+    if out.status.success() {
+        return Ok(());
+    }
+    Err(String::from_utf8_lossy(&out.stderr).into_owned())
+}
+
+#[test]
+fn a_manifest_that_already_has_dev_dependencies_stays_readable() {
+    // Given the overwhelmingly common shape: a project with dev-deps of
+    // its own
+    let project = Project::with_manifest(
+        "existing-dev-deps",
+        "[package]\nname = \"a\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+         [dev-dependencies]\ntempfile = \"3\"\n",
+    );
+
+    // When Keeler configures it
+    keeler::configure(&project).unwrap();
+
+    // Then cargo can still read it, and their dependency is still there.
+    // Appending a second [dev-dependencies] header makes the file
+    // unparseable and every later cargo command fail.
+    cargo_accepts(&project).expect("cargo cannot read the manifest Keeler wrote");
+    let manifest = project.read("Cargo.toml");
+    assert!(
+        manifest.contains("tempfile"),
+        "their dev-dependency is gone:\n{manifest}"
+    );
+    assert!(
+        manifest.contains("proptest"),
+        "proptest was not added:\n{manifest}"
+    );
+}
+
+#[test]
+fn a_manifest_with_inherited_lints_is_left_to_inherit_them() {
+    // Given a workspace member that takes its lints from the workspace —
+    // the shape this repository's own crates have
+    let project = Project::with_manifest(
+        "inherited-lints",
+        "[package]\nname = \"a\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+         [lints]\nworkspace = true\n",
+    );
+
+    // When Keeler configures it
+    keeler::configure(&project).unwrap();
+
+    // Then its lints are untouched: adding [lints.clippy] beside an
+    // inherited [lints] is not a merge, it is an error cargo refuses
+    let manifest = project.read("Cargo.toml");
+    assert!(
+        !manifest.contains("[lints.clippy]"),
+        "clippy lints were added beside inherited ones:\n{manifest}",
+    );
+    assert!(manifest.contains("workspace = true"), "{manifest}");
+}
+
+#[test]
+fn a_manifest_that_already_lints_clippy_is_not_given_a_second_table() {
+    let project = Project::with_manifest(
+        "own-clippy",
+        "[package]\nname = \"a\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+         [lints]\nclippy.pedantic = \"warn\"\n",
+    );
+
+    keeler::configure(&project).unwrap();
+
+    cargo_accepts(&project).expect("cargo cannot read the manifest Keeler wrote");
+}
+
+#[test]
+fn proptest_declared_with_a_dotted_key_is_detected() {
+    // Given the idiomatic workspace-member form
+    let project = Project::with_manifest(
+        "dotted",
+        "[package]\nname = \"a\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+         [dev-dependencies]\nproptest.workspace = true\n",
+    );
+
+    // When Keeler configures it
+    keeler::configure(&project).unwrap();
+
+    // Then it is not declared a second time. Cargo is not asked here:
+    // `workspace = true` needs a workspace root to inherit from, so this
+    // fixture cannot stand alone whatever Keeler does to it.
+    let manifest = project.read("Cargo.toml");
+    assert_eq!(manifest.matches("proptest").count(), 1, "{manifest}");
+}
+
+#[test]
+fn a_features_table_is_not_mistaken_for_a_dependency() {
+    // Given a project with a feature named proptest but no such dependency
+    let project = Project::with_manifest(
+        "feature",
+        "[package]\nname = \"a\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+         [features]\nproptest = []\n",
+    );
+
+    // When Keeler configures it
+    let report = keeler::configure(&project).unwrap();
+
+    // Then proptest is still added: a feature of that name is not the
+    // crate, and the property tests Keeler installs would not compile
+    assert!(
+        report.added.iter().any(|added| added.contains("proptest")),
+        "{report:?}",
+    );
+    cargo_accepts(&project).expect("cargo cannot read the manifest Keeler wrote");
 }
