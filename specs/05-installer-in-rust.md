@@ -1,6 +1,6 @@
 # Spec 05 — The installer becomes Rust, and the shell ends
 
-**Status:** Draft
+**Status:** Approved
 **Effort:** Large
 **Module:** `keeler/`, `xtask/`, `.github/workflows/release.yml`, `tests/`
 
@@ -155,7 +155,107 @@ And   nothing installed describes the Keeler repository
 
 ## Tasks
 
-_Empty until /keeler:tasks runs against an approved spec._
+The binary grows one capability at a time while `install.sh` still stands,
+so every step leaves the suite green and the two can be compared against
+each other on real input — the same discipline that made spec 04 safe.
+Only when the binary does everything does the switch happen: the suite
+re-points at the library, the shell goes, and the release learns to ship a
+binary.
+
+The crate is `keeler/` — bin plus lib, `publish = true`. Not `xtask`: that
+one is repository machinery and unpublishable by definition, while this is
+the product.
+
+- [ ] **T1 — The crate, the embedded tree, and both directions of the set.**
+      Scenarios: _What the binary carries is what the repository holds_,
+      _Adopters receive nothing of the repository's own_. Tests:
+      acceptance — the embedded set equals the repository's shipped set,
+      failing by name in either direction (a shipped file not embedded, or
+      something embedded that adopters must never see); `keeler init` into
+      an empty Rust project lays every one of them down. Deliverable:
+      `keeler/` with `include_dir!`. Deps: none.
+- [ ] **T2 — A project's own content survives.**
+      Scenarios: contributes to _Every spec 01 scenario holds_ (T5).
+      Tests: acceptance — a pre-existing file with its own content is kept
+      and Keeler's copy lands as `<name>.keeler`; the rules file is the
+      documented exception, replaced with its `.bak`. Property — conflict
+      totality: the set of `.keeler` files written equals the set
+      reported; own-content preservation: for any pre-existing file
+      outside the three append targets, the bytes are unchanged. Deps: T1.
+- [ ] **T3 — The manifest and the .gitignore.**
+      Scenarios: contributes to _Every spec 01 scenario holds_ (T5).
+      Tests: acceptance — proptest added as a dev-dependency, detected in
+      both declaration forms (`proptest = …` and
+      `[dev-dependencies.proptest]`) and not confused with
+      `proptest-derive`; `[profile.mutants]` and `[lints.clippy]` appended
+      when absent; a workspace root told to manage its own manifest; a
+      `.gitignore` with no final newline still converges. Property —
+      idempotence: `init(init(x))` leaves the tree byte-identical;
+      `.gitignore` merging: no entry is duplicated under any equivalent
+      form (`/target`, `target/`, `target`). Deps: T1.
+- [ ] **T4 — The tools, and the refusal.**
+      Scenarios: contributes to _Every spec 01 scenario holds_ (T5).
+      Tests: acceptance — missing tools are installed and present ones
+      skipped, `--no-tools` installs none, and a directory without a
+      `Cargo.toml` is refused before anything is written. The tool calls
+      stay process orchestration, so this is the one place a stub `cargo`
+      still earns its keep. Deps: T1.
+- [ ] **T5 — The switch: the suite drives the library, install.sh goes.**
+      Scenarios: _Every spec 01 scenario holds against the binary_,
+      _Laying the files down needs no network_. Tests: `tests/installer.rs`
+      keeps every scenario name and stops spawning processes — fixtures
+      become directories the library is pointed at, and the properties run
+      at proptest's normal case counts instead of the dozen a
+      subprocess-per-case budget allowed. Offline: no fetch, clone or
+      download remains in the crate, and a full run leaves the network log
+      untouched. Deliverable: `install.sh` deleted. Deps: T2, T3, T4.
+- [ ] **T6 — The checker becomes xtask, and the last shell goes.**
+      Scenarios: _The contract checker runs without a shell_, _No shell
+      remains in the repository_. Tests: `cargo xtask integration-check`
+      asserts the same contract, installing by calling the library rather
+      than spawning anything; `tests/wild.rs` follows it; the repository
+      contains no `.sh` file, the lint gate no longer runs shellcheck, and
+      the real-world CI job calls the xtask command. Deliverable:
+      `scripts/` deleted. Deps: T5.
+- [ ] **T7 — The release ships a binary, and a version can be pinned.**
+      Scenarios: _A release publishes what each platform needs_, _An
+      adopter installs and pins a version_. Tests: static over
+      `release.yml` — a build matrix covering the supported targets, each
+      binary attached with the checksum `cargo xtask checksum` produces,
+      the crate published, and the guard and gates still strictly before
+      publication; acceptance — the version the binary reports is the one
+      it writes into the rules-file marker, so a pinned install is
+      self-evident. Deps: T6.
+
+**Two gaps found while breaking this down — both need approval.**
+
+The spec changes how Keeler is installed but says nothing about the two
+places that tell people how to install it.
+
+1. The shipped `Justfile` has a `keeler-upgrade` recipe that runs
+   `curl … install.sh | bash -s .`. After T5 that URL 404s and every
+   adopter's upgrade path breaks silently. Proposed scenario:
+
+```
+### Scenario: The upgrade path works after the installer moves
+
+Given a project with Keeler installed
+When  the shipped upgrade recipe runs
+Then  it fetches the current release through cargo, not curl
+And   the rules-file marker afterwards names the version it fetched
+```
+
+2. `README.md` documents `curl … | bash` as *the* way in, and spec 02's
+   scenario requires the verify story to live "where adopters look".
+   Proposed scenario:
+
+```
+### Scenario: The documented way in is the one that works
+
+Given the documentation an adopter reads first
+When  the install instructions are followed literally
+Then  they use the published crate, and no instruction names install.sh
+```
 
 ---
 
