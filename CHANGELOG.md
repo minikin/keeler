@@ -9,6 +9,16 @@ Installations pin a version with `KEELER_REF` and record it at the top of
 
 ## [Unreleased]
 
+### Fixed
+
+- `cargo xtask release-guard` now checks the crate versions too. It
+  compared the tag, VERSION, the rules-file marker and the CHANGELOG, but
+  never `Cargo.toml` — those agreed only by coincidence, and the v0.2.0
+  preparation broke the coincidence: VERSION said 0.2.0 while both
+  manifests still said 0.1.0, and nothing objected. Every workspace member
+  is checked, not just the root, and a member inheriting its version from
+  the workspace is not mistaken for a disagreement.
+
 ## [0.2.0] — 2026-08-15
 
 ### Added

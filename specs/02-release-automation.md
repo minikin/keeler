@@ -62,6 +62,15 @@ And   its notes are the CHANGELOG section for X.Y.Z
 And   its assets include install.sh and a SHA256 checksum file for it
 ```
 
+### Scenario: A crate version that disagrees with VERSION is refused
+
+```
+Given a repository whose VERSION and Cargo.toml say different versions
+When  the guard runs
+Then  it refuses, naming the manifest and both versions
+And   a repository whose manifests all agree passes
+```
+
 ### Scenario: A tag that disagrees with VERSION is refused
 
 ```
@@ -187,6 +196,15 @@ Then  no release workflow lands in the project
       both name the pin-and-verify path (`sha256sum -c` against the
       release assets); CONTRIBUTING.md carries the release checklist.
       Deps: T5.
+- [x] **T7 — The manifests must agree too.**
+      Scenarios: _A crate version that disagrees with VERSION is refused_.
+      Tests: unit — a manifest whose `[package] version` differs from
+      VERSION is named with both versions; every workspace member is
+      checked, not only the root; a member that inherits its version from
+      the workspace is not mistaken for a disagreement. Property — the
+      guard's diagnosis still names every mismatched pair, manifests
+      included. Deps: T4.
+
 
 ---
 

@@ -257,6 +257,13 @@ fn release_fixture(name: &str, version: &str) -> PathBuf {
         format!("# Changelog\n\n## [{version}] — 2026-08-14\n\n- an entry\n"),
     )
     .unwrap();
+    // A repository being released has a manifest, and the guard compares
+    // its version too — a fixture without one is not a repository.
+    std::fs::write(
+        dir.join("Cargo.toml"),
+        format!("[package]\nname = \"fixture\"\nversion = \"{version}\"\n"),
+    )
+    .unwrap();
     dir
 }
 

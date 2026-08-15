@@ -58,6 +58,30 @@ fn release_notes_command(args: &[String]) -> Result<String, Failure> {
     }
 }
 
+/// Every package manifest in the repository and the version it declares:
+/// the root, plus each workspace member. A manifest without a version of
+/// its own — a virtual root, or a member inheriting from the workspace —
+/// contributes nothing to compare.
+fn declared_versions(root: &std::path::Path) -> Result<Vec<(String, String)>, Failure> {
+    let root_manifest = read(&root.join("Cargo.toml").display().to_string())?;
+    let mut found = Vec::new();
+    if let Some(version) = guard::package_version(&root_manifest) {
+        found.push(("Cargo.toml".to_string(), version.to_string()));
+    }
+    for member in guard::workspace_members(&root_manifest) {
+        let rel = format!("{member}/Cargo.toml");
+        let path = root.join(&rel);
+        if !path.is_file() {
+            return Err(format!("workspace member {member} has no Cargo.toml").into());
+        }
+        let manifest = read(&path.display().to_string())?;
+        if let Some(version) = guard::package_version(&manifest) {
+            found.push((rel, version.to_string()));
+        }
+    }
+    Ok(found)
+}
+
 /// `release-guard <tag>`, against the repository rooted at `root`.
 ///
 /// The root is a parameter rather than the working directory so the command
@@ -73,10 +97,13 @@ fn release_guard_command(root: &std::path::Path, args: &[String]) -> Result<Stri
     let marker = guard::marker(&rules).unwrap_or_default().to_string();
     let changelog = read(&at("CHANGELOG.md"))?;
 
-    let found = guard::disagreements(tag, &version, &marker, &changelog);
+    let manifests = declared_versions(root)?;
+    let found = guard::disagreements(tag, &version, &marker, &changelog, &manifests);
     if found.is_empty() {
         return Ok(format!(
-            "v{version} is consistent — tag, VERSION, marker, CHANGELOG agree"
+            "v{version} is consistent — tag, VERSION, marker, CHANGELOG \
+             and {} manifest(s) agree",
+            manifests.len(),
         ));
     }
     Err(format!("refusing to release:\n  {}", found.join("\n  ")).into())
@@ -202,6 +229,20 @@ mod tests {
         )
         .unwrap();
         std::fs::write(root.join("CHANGELOG.md"), changelog).unwrap();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            format!(
+                "[workspace]\nmembers = [\"member\"]\n\n\
+                 [package]\nname = \"root\"\nversion = \"{version}\"\n"
+            ),
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join("member")).unwrap();
+        std::fs::write(
+            root.join("member/Cargo.toml"),
+            format!("[package]\nname = \"member\"\nversion = \"{version}\"\n"),
+        )
+        .unwrap();
         root
     }
 
@@ -225,6 +266,45 @@ mod tests {
                 "`{expected}` missing from: {error}"
             );
         }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn release_guard_checks_every_member_not_only_the_root() {
+        // A member left behind at the old version is the failure this
+        // check exists for: it agreed with VERSION only by coincidence
+        // until someone bumped one manifest and not the other.
+        let root = repo_fixture(
+            "member-drift",
+            "1.2.3",
+            "1.2.3",
+            "## [1.2.3]\n\n- shipped\n",
+        );
+        std::fs::write(
+            root.join("member/Cargo.toml"),
+            "[package]\nname = \"member\"\nversion = \"0.0.1\"\n",
+        )
+        .unwrap();
+
+        let error = release_guard_command(&root, &["v1.2.3".into()])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("member/Cargo.toml") && error.contains("0.0.1"),
+            "the refusal does not name the member and its version: {error}",
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn release_guard_names_a_member_whose_manifest_is_missing() {
+        let root = repo_fixture("member-gone", "1.2.3", "1.2.3", "## [1.2.3]\n\n- shipped\n");
+        std::fs::remove_file(root.join("member/Cargo.toml")).unwrap();
+
+        let error = release_guard_command(&root, &["v1.2.3".into()])
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("member"), "no member named in: {error}");
         let _ = std::fs::remove_dir_all(root);
     }
 
