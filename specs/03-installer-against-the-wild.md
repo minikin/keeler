@@ -1,6 +1,6 @@
 # Spec 03 — The installer against the wild
 
-**Status:** Approved
+**Status:** Implemented
 **Effort:** Small
 **Module:** `.github/workflows/ci.yml`, `scripts/`
 
