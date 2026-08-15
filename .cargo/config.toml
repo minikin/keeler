@@ -1,0 +1,5 @@
+# `cargo xtask <command>` — the community pattern for repository automation
+# in Rust (rust-analyzer, cargo itself). Repository-local: this file is never
+# installed into an adopting project.
+[alias]
+xtask = "run --package xtask --"

@@ -1,6 +1,6 @@
 # Spec 04 — Release tooling moves to cargo xtask
 
-**Status:** Approved
+**Status:** Implemented
 **Effort:** Medium
 **Module:** `xtask/`, `.github/workflows/release.yml`, `Justfile`, `tests/release.rs`
 
@@ -68,8 +68,9 @@ And   guard and gates still strictly precede `gh release create`
 ```
 Given the repository after the migration
 When  its shell scripts are listed
-Then  install.sh is the only one
-And   the lint gate shellchecks it and nothing else
+Then  install.sh and the spec 03 contract checker are the only ones
+And   the lint gate shellchecks exactly those two
+And   no release logic remains in shell
 ```
 
 ### Scenario: The mutation gate is back in business
@@ -102,7 +103,71 @@ And   the shipped file set is unchanged
 
 ## Tasks
 
-_Empty until /keeler:tasks runs against an approved spec._
+The three commands come first, one at a time, each with its own tests while
+the shell scripts still stand — so every step leaves the suite green. Only
+when all three exist does the switch happen: spec 02's acceptance suite
+re-points at `cargo xtask`, the scripts go, and the workflow follows. The
+gates come last, because they need real sources to measure.
+
+The crate gets both a `lib.rs` and a `main.rs`: the binary is the CLI, the
+library is what unit tests, property tests and cargo-mutants reach into
+without paying a subprocess per case.
+
+- [x] **T1 — Two members, an alias, and nothing new for adopters.**
+      Scenarios: _Adopters receive nothing new_. Tests: acceptance — after
+      `cargo xtask --help` works in this repository, an installed project
+      contains no `xtask/`, no `.cargo/config.toml` and no new workflow,
+      and the shipped file set is byte-for-byte what it was. Deliverable:
+      `xtask/` (bin + lib, `publish = false`), the root manifest gaining
+      `[workspace] members = ["xtask"]`, `.cargo/config.toml` with the
+      alias. Deps: none.
+- [x] **T2 — `cargo xtask release-notes`, the CHANGELOG parser in Rust.**
+      Scenarios: none of its own — contributes to _The xtask commands honor
+      every spec 02 contract_, owned by T5. Tests: unit beside the parser
+      (exact section, absent version, the trailing link block, a link-style
+      line inside a body); property — extraction totality, carried over
+      from spec 02 and now running in-process instead of a subprocess per
+      case. Deps: T1.
+- [x] **T3 — `cargo xtask checksum`, and the portability dance ends.**
+      Scenarios: contributes to _The xtask commands honor every spec 02
+      contract_ (T5). Tests: unit — a known vector hashes correctly;
+      property — output format stability: for any file name and content the
+      line is exactly `<64 lowercase hex>  <basename>`, which is what
+      `sha256sum -c` reads. Deps: T1.
+- [x] **T4 — `cargo xtask release-guard`, and a diagnosis that names names.**
+      Scenarios: contributes to _The xtask commands honor every spec 02
+      contract_ (T5). Tests: unit — tag/VERSION disagreement, marker
+      disagreement, missing CHANGELOG section, the lookalike heading;
+      property — guard diagnosis: for any disagreeing (tag, VERSION,
+      marker) triple the error names every mismatched pair, never just the
+      first. Deps: T1.
+- [x] **T5 — The switch: xtask is what runs, and the scripts go.**
+      Scenarios: _The xtask commands honor every spec 02 contract_, _The
+      release workflow speaks xtask_, _The shell gate covers exactly the
+      shell that remains_. Tests: spec 02's
+      acceptance suite keeps every scenario name and fixture but drives
+      `cargo xtask`; static assertions on `release.yml` — guard, notes and
+      checksum through `cargo xtask`, no step under `scripts/`, guard and
+      gates still strictly before `gh release create`. Deliverable: the
+      three scripts deleted, `release.yml` and the `lint` recipe updated.
+      Deps: T2, T3, T4.
+- [x] **T6 — The gates get something true to say.**
+      Scenarios: _The mutation gate is back in business_, _Coverage and
+      CRAP measure the xtask crate_. Tests: acceptance — `just cov` and
+      `just crap` measure the xtask sources instead of reporting nothing to
+      measure, and `just mutants-diff` mutates changed xtask lines instead
+      of calling them out of reach; spec 01's honest-skip scenarios still
+      pass unchanged, because they are about *adopter* shapes. Deliverable:
+      whatever the `--path` filter needs to see a workspace member, and
+      `crap-baseline.json` restored in its own deliberate commit. Deps: T5.
+
+**Why the shell gate scenario keeps two files.** This spec was written when
+the only shell besides `install.sh` was the three release scripts. Spec 03
+has since shipped `scripts/integration-check.sh`, whose whole job is to run
+a shell installer against a checkout, so it is not part of this migration —
+it would move only alongside the installer, which this spec defers. The
+scenario was amended (approved) to say so: what must leave shell is the
+*release logic*, not every script in the repository.
 
 ---
 

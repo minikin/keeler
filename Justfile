@@ -2,13 +2,16 @@
 default:
     @just --list
 
-# Run all tests (doc tests only when the package has a library target)
+# Run all tests (doc tests only when a package has a library target).
+# --workspace, not the default: in a project whose root manifest is itself a
+# package, cargo tests only that package and a member crate's tests never
+# run. A test that is never run is not a test.
 test:
     #!/usr/bin/env bash
     set -euo pipefail
-    cargo nextest run --all-targets --no-tests=pass
+    cargo nextest run --workspace --all-targets --no-tests=pass
     if cargo metadata --no-deps --format-version 1 | grep -q '"doctest":true'; then
-        cargo test --doc
+        cargo test --workspace --doc
     else
         echo "no library target — skipping doc tests"
     fi
@@ -25,21 +28,26 @@ lint:
     #!/usr/bin/env bash
     set -euo pipefail
     cargo fmt --all -- --check
-    cargo clippy --all-targets -- -D warnings
+    cargo clippy --workspace --all-targets -- -D warnings
     if [ -e templates/keeler.yml ]; then
-        # No nullglob: if the glob stops matching, shellcheck fails on the
-        # literal pattern — a gate that vanishes silently is no gate.
+        # Globbed, not named: whatever shell lives here gets gated,
+        # including a script added tomorrow. No nullglob either — if the
+        # glob stops matching, shellcheck fails on the literal pattern
+        # rather than the gate vanishing in silence.
         shellcheck install.sh scripts/*.sh
     fi
 
 # Fast compile check without building test binaries
 check:
-    cargo check --all-targets
+    cargo check --workspace --all-targets
 
 # All static checks + tests
 ci: lint test
 
 # Coverage and CRAP need compilable Rust targets somewhere in the project.
+# They ask cargo where the sources are (--workspace) rather than assuming a
+# src/ at the root: a workspace root has none, and hard-coding the path made
+# the gate fail with "path does not exist" instead of measuring the members.
 # Ask cargo, not the filesystem: a workspace root has no src/ of its own yet
 # its members must be measured, while a crate that is only a test harness
 # has nothing to measure — and the honest report of that fact must not read
@@ -52,23 +60,23 @@ cov:
     #!/usr/bin/env bash
     set -euo pipefail
     {{_has_rust_targets}} || { echo "{{_no_src_msg}}"; exit 0; }
-    cargo llvm-cov nextest --all-targets --no-tests=pass --summary-only --fail-under-lines 90
+    cargo llvm-cov nextest --workspace --all-targets --no-tests=pass --summary-only --fail-under-lines 90
 
 # Coverage + CRAP score gate: fails if any function scores above the threshold
 crap:
     #!/usr/bin/env bash
     set -euo pipefail
     {{_has_rust_targets}} || { echo "{{_no_src_msg}}"; exit 0; }
-    cargo llvm-cov nextest --all-targets --no-tests=pass --lcov --output-path lcov.info
-    cargo crap --lcov lcov.info --path src --threshold 15 --fail-above
+    cargo llvm-cov nextest --workspace --all-targets --no-tests=pass --lcov --output-path lcov.info
+    cargo crap --lcov lcov.info --workspace --threshold 15 --fail-above
 
 # Record a CRAP baseline (run before starting a feature)
 crap-baseline:
     #!/usr/bin/env bash
     set -euo pipefail
     {{_has_rust_targets}} || { echo "{{_no_src_msg}}"; exit 0; }
-    cargo llvm-cov nextest --all-targets --no-tests=pass --lcov --output-path lcov.info
-    cargo crap --lcov lcov.info --path src --format json --sort file --output crap-baseline.json
+    cargo llvm-cov nextest --workspace --all-targets --no-tests=pass --lcov --output-path lcov.info
+    cargo crap --lcov lcov.info --workspace --format json --sort file --output crap-baseline.json
     echo "CRAP baseline saved to crap-baseline.json"
 
 # CRAP delta vs the recorded baseline: fails on threshold breach OR any regression
@@ -76,27 +84,33 @@ crap-delta:
     #!/usr/bin/env bash
     set -euo pipefail
     {{_has_rust_targets}} || { echo "{{_no_src_msg}}"; exit 0; }
-    cargo llvm-cov nextest --all-targets --no-tests=pass --lcov --output-path lcov.info
-    cargo crap --lcov lcov.info --path src --threshold 15 --fail-above \
+    cargo llvm-cov nextest --workspace --all-targets --no-tests=pass --lcov --output-path lcov.info
+    cargo crap --lcov lcov.info --workspace --threshold 15 --fail-above \
         --baseline crap-baseline.json --fail-regression
 
 # Full local gate: format, lint, tests, coverage, CRAP
 dev: fmt lint test crap
 
 # Mutation tests for a specific file: just mutants src/lib.rs
+# --workspace, or a member crate's file yields "Found 0 mutants" and the
+# gate passes having tested nothing.
 mutants FILE:
-    cargo mutants --file {{FILE}}
+    cargo mutants --workspace --file {{FILE}}
 
-# Mutation tests on the whole crate (slow)
+# Mutation tests on every member (slow)
 mutants-all:
-    cargo mutants
+    cargo mutants --workspace
 
 # Mutation tests on changed lines only (--in-diff vs HEAD, else the branch
 # base, else the last commit)
 mutants-diff:
     #!/usr/bin/env bash
     set -euo pipefail
-    paths=('src/*.rs' 'src/**/*.rs')
+    # Both shapes: sources beside the root manifest, and sources in a
+    # workspace member. `**/src/*.rs` does not match the root's own src/,
+    # and `src/*.rs` does not match a member's — a gate that watches only
+    # one of them is blind to half the projects it ships to.
+    paths=('src/*.rs' 'src/**/*.rs' '**/src/*.rs' '**/src/**/*.rs')
     # New files aren't in `git diff HEAD` — intent-to-add makes their full
     # content show up in the diff; reset afterwards to leave the index as-is.
     # NUL-delimited into an array: paths with spaces stay whole.
@@ -130,7 +144,7 @@ mutants-diff:
         exit 0
     fi
     echo "Running mutants on changed lines (--in-diff)"
-    cargo mutants --in-diff "$diff_file"
+    cargo mutants --workspace --in-diff "$diff_file"
 
 # Full validation including mutation tests (slow)
 dev-full: dev mutants-all

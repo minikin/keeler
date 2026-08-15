@@ -9,6 +9,42 @@ Installations pin a version with `KEELER_REF` and record it at the top of
 
 ## [Unreleased]
 
+### Fixed
+
+- The mutation gate can see a workspace member. `cargo mutants` without
+  `--workspace` reports "Found 0 mutants" for a member crate's file and
+  passes having tested nothing, and `mutants-diff` watched only
+  `src/*.rs`, which no member's sources match. Both are fixed, so the gate
+  measures instead of reporting the change out of reach.
+
+- The shipped gates no longer miss a workspace. `just test` ran only the
+  root package, so in a project whose root manifest is itself a package a
+  member crate's tests never ran at all; `just crap` hard-coded
+  `--path src` and failed with "path does not exist" on any workspace root
+  that has no `src/` of its own. Both now ask cargo where the code is
+  (`--workspace`). Found while making Keeler's own repository a workspace —
+  and spec 01's workspace scenario could not see it, because its test runs
+  against a stub cargo. That test now pins the flag.
+
+### Added
+
+- `cargo xtask` — a repository task runner (bin + lib, never published,
+  never installed into an adopting project). Spec 04 moves the release
+  logic into it, out of shell.
+- `cargo xtask release-notes <version> <changelog>` — the CHANGELOG parser
+  in Rust, byte-for-byte identical to the awk it will replace. Its
+  extraction-totality property now runs in-process, so it checks 256 cases
+  in the time the subprocess version needed for 12.
+- `cargo xtask checksum <file>` — a pure-Rust SHA-256, ending the
+  `sha256sum`-or-`shasum` portability dance. Its output is byte-identical
+  to the script it replaces and verifies with the real `shasum -a 256 -c`.
+  This adds the repository's first dependency, `sha2`, pinned by the
+  committed lockfile.
+- `cargo xtask release-guard <tag>` — refuses a tag that disagrees with
+  VERSION, the rules-file marker or the CHANGELOG, and now names *every*
+  disagreement instead of stopping at the first, so one refusal is enough
+  to fix everything that is wrong.
+
 ### Added
 
 - `scripts/integration-check.sh` — the contract checker from spec 03. It
@@ -42,6 +78,12 @@ Installations pin a version with `KEELER_REF` and record it at the top of
   profile to member crates on its behalf.
 
 ### Changed
+
+- The release runs through `cargo xtask`, not shell. `scripts/`
+  release-notes.sh, checksum.sh and release-guard.sh are gone; the release
+  workflow and CI's version job call the commands directly. Spec 02's
+  acceptance suite kept every scenario name and now drives the binary, so
+  the contracts are the same ones, verified the same way.
 
 - A gate now scans every installed file for prose about the Keeler
   repository — its test files, spec numbers and divergences — and fails

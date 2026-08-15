@@ -1,0 +1,21 @@
+# Repository machinery: the tasks Keeler runs on itself. Never published,
+# never installed into an adopting project — the release logic lives here so
+# it is gated like the rest of the code instead of hiding in shell.
+[package]
+name = "xtask"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+publish = false
+
+[dependencies]
+# The one dependency: a pure-Rust SHA-256, replacing the sha256sum/shasum
+# portability dance. Pinned by the committed Cargo.lock; the release runs
+# --locked, so the digest that ships is reproducible.
+sha2 = "0.10"
+
+[dev-dependencies]
+proptest = "1"
+
+[lints]
+workspace = true

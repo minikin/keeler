@@ -8,6 +8,17 @@ edition = "2024"
 rust-version = "1.88"
 publish = false
 
+# Two members: this harness, and the repository's own task runner. The
+# harness stays the root package so tests/ keeps its place; xtask is where
+# the release logic lives now that it is Rust and not shell.
+[workspace]
+members = ["xtask"]
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"
+
 [dependencies]
 
 [dev-dependencies]

@@ -930,6 +930,24 @@ fn a_workspace_with_rust_targets_is_still_measured() {
         "a measurable workspace was reported as having nothing to measure:\n{stdout}",
     );
     assert!(output.status.success());
+
+    // And the CRAP gate asks cargo where the sources are instead of
+    // assuming a src/ at the root: a workspace root has none, and the
+    // hard-coded path failed with "path does not exist" rather than
+    // measuring the members.
+    let crap = project.run_just("crap");
+    let calls = project.cargo_calls();
+    assert!(
+        calls
+            .lines()
+            .any(|call| call.starts_with("crap ") && call.contains("--workspace")),
+        "the CRAP gate does not ask cargo for the workspace members:\n{calls}",
+    );
+    assert!(
+        !calls.contains("--path src"),
+        "the CRAP gate still assumes a src/ at the project root:\n{calls}",
+    );
+    assert!(crap.status.success());
 }
 
 #[test]
@@ -953,6 +971,15 @@ fn an_adopters_install_sh_is_not_keelers_to_gate() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
     );
+}
+
+/// True when the mutation gate actually ran over a diff. Order-independent:
+/// what matters is that `mutants` was invoked with `--in-diff`, not which
+/// flags happen to sit between them.
+fn ran_in_diff(calls: &str) -> bool {
+    calls
+        .lines()
+        .any(|call| call.starts_with("mutants ") && call.contains("--in-diff"))
 }
 
 #[test]
@@ -986,7 +1013,7 @@ fn committed_src_changes_on_a_branch_stay_measured() {
 
     // Then it mutates the changed lines against the branch base
     assert!(
-        project.cargo_calls().contains("mutants --in-diff"),
+        ran_in_diff(&project.cargo_calls()),
         "src changes on the branch were never measured:\n{}{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
@@ -1025,7 +1052,7 @@ fn mutants_diff_survives_untracked_paths_with_spaces() {
         String::from_utf8_lossy(&output.stderr),
     );
     assert!(
-        project.cargo_calls().contains("mutants --in-diff"),
+        ran_in_diff(&project.cargo_calls()),
         "the untracked src file was never measured",
     );
 }
@@ -1216,10 +1243,11 @@ fn the_repository_presents_no_placeholder_to_replace() {
         !repo_root().join("tests/acceptance.rs").exists(),
         "tests/acceptance.rs still tests the placeholder",
     );
-    assert!(
-        !repo_root().join("crap-baseline.json").exists(),
-        "crap-baseline.json still baselines the placeholder",
-    );
+    // A baseline is no longer evidence of a placeholder: the xtask crate is
+    // real code with a real job — the release runs on it — so there is
+    // something to baseline and the file is back, deliberately (spec 04).
+    // What the scenario forbids is a source file that exists only to be
+    // measured, and the check for that is the absence of src/ above.
     // ... and Cargo.toml describes a test harness for the installer
     let manifest = std::fs::read_to_string(repo_root().join("Cargo.toml")).unwrap();
     assert!(
