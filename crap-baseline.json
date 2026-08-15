@@ -3,9 +3,27 @@
   "version": "0.4.3",
   "entries": [
     {
+      "file": "/Users/mnkn/GitHub/keeler/keeler/build.rs",
+      "function": "main",
+      "line": 12,
+      "cyclomatic": 2.0,
+      "coverage": null,
+      "crap": 6.0,
+      "crate": "keeler"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler/src/lib.rs",
+      "function": "apply",
+      "line": 235,
+      "cyclomatic": 11.0,
+      "coverage": 95.65217391304348,
+      "crap": 11.009944933015534,
+      "crate": "keeler"
+    },
+    {
       "file": "/Users/mnkn/GitHub/keeler/keeler/src/lib.rs",
       "function": "carried_bytes",
-      "line": 71,
+      "line": 95,
       "cyclomatic": 6.0,
       "coverage": 93.75,
       "crap": 6.0087890625,
@@ -13,8 +31,17 @@
     },
     {
       "file": "/Users/mnkn/GitHub/keeler/keeler/src/lib.rs",
+      "function": "carries",
+      "line": 69,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler/src/lib.rs",
       "function": "collect",
-      "line": 58,
+      "line": 79,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -23,7 +50,7 @@
     {
       "file": "/Users/mnkn/GitHub/keeler/keeler/src/lib.rs",
       "function": "embedded_single",
-      "line": 91,
+      "line": 115,
       "cyclomatic": 9.0,
       "coverage": 90.9090909090909,
       "crap": 9.060856498873028,
@@ -31,20 +58,65 @@
     },
     {
       "file": "/Users/mnkn/GitHub/keeler/keeler/src/lib.rs",
+      "function": "is_workflow_file",
+      "line": 75,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "keeler"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler/src/lib.rs",
       "function": "lay_down",
-      "line": 123,
-      "cyclomatic": 6.0,
-      "coverage": 93.33333333333333,
-      "crap": 6.010666666666666,
+      "line": 204,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "keeler"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler/src/lib.rs",
+      "function": "plan_all",
+      "line": 222,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "keeler"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler/src/lib.rs",
+      "function": "plan_for",
+      "line": 164,
+      "cyclomatic": 9.0,
+      "coverage": 100.0,
+      "crap": 9.0,
       "crate": "keeler"
     },
     {
       "file": "/Users/mnkn/GitHub/keeler/keeler/src/lib.rs",
       "function": "shipped_files",
-      "line": 42,
+      "line": 46,
       "cyclomatic": 2.0,
       "coverage": 100.0,
       "crap": 2.0,
+      "crate": "keeler"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler/src/lib.rs",
+      "function": "with_suffix",
+      "line": 265,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler/src/lib.rs",
+      "function": "write",
+      "line": 271,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
       "crate": "keeler"
     },
     {
@@ -211,12 +283,14 @@
     }
   ],
   "diagnostics": {
-    "analyzed_files": 6,
+    "analyzed_files": 7,
     "lcov_files": 6,
     "matched_files": 6,
     "source_only": {
-      "count": 0,
-      "examples": []
+      "count": 1,
+      "examples": [
+        "/Users/mnkn/GitHub/keeler/keeler/build.rs"
+      ]
     },
     "lcov_only": {
       "count": 0,
