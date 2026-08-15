@@ -134,7 +134,7 @@ without paying a subprocess per case.
       property — output format stability: for any file name and content the
       line is exactly `<64 lowercase hex>  <basename>`, which is what
       `sha256sum -c` reads. Deps: T1.
-- [ ] **T4 — `cargo xtask release-guard`, and a diagnosis that names names.**
+- [x] **T4 — `cargo xtask release-guard`, and a diagnosis that names names.**
       Scenarios: contributes to _The xtask commands honor every spec 02
       contract_ (T5). Tests: unit — tag/VERSION disagreement, marker
       disagreement, missing CHANGELOG section, the lookalike heading;

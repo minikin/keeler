@@ -42,6 +42,12 @@ fn is_link_reference(line: &str) -> bool {
             .is_some_and(|(tag, _)| !tag.contains(']'))
 }
 
+/// True when the CHANGELOG carries a section for `version`.
+#[must_use]
+pub fn has_section(changelog: &str, version: &str) -> bool {
+    changelog.lines().any(|line| opens_section(line, version))
+}
+
 /// The body of `version`'s section: everything between its heading and the
 /// next `## ` heading, minus the trailing link-reference block and blank
 /// lines at either edge.

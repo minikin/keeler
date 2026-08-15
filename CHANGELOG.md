@@ -34,6 +34,10 @@ Installations pin a version with `KEELER_REF` and record it at the top of
   to the script it replaces and verifies with the real `shasum -a 256 -c`.
   This adds the repository's first dependency, `sha2`, pinned by the
   committed lockfile.
+- `cargo xtask release-guard <tag>` — refuses a tag that disagrees with
+  VERSION, the rules-file marker or the CHANGELOG, and now names *every*
+  disagreement instead of stopping at the first, so one refusal is enough
+  to fix everything that is wrong.
 
 ### Added
 
