@@ -83,7 +83,7 @@ All of these must be green before a feature is considered done:
 | Mutation   | `just mutants-diff`                                   | zero surviving mutants in changed files        |
 | CRAP delta | `just crap-delta`                                     | no function's CRAP score regressed vs baseline |
 
-**Baseline discipline:** `crap-baseline.json` is **committed to the repository** (the Keeler repository itself is the documented exception: its crate is the installer's test harness, there is nothing to baseline, and the gates say so — see spec 01) — it is the shared reference every developer and CI measures against, so the ratchet works for the whole team, not just one machine. `just crap-delta` shows per-function before/after and fails on any regression: the "did this change make the codebase worse?" gate. Refresh the baseline (`just crap-baseline`) only deliberately, in its own commit — a moved baseline is a visible decision, reviewable like any other diff.
+**Baseline discipline:** `crap-baseline.json` is **committed to the repository** — it is the shared reference every developer and CI measures against, so the ratchet works for the whole team, not just one machine. `just crap-delta` shows per-function before/after and fails on any regression: the "did this change make the codebase worse?" gate. Refresh the baseline (`just crap-baseline`) only deliberately, in its own commit — a moved baseline is a visible decision, reviewable like any other diff.
 
 ## Commands
 
@@ -121,6 +121,6 @@ Add new skills the same way: a folder under `.claude/skills/`, frontmatter with 
 
 - Unit tests live in `#[cfg(test)]` blocks next to the code they test.
 - Property tests use `proptest` and live in the same blocks — reach for one whenever the code has an invariant (ordering, idempotence, round-trip, saturation, bounds).
-- Acceptance tests live in `tests/acceptance.rs` — one test per spec scenario, named after the scenario, structured as Given/When/Then comments. (In the Keeler repository itself the deliverable is shell and the whole suite lives in `tests/installer.rs` — the documented divergence, per spec 01.)
+- Acceptance tests live in `tests/acceptance.rs` — one test per spec scenario, named after the scenario, structured as Given/When/Then comments.
 - Tests are the spec's enforcement arm: when a mutant survives, the fix is a better test, not a code tweak.
-- When proptest finds a counterexample it writes a seed file under `proptest-regressions/` — **commit those files**; they are regression tests that pin the found case forever.
+- When proptest finds a counterexample it writes a seed file under `proptest-regressions/` — **commit those files**; they are regression tests that pin the found case forever. (A crate with no `lib.rs` has no anchor for that default path — configure `FileFailurePersistence::WithSource("proptest-regressions")` so the seeds land beside the test file.)

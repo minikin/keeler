@@ -1,6 +1,6 @@
 # Spec 04 — Release tooling moves to cargo xtask
 
-**Status:** Draft
+**Status:** Approved
 **Effort:** Medium
 **Module:** `xtask/`, `.github/workflows/release.yml`, `Justfile`, `tests/release.rs`
 

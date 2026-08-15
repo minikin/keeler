@@ -1,6 +1,6 @@
 # Spec 03 — The installer against the wild
 
-**Status:** Draft
+**Status:** Approved
 **Effort:** Small
 **Module:** `.github/workflows/ci.yml`, `scripts/`
 
@@ -106,7 +106,64 @@ And   the network guarantee of spec 01 still holds
 
 ## Tasks
 
-_Empty until /keeler:tasks runs against an approved spec._
+The contract checker is the deliverable; the CI job is the thing that
+points it at real repositories. Splitting them that way is what makes T1–T4
+testable locally and offline: the checker runs the installer over a
+directory that already exists, so the harness can hand it a generated
+shape and CI can hand it a clone. A `KEELER_INSTALL_SH` override lets a
+test point the checker at a deliberately defective installer — an
+assertion that cannot fail is not an assertion, and each invariant below
+is pinned by both a passing and a failing case.
+
+- [ ] **T1 — The contract checker, and the completeness invariant.**
+      Scenarios: _The installer lands cleanly on a real library crate_.
+      Tests: acceptance — `scripts/integration-check.sh <dir>` over a
+      generated single-crate library exits zero and reports what it
+      checked; against a defective installer that skips one install-set
+      file it exits non-zero naming the missing path. Deliverable:
+      `scripts/integration-check.sh` (snapshot → install → assert exit
+      zero + every tracked file present). Deps: none.
+- [ ] **T2 — The checker recognizes a workspace root.**
+      Scenarios: _The installer lands cleanly on a real workspace_.
+      Tests: acceptance — over a generated workspace-root project
+      (`[workspace]`, no `[package]`) the checker passes and asserts the
+      installer named the root manifest as the project's own to manage;
+      with that report suppressed it fails, naming what it expected.
+      Deps: T1.
+- [ ] **T3 — Nothing of theirs changes, and every conflict is named.**
+      Scenarios: _A lived-in project keeps every byte of its own content_.
+      Tests: acceptance — over a generated lived-in shape (own workflows,
+      own docs, a `.gitignore` with no final newline, own copies of
+      install-set files) the checker passes, and the conflicts it reports
+      are exactly the `.keeler` files on disk. Property — no silent pass:
+      for any pre-existing file a defective installer clobbers, the
+      checker fails and names that file; the three documented append
+      targets (`CLAUDE.md`, `.gitignore`, `Cargo.toml`) are the only
+      permitted diffs. Deps: T1.
+- [ ] **T4 — A second run must change nothing.**
+      Scenarios: _A second run over a real project changes nothing_.
+      Tests: acceptance — the checker installs twice and compares tree
+      snapshots, passing on a byte-identical second run; against a
+      non-idempotent installer (one that appends on every run) it fails
+      naming the drifting path. Deps: T1.
+- [ ] **T5 — The real-world job, on exact pins.**
+      Scenarios: _The pins are exact_. Tests: acceptance (static, over
+      `ci.yml`) — an `installer-real-world` job whose matrix carries the
+      three projects, each ref a 40-character lowercase hex SHA, fetched
+      shallow at that SHA with no branch name anywhere in the clone step,
+      each entry running the checker; the pin-bump comment is present.
+      The end-to-end contract over real repositories is observable only in
+      CI — like spec 02's release job, its first real run is its
+      integration test. Deps: T1, T2, T3, T4.
+- [ ] **T6 — The local suite stays offline.**
+      Scenarios: _The local suite stays offline_. Tests: acceptance — the
+      checker contains no `clone`, `fetch` or `ls-remote` (cloning is the
+      workflow's job, not the script's), and a full harness run leaves the
+      network-call log untouched, so spec 01's network guarantee still
+      holds with the checker in the suite. Deps: T1.
+
+Not a task: the new script joins the shell gate for free — `just lint`
+already shellchecks `scripts/*.sh`, and spec 01's gate test covers it.
 
 ---
 
