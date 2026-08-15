@@ -130,7 +130,7 @@ is pinned by both a passing and a failing case.
       installer named the root manifest as the project's own to manage;
       with that report suppressed it fails, naming what it expected.
       Deps: T1.
-- [ ] **T3 — Nothing of theirs changes, and every conflict is named.**
+- [x] **T3 — Nothing of theirs changes, and every conflict is named.**
       Scenarios: _A lived-in project keeps every byte of its own content_.
       Tests: acceptance — over a generated lived-in shape (own workflows,
       own docs, a `.gitignore` with no final newline, own copies of

@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc f69604fae7443a04fe0ebd3cf545b4556007608b797a8a4028699f014450c653 # shrinks to victim = ".github/workflows/ci.yml"

@@ -16,6 +16,26 @@ fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
+/// Content a lived-in project already has. Some of these are files Keeler
+/// installs — the project's own copies, which it must never lose — and the
+/// rest is content Keeler has no business touching at all. The `.gitignore`
+/// deliberately ends without a newline: a real one often does, and appending
+/// to it is one of the three edits the installer is allowed to make.
+const LIVED_IN_FILES: &[(&str, &str)] = &[
+    (".github/workflows/ci.yml", "name: their CI\non: [push]\n"),
+    (".gitignore", "/target\ntheir-artifacts/"),
+    (
+        "README.md",
+        "# Their project\n\nNothing to do with Keeler.\n",
+    ),
+    ("docs/guide.md", "Their documentation.\n"),
+    ("Justfile", "their-recipe:\n\techo theirs\n"),
+    ("KEELER.md", "Their file that happens to share a name.\n"),
+    ("specs/TEMPLATE.md", "Their template.\n"),
+    ("rustfmt.toml", "max_width = 79\n"),
+    ("CLAUDE.md", "# Their instructions\n"),
+];
+
 /// A throwaway directory holding the project under test and the PATH stubs.
 ///
 /// The stubs live *beside* the project, never inside it: the checker
@@ -61,6 +81,20 @@ impl Fixture {
         )
         .unwrap();
         std::fs::write(project.join("member/src/lib.rs"), "pub fn member() {}\n").unwrap();
+        fixture
+    }
+
+    /// A project that has been lived in: its own workflows, documentation,
+    /// a `.gitignore` with no final newline, and its own copies of files
+    /// Keeler installs — the shape `BurntSushi/ripgrep` has, generated.
+    fn lived_in(name: &str) -> Self {
+        let fixture = Self::library(name);
+        let project = fixture.project();
+        for (rel, content) in LIVED_IN_FILES {
+            let path = project.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, content).unwrap();
+        }
         fixture
     }
 
@@ -360,5 +394,135 @@ fn a_lockfile_the_installer_never_copied_is_not_demanded() {
     assert!(
         !report.contains("Cargo.lock"),
         "the checker treated a generated lockfile as part of the install set:\n{report}",
+    );
+}
+
+#[test]
+fn a_lived_in_project_keeps_every_byte_of_its_own_content() {
+    // Given a project with its own workflows, .gitignore and documentation,
+    // plus its own copies of files Keeler installs
+    let fixture = Fixture::lived_in("lived-in");
+    let project = fixture.project();
+    let theirs: Vec<(&str, Vec<u8>)> = LIVED_IN_FILES
+        .iter()
+        .map(|(rel, _)| (*rel, std::fs::read(project.join(rel)).unwrap()))
+        .collect();
+
+    // When Keeler is installed into it under the contract checker
+    let output = fixture.check();
+    let report = combined(&output);
+
+    // Then the checker accepts the install
+    assert!(
+        output.status.success(),
+        "the checker rejected a clean install into a lived-in project:\n{report}",
+    );
+
+    // And no pre-existing file's content changed, except the three
+    // documented append targets
+    for (rel, before) in theirs {
+        let after = std::fs::read(project.join(rel)).unwrap();
+        if matches!(rel, "CLAUDE.md" | ".gitignore") {
+            let before_text = String::from_utf8(before).unwrap();
+            let after_text = String::from_utf8(after).unwrap();
+            assert!(
+                after_text.starts_with(before_text.trim_end_matches('\n')),
+                "{rel} was rewritten rather than appended to",
+            );
+            continue;
+        }
+        assert_eq!(
+            before, after,
+            "the installer changed {rel}, which is the project's own",
+        );
+    }
+
+    // And every conflicting file landed alongside as <name>.keeler
+    assert!(
+        report.contains("conflict"),
+        "the checker did not account for the conflicts it found:\n{report}",
+    );
+}
+
+proptest::proptest! {
+    // Every case runs the installer through the checker as a subprocess —
+    // keep the count low. Seeds land beside this file and get committed.
+    #![proptest_config(proptest::prelude::ProptestConfig {
+        cases: 8,
+        failure_persistence: Some(Box::new(
+            proptest::test_runner::FileFailurePersistence::WithSource("proptest-regressions"),
+        )),
+        ..proptest::prelude::ProptestConfig::default()
+    })]
+
+    /// No silent pass: whichever of the project's own files an installer
+    /// destroys, the checker must notice and name it.
+    #[test]
+    fn a_clobbered_file_is_never_passed_over(
+        victim in proptest::sample::select(
+            LIVED_IN_FILES
+                .iter()
+                .map(|(rel, _)| *rel)
+                .filter(|rel| !matches!(*rel, "CLAUDE.md" | ".gitignore"))
+                .collect::<Vec<_>>(),
+        ),
+    ) {
+        // Given an installer that overwrites one of the project's own files
+        let fixture = Fixture::lived_in("clobbered");
+        let defective = fixture.write_script(
+            "bin/clobbering-install.sh",
+            &format!(
+                "#!/usr/bin/env bash\n\
+                 set -euo pipefail\n\
+                 bash {} \"$@\"\n\
+                 printf 'clobbered\\n' > \"$1/{victim}\"\n",
+                repo_root().join("install.sh").display(),
+            ),
+        );
+
+        // When the contract checker runs against it
+        let output = fixture.check_with(Some(&defective));
+        let report = combined(&output);
+
+        // Then the check fails, naming the file that was destroyed
+        proptest::prop_assert!(
+            !output.status.success(),
+            "the checker passed an installer that overwrote {victim}:\n{report}",
+        );
+        proptest::prop_assert!(
+            report.contains(victim),
+            "the checker did not name the file it lost:\n{report}",
+        );
+    }
+}
+
+#[test]
+fn a_conflict_left_out_of_the_report_is_caught() {
+    // Given an installer that keeps a Keeler copy alongside the project's
+    // own file but never says so
+    let fixture = Fixture::lived_in("silent-conflict");
+    let defective = fixture.write_script(
+        "bin/quiet-install.sh",
+        &format!(
+            "#!/usr/bin/env bash\n\
+             set -euo pipefail\n\
+             bash {} \"$@\"\n\
+             printf 'ours\\n' > \"$1/README.md.keeler\"\n",
+            repo_root().join("install.sh").display(),
+        ),
+    );
+
+    // When the contract checker runs against it
+    let output = fixture.check_with(Some(&defective));
+    let report = combined(&output);
+
+    // Then the check fails, naming the conflict nobody was told about
+    assert!(
+        !output.status.success(),
+        "the checker passed an unreported conflict:\n{report}",
+    );
+    assert!(
+        report.contains("README.md"),
+        "the checker did not name the unreported conflict:\n{report}",
     );
 }

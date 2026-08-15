@@ -93,12 +93,20 @@ if [ ! -s "$work/tracked" ]; then
     fail "the reference install added no files — the checker is blind"
 fi
 
-# --- 2. Install into the project under test -------------------------------
+# --- 2. What did the project already have? --------------------------------
+# A copy, not a list of hashes: comparing with `cmp` needs no digest tool and
+# says nothing about how the bytes differ, only that they do.
+before="$work/before"
+mkdir -p "$before"
+(cd "$project" && tar -cf - --exclude=./.git .) | (cd "$before" && tar -xf -)
+list_files "$project" > "$work/project-before"
+
+# --- 3. Install into the project under test -------------------------------
 if ! bash "$install_sh" "$project" --no-tools > "$work/install.log" 2>&1; then
     fail_with_log "$work/install.log" "the installer exited non-zero on $project"
 fi
 
-# --- 3. Completeness ------------------------------------------------------
+# --- 4. Completeness ------------------------------------------------------
 missing=()
 tracked_count=0
 while IFS= read -r rel; do
@@ -115,7 +123,51 @@ fi
 
 echo "integration-check: $tracked_count tracked files present in $project"
 
-# --- 4. A workspace root must be told it is one ---------------------------
+# --- 5. Nothing of theirs changed -----------------------------------------
+# Three files may be edited, and only by appending: CLAUDE.md gains the
+# rules import, .gitignore gains entries, Cargo.toml gains sections. Every
+# other file the project already had must come out byte-identical — a
+# project's own content is not Keeler's to rewrite.
+clobbered=()
+while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    case "$rel" in
+        CLAUDE.md | .gitignore | Cargo.toml) continue ;;
+    esac
+    if [ ! -e "$project/$rel" ]; then
+        clobbered+=("$rel (deleted)")
+    elif ! cmp -s "$before/$rel" "$project/$rel"; then
+        clobbered+=("$rel")
+    fi
+done < "$work/project-before"
+
+if [ "${#clobbered[@]}" -gt 0 ]; then
+    echo "integration-check: the installer changed content that was not its own:" >&2
+    printf '  %s\n' "${clobbered[@]}" >&2
+    exit 1
+fi
+
+# --- 6. Every conflict named, and named honestly --------------------------
+# A file the project already had, whose content differs from Keeler's, is
+# kept and the Keeler version lands beside it as <name>.keeler. The report
+# and the disk must agree: an unnamed .keeler file is a surprise, and a
+# named one that does not exist is a lie.
+sed -n 's/^  · \(.*\) differs .*wrote .*/\1/p' "$work/install.log" | sort > "$work/reported"
+(cd "$project" && find . -type f -name '*.keeler' -not -path './.git/*' | sed 's|^\./||') \
+    | while IFS= read -r keeler; do
+        [ -e "$before/$keeler" ] || printf '%s\n' "${keeler%.keeler}"
+    done | sort > "$work/on-disk"
+
+if ! diff -u "$work/reported" "$work/on-disk" > "$work/conflict-diff" 2>&1; then
+    echo "integration-check: the conflicts reported and the .keeler files on disk disagree" >&2
+    echo "  (-) reported but absent, (+) present but unreported:" >&2
+    cat "$work/conflict-diff" >&2
+    exit 1
+fi
+
+echo "integration-check: $(wc -l < "$work/on-disk" | tr -d ' ') conflicts named and kept alongside"
+
+# --- 7. A workspace root must be told it is one ---------------------------
 # Keeler cannot add proptest and the mutants profile to a root that has no
 # [package] of its own — the member crates need them. The installer says so
 # rather than silently doing nothing, and a silent installer leaves the

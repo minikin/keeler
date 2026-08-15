@@ -18,6 +18,12 @@ Installations pin a version with `KEELER_REF` and record it at the top of
   rather than listed, so it cannot drift from what `install.sh` does. CI
   will point it at pinned real-world clones; the script never clones, so
   the local suite stays offline.
+- The checker holds the installer to the project's own content: every file
+  the project already had must come out byte-identical, except the three
+  documented append targets (`CLAUDE.md`, `.gitignore`, `Cargo.toml`), and
+  the conflicts the installer reports must match the `.keeler` files on
+  disk exactly — an unnamed one is a surprise, a named one that does not
+  exist is a lie.
 - The checker also holds the installer to its workspace contract: a root
   with no `[package]` of its own must be told that its manifest is the
   project's to manage, since Keeler cannot add proptest and the mutants
