@@ -12,7 +12,7 @@ publish = false
 # harness stays the root package so tests/ keeps its place; xtask is where
 # the release logic lives now that it is Rust and not shell.
 [workspace]
-members = ["xtask"]
+members = ["keeler", "xtask"]
 
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }

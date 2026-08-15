@@ -9,6 +9,14 @@ Installations pin a version with `KEELER_REF` and record it at the top of
 
 ## [Unreleased]
 
+### Added
+
+- The `keeler` crate — the installer, becoming Rust. It carries everything
+  it installs inside itself (`include_dir!`), so laying the files down
+  needs no network, no tarball and no clone to copy from. Two gates guard
+  the carried set in both directions: everything the repository ships is
+  in there, and nothing of the repository's own is.
+
 ### Fixed
 
 - `cargo xtask release-guard` now checks the crate versions too. It

@@ -166,7 +166,7 @@ The crate is `keeler/` — bin plus lib, `publish = true`. Not `xtask`: that
 one is repository machinery and unpublishable by definition, while this is
 the product.
 
-- [ ] **T1 — The crate, the embedded tree, and both directions of the set.**
+- [x] **T1 — The crate, the embedded tree, and both directions of the set.**
       Scenarios: _What the binary carries is what the repository holds_,
       _Adopters receive nothing of the repository's own_. Tests:
       acceptance — the embedded set equals the repository's shipped set,

@@ -1,0 +1,24 @@
+# The Keeler installer: what adopters run to put the workflow in their
+# project. Unlike xtask, this one is the product — it is published, and it
+# carries everything it installs inside the binary.
+#
+# A library for now. The command line arrives with the behaviour it needs
+# to expose (spec 05, T4); a `main` that only prints would add a function
+# no test can meaningfully kill.
+[package]
+name = "keeler"
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.88"
+publish = true
+description = "Spec-first, test-driven workflow for Rust projects — installer"
+license = "MIT"
+repository = "https://github.com/minikin/keeler"
+
+[dependencies]
+# Carries the shipped tree inside the binary, so installing needs no
+# network, no tarball and no clone to copy from.
+include_dir = "0.7"
+
+[lints]
+workspace = true
