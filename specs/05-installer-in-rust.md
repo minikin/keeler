@@ -142,6 +142,15 @@ Then  the rules file records that version in its marker
 And   the version the binary reports matches the tag that produced it
 ```
 
+### Scenario: The upgrade path works after the installer moves
+
+```
+Given a project with Keeler installed
+When  the shipped upgrade recipe is read
+Then  it fetches the current release through cargo, not curl
+And   no recipe names install.sh
+```
+
 ### Scenario: Adopters receive nothing of the repository's own
 
 ```
@@ -166,7 +175,7 @@ The crate is `keeler/` — bin plus lib, `publish = true`. Not `xtask`: that
 one is repository machinery and unpublishable by definition, while this is
 the product.
 
-- [x] **T1 — The crate, the embedded tree, and both directions of the set.**
+- [ ] **T1 — The crate, the embedded tree, and both directions of the set.**
       Scenarios: _What the binary carries is what the repository holds_,
       _Adopters receive nothing of the repository's own_. Tests:
       acceptance — the embedded set equals the repository's shipped set,
@@ -226,36 +235,33 @@ the product.
       publication; acceptance — the version the binary reports is the one
       it writes into the rules-file marker, so a pinned install is
       self-evident. Deps: T6.
+- [ ] **T8 — The way in, as written down.**
+      Scenarios: _The upgrade path works after the installer moves_.
+      Tests: acceptance — the shipped `keeler-upgrade` recipe installs
+      through cargo and no recipe names `install.sh`. Also rewrites
+      README, SECURITY.md and CONTRIBUTING.md, which name the script
+      thirteen times between them, including the verify story — no
+      scenario of their own, by decision. Deps: T7.
 
-**Two gaps found while breaking this down — both need approval.**
+**Two gaps found while breaking this down, both now decided.**
 
-The spec changes how Keeler is installed but says nothing about the two
-places that tell people how to install it.
+The spec changes how Keeler is installed; these are the two places that
+tell people how to install it.
 
 1. The shipped `Justfile` has a `keeler-upgrade` recipe that runs
    `curl … install.sh | bash -s .`. After T5 that URL 404s and every
-   adopter's upgrade path breaks silently. Proposed scenario:
+   adopter's upgrade path breaks silently. It becomes
+   `cargo install keeler --locked` followed by `keeler init .` — the
+   always-works path, chosen over `cargo binstall` so an upgrade never
+   depends on a tool the project may not have. It is shipped behaviour, so
+   it is gated by the scenario above rather than left to a code review.
 
-```
-### Scenario: The upgrade path works after the installer moves
-
-Given a project with Keeler installed
-When  the shipped upgrade recipe runs
-Then  it fetches the current release through cargo, not curl
-And   the rules-file marker afterwards names the version it fetched
-```
-
-2. `README.md` documents `curl … | bash` as *the* way in, and spec 02's
-   scenario requires the verify story to live "where adopters look".
-   Proposed scenario:
-
-```
-### Scenario: The documented way in is the one that works
-
-Given the documentation an adopter reads first
-When  the install instructions are followed literally
-Then  they use the published crate, and no instruction names install.sh
-```
+2. `README.md`, `SECURITY.md` and `CONTRIBUTING.md` name `install.sh`
+   thirteen times between them, including the verify story SECURITY.md
+   documents. They are rewritten once the spec is implemented, as part of
+   T7 — no scenario of their own. `improvements.md` stays as it is: it is
+   a record of an audit at a point in time, and describing what was true
+   then is not a lie now.
 
 ---
 
