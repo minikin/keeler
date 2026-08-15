@@ -29,6 +29,11 @@ Installations pin a version with `KEELER_REF` and record it at the top of
   in Rust, byte-for-byte identical to the awk it will replace. Its
   extraction-totality property now runs in-process, so it checks 256 cases
   in the time the subprocess version needed for 12.
+- `cargo xtask checksum <file>` — a pure-Rust SHA-256, ending the
+  `sha256sum`-or-`shasum` portability dance. Its output is byte-identical
+  to the script it replaces and verifies with the real `shasum -a 256 -c`.
+  This adds the repository's first dependency, `sha2`, pinned by the
+  committed lockfile.
 
 ### Added
 

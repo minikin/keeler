@@ -128,7 +128,7 @@ without paying a subprocess per case.
       line inside a body); property — extraction totality, carried over
       from spec 02 and now running in-process instead of a subprocess per
       case. Deps: T1.
-- [ ] **T3 — `cargo xtask checksum`, and the portability dance ends.**
+- [x] **T3 — `cargo xtask checksum`, and the portability dance ends.**
       Scenarios: contributes to _The xtask commands honor every spec 02
       contract_ (T5). Tests: unit — a known vector hashes correctly;
       property — output format stability: for any file name and content the

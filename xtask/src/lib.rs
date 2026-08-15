@@ -5,12 +5,14 @@
 //! a subprocess per case.
 
 pub mod changelog;
+pub mod checksum;
 
 /// What `cargo xtask` prints when asked what it can do.
 #[must_use]
 pub fn usage() -> String {
     "cargo xtask <command>\n\nCommands:\n  \
-     release-notes <version> <changelog>   print one version's notes\n"
+     release-notes <version> <changelog>   print one version's notes\n  \
+     checksum <file>                       print its sha256 checksum line\n"
         .to_string()
 }
 
@@ -25,21 +27,42 @@ fn read(path: &str) -> Result<String, Failure> {
 
 /// Runs one command and returns what it should print.
 ///
-/// The dispatch lives here rather than in `main` so it is reachable by unit
-/// tests and by cargo-mutants.
+/// Dispatch only: each command is its own function, so adding one does not
+/// make this harder to follow — and none of it hides in `main`, where
+/// neither the tests nor the mutation gate could reach it.
 ///
 /// # Errors
 ///
 /// Returns the command's failure: an unknown command, missing arguments, an
 /// unreadable file, or whatever the command itself refused to do.
 pub fn run(args: &[String]) -> Result<String, Failure> {
-    match args.first().map(String::as_str) {
-        Some("--help" | "-h") | None => Ok(usage()),
-        Some("release-notes") => match &args[1..] {
-            [version, changelog] => Ok(changelog::release_notes(&read(changelog)?, version)?),
-            _ => Err("usage: release-notes <version> <changelog>".into()),
-        },
-        Some(unknown) => Err(format!("unknown command `{unknown}`\n\n{}", usage()).into()),
+    let Some((command, rest)) = args.split_first() else {
+        return Ok(usage());
+    };
+    match command.as_str() {
+        "--help" | "-h" => Ok(usage()),
+        "release-notes" => release_notes_command(rest),
+        "checksum" => checksum_command(rest),
+        unknown => Err(format!("unknown command `{unknown}`\n\n{}", usage()).into()),
+    }
+}
+
+/// `release-notes <version> <changelog>`
+fn release_notes_command(args: &[String]) -> Result<String, Failure> {
+    match args {
+        [version, path] => Ok(changelog::release_notes(&read(path)?, version)?),
+        _ => Err("usage: release-notes <version> <changelog>".into()),
+    }
+}
+
+/// `checksum <file>`
+fn checksum_command(args: &[String]) -> Result<String, Failure> {
+    match args {
+        [path] => {
+            let bytes = std::fs::read(path).map_err(|why| format!("cannot read {path}: {why}"))?;
+            Ok(checksum::checksum_line(&bytes, path))
+        }
+        _ => Err("usage: checksum <file>".into()),
     }
 }
 
@@ -107,6 +130,38 @@ mod tests {
             error.contains("release-notes <version>"),
             "the error does not show the usage: {error}",
         );
+    }
+
+    #[test]
+    fn checksum_prints_a_verifiable_line() {
+        let path = fixture("sum", "abc");
+        let line = run(&["checksum".into(), path.display().to_string()]).unwrap();
+        assert!(
+            line.starts_with("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad  "),
+            "unexpected checksum line: {line}",
+        );
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn checksum_without_a_file_says_what_it_needs() {
+        let error = run(&["checksum".into()]).unwrap_err().to_string();
+        assert!(error.contains("checksum <file>"), "no usage in: {error}");
+    }
+
+    #[test]
+    fn checksum_names_a_file_it_cannot_read() {
+        let args = ["checksum".into(), "/nonexistent/install.sh".into()];
+        let error = run(&args).unwrap_err().to_string();
+        assert!(
+            error.contains("/nonexistent/install.sh"),
+            "no path in: {error}"
+        );
+    }
+
+    #[test]
+    fn no_command_at_all_prints_the_usage() {
+        assert!(run(&[]).unwrap().starts_with("cargo xtask"));
     }
 
     #[test]

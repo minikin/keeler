@@ -9,6 +9,10 @@ rust-version = "1.88"
 publish = false
 
 [dependencies]
+# The one dependency: a pure-Rust SHA-256, replacing the sha256sum/shasum
+# portability dance. Pinned by the committed Cargo.lock; the release runs
+# --locked, so the digest that ships is reproducible.
+sha2 = "0.10"
 
 [dev-dependencies]
 proptest = "1"
