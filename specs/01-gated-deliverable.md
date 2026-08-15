@@ -281,10 +281,15 @@ And   Cargo.toml describes a test harness for the installer
       Scenarios: _The repository presents no placeholder to replace_, _A
       change touching no Rust is still measured_. Tests: acceptance — repo
       shape: no `src/`, no `tests/acceptance.rs`, `Cargo.toml` framed as the
-      installer's test harness, `crap-baseline.json` gone, `ci.yml` carries
-      no coverage/CRAP/mutation job aimed at a placeholder and its test job
-      runs the harness. Includes the README/`KEELER.md` touch-ups this
-      makes true. Deps: T1–T4.
+      installer's test harness, `ci.yml` carries no coverage/CRAP/mutation
+      job aimed at a placeholder and its test job runs the harness. Includes
+      the README/`KEELER.md` touch-ups this makes true. Deps: T1–T4.
+
+      `crap-baseline.json` also went at this point, and was read as evidence
+      of the placeholder while there was nothing else to measure. That
+      stopped being true in spec 04: the xtask crate is real code with a
+      real job, so the baseline is back deliberately and the check that
+      carries this scenario is the absence of `src/`.
 - [x] **T6 — Idempotence, as a property.**
       Scenarios: _Installing twice leaves the second run with nothing to
       do_. Tests: property (8–16 cases) — invariant: for any accepted
@@ -406,8 +411,10 @@ needs a harness test of its own rather than being assumed covered.
 **CI.** This repository's coverage, CRAP and mutation jobs are removed with
 `src/`; the installer E2E jobs and the version-consistency job stay, and the
 test job now runs the harness. `crap-baseline.json` and its delta gate go
-with them — there is nothing here to baseline. None of this touches
-`templates/keeler.yml`, which is what adopters receive.
+with them — there is nothing here to baseline. (Spec 04 ended that: with
+the xtask crate in the workspace there is, so the baseline and the delta
+gate came back.) None of this touches `templates/keeler.yml`, which is what
+adopters receive.
 
 ### Non-goals
 
