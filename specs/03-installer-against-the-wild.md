@@ -115,7 +115,7 @@ test point the checker at a deliberately defective installer — an
 assertion that cannot fail is not an assertion, and each invariant below
 is pinned by both a passing and a failing case.
 
-- [ ] **T1 — The contract checker, and the completeness invariant.**
+- [x] **T1 — The contract checker, and the completeness invariant.**
       Scenarios: _The installer lands cleanly on a real library crate_.
       Tests: acceptance — `scripts/integration-check.sh <dir>` over a
       generated single-crate library exits zero and reports what it

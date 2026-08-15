@@ -339,8 +339,9 @@ And   Cargo.toml describes a test harness for the installer
       CI test job runs `just test` (doc-test guard) and provisions
       shellcheck; the shellcheck defect test asserts on SC2086; the proptest
       seed file is committed and its comment names the real path;
-      TempProject::git pins the global config away; .claude/keeler.md
-      carries the approved divergence note. Deps: none.
+      TempProject::git pins the global config away; the approved
+      divergence note is recorded in this repository's own CLAUDE.md, not
+      in the rules file it ships. Deps: none.
 
 ---
 

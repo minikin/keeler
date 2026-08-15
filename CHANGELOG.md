@@ -9,6 +9,16 @@ Installations pin a version with `KEELER_REF` and record it at the top of
 
 ## [Unreleased]
 
+### Added
+
+- `scripts/integration-check.sh` — the contract checker from spec 03. It
+  installs Keeler into a project directory and asserts the installer's
+  contract on it: exit zero, and every file a clean install produces
+  present afterwards. The tracked set is derived from a reference install
+  rather than listed, so it cannot drift from what `install.sh` does. CI
+  will point it at pinned real-world clones; the script never clones, so
+  the local suite stays offline.
+
 ### Changed
 
 - The shipped workflow rules no longer talk about Keeler itself. Notes
