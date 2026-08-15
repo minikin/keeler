@@ -51,7 +51,7 @@ impl Drop for Project {
 }
 
 #[test]
-fn a_projects_own_file_is_kept_and_keelers_lands_beside_it() {
+fn a_projects_own_file_is_kept_and_keelers_lands_alongside() {
     // Given a project with its own Justfile
     let project = Project::new("own-justfile");
     project.write("Justfile", "their-recipe:\n\techo theirs\n");
@@ -127,14 +127,17 @@ fn a_report_counts_what_it_did() {
     assert_eq!(report.conflicts.len(), 1);
 }
 
-/// Files an adopter plausibly already has, with content of their own.
-const THEIRS: [&str; 5] = [
-    "Justfile",
-    "KEELER.md",
-    "clippy.toml",
-    "rustfmt.toml",
-    "specs/TEMPLATE.md",
-];
+/// Every file a project may already have with content of its own — the
+/// whole install set bar the rules file, which is Keeler's to own. The
+/// invariant is stated over any pre-existing file, so the sample is the
+/// set rather than a handful of it.
+fn theirs() -> Vec<String> {
+    keeler::shipped_files()
+        .into_iter()
+        .map(|(_, destination)| destination)
+        .filter(|destination| destination != ".claude/keeler.md")
+        .collect()
+}
 
 proptest::proptest! {
     #![proptest_config(proptest::prelude::ProptestConfig {
@@ -150,12 +153,18 @@ proptest::proptest! {
     /// targets are not here — they are T3's business — so for this task
     /// every pre-existing file is untouchable.
     #[test]
-    fn nothing_a_project_already_had_is_changed(
-        which in proptest::sample::subsequence(THEIRS.to_vec(), 1..=THEIRS.len()),
-        contents in proptest::collection::vec("[ -~\n]{0,80}", THEIRS.len()),
+    fn a_projects_own_content_is_never_overwritten(
+        picks in proptest::collection::vec(proptest::bool::ANY, 18),
+        contents in proptest::collection::vec("[ -~\n]{0,80}", 18),
     ) {
+        let all = theirs();
+        let which: Vec<&String> = all
+            .iter()
+            .zip(&picks)
+            .filter_map(|(path, keep)| keep.then_some(path))
+            .collect();
         let project = Project::new("preserved");
-        let theirs: Vec<(&str, &String)> = which.iter().copied().zip(&contents).collect();
+        let theirs: Vec<(&&String, &String)> = which.iter().zip(&contents).collect();
         for (path, content) in &theirs {
             project.write(path, content);
         }
@@ -174,11 +183,12 @@ proptest::proptest! {
     /// files on disk. An unreported one is a surprise; a reported one that
     /// does not exist is a lie.
     #[test]
-    fn every_conflict_is_reported_and_every_report_is_a_conflict(
-        which in proptest::sample::subsequence(THEIRS.to_vec(), 1..=THEIRS.len()),
+    fn every_conflict_is_reported_by_name(
+        picks in proptest::collection::vec(proptest::bool::ANY, 18),
     ) {
         let project = Project::new("totality");
-        for path in &which {
+        let all = theirs();
+        for (path, _) in all.iter().zip(&picks).filter(|(_, keep)| **keep) {
             project.write(path, "content of their own\n");
         }
 
@@ -214,7 +224,9 @@ fn an_unchanged_rules_file_is_left_alone() {
         !project.join(".claude/keeler.md.bak").exists(),
         "a .bak was written for a file that did not change",
     );
-    assert_eq!(report.written, keeler::shipped_files().len());
+    // And it is not counted as written, because it was not written: the
+    // count exists so a run that did nothing cannot read like an install.
+    assert_eq!(report.written, keeler::shipped_files().len() - 1);
 }
 
 #[test]
@@ -229,5 +241,127 @@ fn replacing_the_rules_file_counts_as_one_write() {
     // Then the count is what actually happened — every carried file
     // written, the rules among them, and no conflict
     assert_eq!(report.written, keeler::shipped_files().len());
+    assert!(report.conflicts.is_empty(), "{:?}", report.conflicts);
+}
+
+/// True when the process can read anything regardless of permissions, which
+/// makes a permission-based test meaningless.
+fn running_as_root() -> bool {
+    std::process::Command::new("id")
+        .arg("-u")
+        .output()
+        .ok()
+        .and_then(|out| String::from_utf8(out.stdout).ok())
+        .is_some_and(|uid| uid.trim() == "0")
+}
+
+#[test]
+fn an_unreadable_file_is_not_mistaken_for_an_absent_one() {
+    if running_as_root() {
+        return;
+    }
+    // Given a project whose Justfile exists but cannot be read — a
+    // root-owned or ACL-restricted config is the ordinary way this happens
+    let project = Project::new("unreadable");
+    project.write("Justfile", "THEIR PRECIOUS RECIPE\n");
+    std::process::Command::new("chmod")
+        .args(["0222", project.join("Justfile").to_str().unwrap()])
+        .status()
+        .unwrap();
+
+    // When Keeler is installed
+    let report = keeler::lay_down(&project).unwrap();
+
+    // Then their file is left alone and named as a conflict. Absent and
+    // unreadable are different things: install.sh tested for existence,
+    // and reading instead would destroy content it could not even see.
+    std::process::Command::new("chmod")
+        .args(["0644", project.join("Justfile").to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert_eq!(project.read("Justfile"), "THEIR PRECIOUS RECIPE\n");
+    assert!(
+        report.conflicts.contains(&"Justfile".to_string()),
+        "{report:?}"
+    );
+    assert!(project.join("Justfile.keeler").exists());
+}
+
+#[test]
+fn a_directory_where_a_file_belongs_is_a_conflict_not_a_crash() {
+    // Given a project that keeps a directory where Keeler installs a file
+    let project = Project::new("directory");
+    std::fs::create_dir_all(project.join("specs/TEMPLATE.md")).unwrap();
+
+    // When Keeler is installed
+    let report = keeler::lay_down(&project).unwrap();
+
+    // Then it is reported like any other conflict, and every other file
+    // still lands — one odd path must not leave a half-installed project
+    assert!(
+        report.conflicts.contains(&"specs/TEMPLATE.md".to_string()),
+        "{report:?}",
+    );
+    assert!(
+        project.join("specs/TEMPLATE.md").is_dir(),
+        "their directory was removed"
+    );
+    assert!(
+        project.join("KEELER.md").is_file(),
+        "the install stopped early"
+    );
+    assert!(project.join(".claude/commands/keeler/spec.md").is_file());
+}
+
+#[test]
+fn an_unreadable_rules_file_is_refused_rather_than_replaced() {
+    if running_as_root() {
+        return;
+    }
+    // Given a rules file that exists but cannot be read
+    let project = Project::new("unreadable-rules");
+    project.write(".claude/keeler.md", "their edited rules\n");
+    std::process::Command::new("chmod")
+        .args(["0222", project.join(".claude/keeler.md").to_str().unwrap()])
+        .status()
+        .unwrap();
+
+    // When Keeler is installed
+    let outcome = keeler::lay_down(&project);
+
+    // Then it refuses, naming the file: the promise that makes owning this
+    // file acceptable is that the replaced text is kept, and text that
+    // cannot be read cannot be kept
+    std::process::Command::new("chmod")
+        .args(["0644", project.join(".claude/keeler.md").to_str().unwrap()])
+        .status()
+        .unwrap();
+    let error = outcome
+        .expect_err("the rules file was replaced unread")
+        .to_string();
+    assert!(
+        error.contains(".claude/keeler.md"),
+        "the refusal does not name it: {error}"
+    );
+    assert_eq!(project.read(".claude/keeler.md"), "their edited rules\n");
+    assert!(
+        !project.join("KEELER.md").exists(),
+        "files were written before the refusal"
+    );
+}
+
+#[test]
+fn a_second_run_reports_nothing_written() {
+    // Given a project Keeler was just installed into
+    let project = Project::new("second-run");
+    keeler::lay_down(&project).unwrap();
+
+    // When it runs again
+    let report = keeler::lay_down(&project).unwrap();
+
+    // Then it says so: nothing written, nothing in conflict. A count that
+    // included files already identical would report a full install every
+    // time and mean nothing.
+    assert_eq!(report.written, 0, "a second run claimed to write files");
     assert!(report.conflicts.is_empty(), "{:?}", report.conflicts);
 }

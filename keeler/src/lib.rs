@@ -13,13 +13,14 @@ static COMMANDS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../.claude/commands
 /// The skills, likewise.
 static SKILLS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../.claude/skills");
 
-/// Files carried one by one, as `(path in this repository, path in the
-/// project)`. The two differ only where a name would collide: the workflow
-/// template is `templates/keeler.yml` here and `keeler.yml` there, so a
-/// project's own workflows are never shadowed.
 /// The one file Keeler owns outright rather than merges.
 const RULES_FILE: &str = ".claude/keeler.md";
 
+/// Files carried one by one, as `(path in this repository, path in the
+/// project)`. These two agree; the workflow template is the only shipped
+/// file whose name changes on the way in — `templates/keeler.yml` here,
+/// `.github/workflows/keeler.yml` there, so a project's own workflows are
+/// never shadowed. It is added in `shipped_files` rather than listed here.
 const SINGLES: [(&str, &str); 7] = [
     (".claude/keeler.md", ".claude/keeler.md"),
     ("KEELER.md", "KEELER.md"),
@@ -65,25 +66,26 @@ pub fn shipped_files() -> Vec<(String, String)> {
 /// all, so a `.DS_Store` beside a skill would be compiled in and laid into
 /// every adopting project. The declared singles are exempt from this: one
 /// of them is legitimately a dotfile.
+fn carries(path: &std::path::Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(is_workflow_file)
+}
+
 fn is_workflow_file(name: &str) -> bool {
     !name.starts_with('.') && !name.ends_with('~')
 }
 
 fn collect(dir: &'static Dir<'static>, prefix: &str, into: &mut Vec<(String, String)>) {
-    for file in dir.files() {
-        if !file
-            .path()
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(is_workflow_file)
-        {
-            continue;
-        }
+    for file in dir.files().filter(|file| carries(file.path())) {
         let relative = file.path().to_string_lossy();
         let path = format!("{prefix}/{relative}");
         into.push((path.clone(), path));
     }
-    for sub in dir.dirs() {
+    // A hidden directory is swept whole if it is entered at all, so the
+    // filter applies here too — .cache/ beside a skill would otherwise
+    // ship every file it holds.
+    for sub in dir.dirs().filter(|sub| carries(sub.path())) {
         collect(sub, prefix, into);
     }
 }
@@ -139,6 +141,53 @@ pub struct Report {
 /// Anything a command can fail with, phrased for someone reading its output.
 pub type Failure = Box<dyn std::error::Error>;
 
+/// What installing one carried file will do to the project.
+#[derive(Debug, PartialEq, Eq)]
+enum Plan {
+    /// Nothing is there: write it.
+    Fresh,
+    /// Exactly ours already: leave it, and say nothing.
+    Unchanged,
+    /// Theirs, and different — or there but unreadable, which is the same
+    /// answer for a smaller reason. Keep theirs, put ours beside it.
+    Conflict,
+    /// The rules file, differing: replace it, keeping what it replaced.
+    ReplaceRules(Vec<u8>),
+}
+
+/// Decides what one file's install will do, without doing any of it.
+///
+/// The distinction that matters is between *absent* and *unreadable*.
+/// `install.sh` asked whether the path existed; asking whether it can be
+/// read instead answers "no" for a file that is merely locked down, and
+/// then overwrites content it could not even see.
+fn plan_for(target: &std::path::Path, bytes: &[u8], is_rules: bool) -> Result<Plan, Failure> {
+    let existing = match std::fs::read(target) {
+        Ok(existing) => Some(existing),
+        Err(why) if why.kind() == std::io::ErrorKind::NotFound => None,
+        Err(why) => {
+            if is_rules {
+                // The promise that makes owning this file acceptable is
+                // that the text it replaces is kept. Text that cannot be
+                // read cannot be kept, so this one is refused outright.
+                return Err(format!(
+                    "cannot read {}: {why} — refusing to replace a file whose text cannot be kept",
+                    target.display()
+                )
+                .into());
+            }
+            return Ok(Plan::Conflict);
+        }
+    };
+
+    Ok(match existing {
+        None => Plan::Fresh,
+        Some(existing) if existing == bytes => Plan::Unchanged,
+        Some(existing) if is_rules => Plan::ReplaceRules(existing),
+        Some(_) => Plan::Conflict,
+    })
+}
+
 /// Writes every carried file into `project`, keeping whatever the project
 /// already had.
 ///
@@ -149,70 +198,67 @@ pub type Failure = Box<dyn std::error::Error>;
 ///
 /// # Errors
 ///
-/// Returns the first write that fails, naming the path. Every byte is
-/// resolved before the first write, so a missing carried file cannot leave
-/// a half-installed project behind.
+/// Returns before writing anything if a carried file is missing or the
+/// rules file cannot be read. Every decision is made first and every write
+/// second, so a project is never left half-installed by a refusal.
 pub fn lay_down(project: &std::path::Path) -> Result<Report, Failure> {
-    // Resolve everything first: a lookup that fails after twelve files are
-    // on disk leaves a tree nobody asked for.
-    let mut resolved = Vec::new();
-    for (source, destination) in shipped_files() {
-        let bytes =
-            carried_bytes(&source).ok_or_else(|| format!("nothing is carried for {source}"))?;
-        resolved.push((source, destination, bytes));
-    }
+    // Plan everything first. A refusal after twelve files are on disk
+    // leaves a tree nobody asked for, so nothing is written until every
+    // decision has been made.
+    let planned = plan_all(project)?;
 
     let mut report = Report::default();
-    for (source, destination, bytes) in resolved {
-        let target = project.join(&destination);
-        if let Some(parent) = target.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|why| format!("cannot create {}: {why}", parent.display()))?;
-        }
-
-        if source == RULES_FILE {
-            replace_rules(&target, bytes, &mut report)?;
-            continue;
-        }
-
-        match std::fs::read(&target) {
-            Ok(existing) if existing == bytes => {}
-            Ok(_) => {
-                let beside = with_suffix(&target, ".keeler");
-                write(&beside, bytes)?;
-                report.conflicts.push(destination);
-                continue;
-            }
-            Err(_) => {
-                write(&target, bytes)?;
-            }
-        }
-        report.written += 1;
+    for (destination, target, bytes, plan) in planned {
+        apply(&target, bytes, plan, destination, &mut report)?;
     }
     Ok(report)
 }
 
-/// The rules file: Keeler's to own, so an upgrade replaces it and keeps
-/// what it replaced. A project that edited it anyway must not lose the text
-/// silently — project-specific instructions belong in CLAUDE.md.
-fn replace_rules(
+/// One carried file, decided but not yet acted on: where it goes, what
+/// bytes it holds, and what installing it will do.
+type Planned = (String, std::path::PathBuf, &'static [u8], Plan);
+
+/// One decision per carried file, made before any of them is acted on.
+fn plan_all(project: &std::path::Path) -> Result<Vec<Planned>, Failure> {
+    let mut planned = Vec::new();
+    for (source, destination) in shipped_files() {
+        let bytes =
+            carried_bytes(&source).ok_or_else(|| format!("nothing is carried for {source}"))?;
+        let target = project.join(&destination);
+        let plan = plan_for(&target, bytes, source == RULES_FILE)?;
+        planned.push((destination, target, bytes, plan));
+    }
+    Ok(planned)
+}
+
+/// Carries out one decision.
+fn apply(
     target: &std::path::Path,
     bytes: &[u8],
+    plan: Plan,
+    destination: String,
     report: &mut Report,
 ) -> Result<(), Failure> {
-    match std::fs::read(target) {
-        Ok(existing) if existing == bytes => {}
-        Ok(existing) => {
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|why| format!("cannot create {}: {why}", parent.display()))?;
+    }
+    match plan {
+        Plan::Unchanged => {}
+        Plan::Fresh => {
+            write(target, bytes)?;
+            report.written += 1;
+        }
+        Plan::Conflict => {
+            write(&with_suffix(target, ".keeler"), bytes)?;
+            report.conflicts.push(destination);
+        }
+        Plan::ReplaceRules(existing) => {
             write(&with_suffix(target, ".bak"), &existing)?;
             write(target, bytes)?;
             report.written += 1;
-            return Ok(());
-        }
-        Err(_) => {
-            write(target, bytes)?;
         }
     }
-    report.written += 1;
     Ok(())
 }
 
@@ -235,6 +281,16 @@ mod tests {
     fn a_command_or_skill_file_is_carried() {
         assert!(is_workflow_file("spec.md"));
         assert!(is_workflow_file("SKILL.md"));
+    }
+
+    #[test]
+    fn a_hidden_directory_is_not_descended_into() {
+        // The rule is applied to directories as well as files, and only a
+        // direct check keeps it that way: a clean checkout has no hidden
+        // directory in the swept trees, so no integration test exercises
+        // this path.
+        assert!(!super::carries(std::path::Path::new(".cache")));
+        assert!(super::carries(std::path::Path::new("gherkin-specs")));
     }
 
     #[test]

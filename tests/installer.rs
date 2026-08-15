@@ -1267,13 +1267,27 @@ fn a_change_touching_no_rust_is_still_measured() {
         ci.contains("run: just test"),
         "the CI test job no longer runs the installer test suite",
     );
-    // And no gate reports a pass for code it did not examine — the jobs
-    // that measured only the placeholder are gone
+    // And no gate reports a pass for code it did not examine. Mutation
+    // testing has no CI job at all — it runs where a survivor can be
+    // argued with. A coverage/CRAP job may exist only once there is real
+    // code for it to measure, which it proves by ratcheting against a
+    // committed baseline with entries in it; measuring a placeholder was
+    // the thing this scenario was written against, not measuring as such.
     let jobs = job_names(&ci);
-    for placeholder_gate in ["quality", "mutants"] {
+    assert!(
+        !jobs.iter().any(|job| job == "mutants"),
+        "a mutation job in CI would report green on survivors nobody read",
+    );
+    if jobs.iter().any(|job| job == "quality") {
         assert!(
-            !jobs.iter().any(|job| job == placeholder_gate),
-            "the `{placeholder_gate}` job still reports green by measuring a placeholder",
+            ci.contains("just crap-delta"),
+            "the `quality` job does not ratchet against the baseline",
+        );
+        let baseline = std::fs::read_to_string(repo_root().join("crap-baseline.json"))
+            .expect("a quality job with no baseline measures nothing");
+        assert!(
+            baseline.contains("\"function\""),
+            "the baseline holds no functions, so the gate cannot go red",
         );
     }
 }

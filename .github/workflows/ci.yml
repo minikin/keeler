@@ -22,7 +22,10 @@ jobs:
       - name: rustfmt
         run: cargo fmt --all -- --check
       - name: clippy
-        run: cargo clippy --all-targets -- -D warnings
+        # --workspace: the root manifest is itself a package, so without
+        # it cargo lints that package alone and every member crate skips
+        # the gate.
+        run: cargo clippy --workspace --all-targets -- -D warnings
       # The deliverable is shell — shellcheck is its static gate.
       - name: shellcheck
         run: |
@@ -58,12 +61,24 @@ jobs:
       - name: Test
         run: just test
 
-  # No coverage, CRAP or mutation job here: this repository's crate is the
-  # installer's test harness, and those gates would only measure a
-  # placeholder — a green that cannot go red. The deliverable (install.sh
-  # and the files it ships) is gated by the harness tests above, shellcheck
-  # in the lints job, and the end-to-end installer jobs below. Adopters
-  # still get every gate via templates/keeler.yml.
+  quality:
+    name: Coverage, CRAP and the delta
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov,cargo-nextest,cargo-crap,just
+      # There is something to measure now. The xtask and keeler crates are
+      # real logic, and crap-baseline.json is committed — a ratchet only
+      # this job can hold, since a baseline enforced by whoever remembers
+      # to run it locally is not a shared reference at all.
+      - name: CRAP, against the committed baseline
+        run: just crap-delta
 
   version:
     name: Version consistency

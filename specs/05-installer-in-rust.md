@@ -153,6 +153,15 @@ Then  the rules file records that version in its marker
 And   the version the binary reports matches the tag that produced it
 ```
 
+### Scenario: An unchanged file is left alone, and says nothing
+
+```
+Given a project whose file already holds exactly what Keeler carries
+When  Keeler is installed
+Then  the file is not rewritten and no .keeler or .bak appears
+And   the run reports it as neither written nor in conflict
+```
+
 ### Scenario: The upgrade path works after the installer moves
 
 ```
@@ -182,9 +191,9 @@ Only when the binary does everything does the switch happen: the suite
 re-points at the library, the shell goes, and the release learns to ship a
 binary.
 
-The crate is `keeler/` — bin plus lib, `publish = true`. Not `xtask`: that
-one is repository machinery and unpublishable by definition, while this is
-the product.
+The crate is `keeler/` — bin plus lib. Not `xtask`: that one is
+repository machinery, while this is the product adopters run. Neither is
+published to crates.io; both are installed from the repository itself.
 
 - [x] **T1 — The crate, the embedded tree, and both directions of the set.**
       Scenarios: _What the binary carries is what the repository holds_,
@@ -277,8 +286,7 @@ tell people how to install it.
 
 ## Implementation Notes
 
-**Shape.** A third workspace member, `keeler/` — a bin plus a lib,
-`publish = true`. Not `xtask`: that crate is repository machinery and
+**Shape.** A third workspace member, `keeler/` — a bin plus a lib. Not `xtask`: that crate is repository machinery and
 `publish = false` by definition, while this is the product. The bin is
 `keeler init [path] [--no-tools]`; the library is where every decision
 lives, so the tests and the mutation gate reach it without a subprocess.

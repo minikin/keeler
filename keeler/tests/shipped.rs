@@ -16,6 +16,22 @@ fn repo_root() -> PathBuf {
         .to_path_buf()
 }
 
+/// True for a swept path the filesystem left behind rather than one the
+/// repository ships: a hidden or backup component anywhere below the tree
+/// root. The roots themselves live under `.claude/`, so the check starts
+/// after them — and a declared single may legitimately be a dotfile.
+fn is_swept_junk(source: &str) -> bool {
+    [".claude/commands/keeler/", ".claude/skills/"]
+        .iter()
+        .find_map(|root| source.strip_prefix(root))
+        .is_some_and(|below| {
+            Path::new(below)
+                .components()
+                .filter_map(|part| part.as_os_str().to_str())
+                .any(|part| part.starts_with('.') || part.ends_with('~'))
+        })
+}
+
 /// A throwaway directory that goes away even when an assertion fires.
 ///
 /// A test that cleans up on its last line cleans up only when it passes,
@@ -71,12 +87,7 @@ fn everything_the_repository_ships_is_inside_the_binary() {
     }
     // Whatever the filesystem left lying around is not something the
     // repository ships, so it is not something the binary must carry.
-    expected.retain(|path| {
-        Path::new(path)
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| !name.starts_with('.') && !name.ends_with('~'))
-    });
+    expected.retain(|path| !is_swept_junk(path));
 
     // When the binary's contents are listed
     let carried: BTreeSet<String> = keeler::shipped_files()
@@ -296,17 +307,7 @@ fn junk_beside_the_shipped_files_is_not_carried() {
     let junk: Vec<&str> = carried
         .iter()
         .map(|(source, _)| source.as_str())
-        // Only the swept trees: a declared single may legitimately be a
-        // dotfile (.cargo-mutants.toml), but nothing in the trees should be.
-        .filter(|source| {
-            source.starts_with(".claude/commands/") || source.starts_with(".claude/skills/")
-        })
-        .filter(|source| {
-            Path::new(source)
-                .file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name.starts_with('.') || name.ends_with('~'))
-        })
+        .filter(|source| is_swept_junk(source))
         .collect();
     assert!(
         junk.is_empty(),
