@@ -973,6 +973,15 @@ fn an_adopters_install_sh_is_not_keelers_to_gate() {
     );
 }
 
+/// True when the mutation gate actually ran over a diff. Order-independent:
+/// what matters is that `mutants` was invoked with `--in-diff`, not which
+/// flags happen to sit between them.
+fn ran_in_diff(calls: &str) -> bool {
+    calls
+        .lines()
+        .any(|call| call.starts_with("mutants ") && call.contains("--in-diff"))
+}
+
 #[test]
 fn committed_src_changes_on_a_branch_stay_measured() {
     // Given a branch whose earlier commits changed src/ and whose latest
@@ -1004,7 +1013,7 @@ fn committed_src_changes_on_a_branch_stay_measured() {
 
     // Then it mutates the changed lines against the branch base
     assert!(
-        project.cargo_calls().contains("mutants --in-diff"),
+        ran_in_diff(&project.cargo_calls()),
         "src changes on the branch were never measured:\n{}{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
@@ -1043,7 +1052,7 @@ fn mutants_diff_survives_untracked_paths_with_spaces() {
         String::from_utf8_lossy(&output.stderr),
     );
     assert!(
-        project.cargo_calls().contains("mutants --in-diff"),
+        ran_in_diff(&project.cargo_calls()),
         "the untracked src file was never measured",
     );
 }

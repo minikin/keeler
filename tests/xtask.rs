@@ -216,3 +216,90 @@ fn the_shell_gate_covers_exactly_the_shell_that_remains() {
         "the lint gate no longer covers the shell that remains",
     );
 }
+
+#[test]
+fn the_mutation_gate_is_back_in_business() {
+    // Given a change that touches xtask source
+    let justfile = std::fs::read_to_string(repo_root().join("Justfile")).unwrap();
+
+    // Then the diff gate looks where a workspace member's sources actually
+    // live, not only at a src/ beside the root manifest
+    let paths = justfile
+        .lines()
+        .find(|line| line.trim_start().starts_with("paths="))
+        .expect("mutants-diff no longer declares the paths it watches");
+    assert!(
+        paths.contains("**/src/"),
+        "the mutation gate cannot see a workspace member's sources: {paths}",
+    );
+
+    // And the recipes select the workspace, or cargo-mutants finds nothing
+    // to mutate in a member crate and reports success having done nothing
+    for recipe in [
+        "cargo mutants --file",
+        "cargo mutants --in-diff",
+        "cargo mutants",
+    ] {
+        let calls: Vec<&str> = justfile
+            .lines()
+            .map(str::trim)
+            .filter(|line| line.starts_with(recipe))
+            .collect();
+        for call in calls {
+            assert!(
+                call.contains("--workspace"),
+                "`{call}` will find no mutants in a workspace member",
+            );
+        }
+    }
+}
+
+#[test]
+fn coverage_and_crap_measure_the_xtask_crate() {
+    // This test does not run `just cov`. That recipe runs the whole suite
+    // under llvm-cov, and the whole suite contains this test — the first
+    // attempt recursed until it died, 200 seconds later. What it checks
+    // instead is the two things that decide whether the recipes measure
+    // anything: what the probe sees, and what the recipes select. The
+    // behavioural proof is `just dev` itself, which CI runs on every push
+    // and which fails if CRAP cannot measure the members.
+
+    // Given the repository after the migration, the probe the recipes use
+    // to decide whether to measure at all
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+    let metadata = std::process::Command::new(cargo)
+        .args(["metadata", "--no-deps", "--format-version", "1"])
+        .current_dir(repo_root())
+        .output()
+        .expect("failed to run cargo metadata");
+    let metadata = String::from_utf8_lossy(&metadata.stdout);
+
+    // Then it finds targets here — the repository no longer has nothing to
+    // measure, which is what it honestly reported before xtask existed
+    assert!(
+        metadata.contains("\"kind\":[\"bin\"") || metadata.contains("\"kind\":[\"lib\""),
+        "the probe finds no library or binary target — the gates would skip",
+    );
+    assert!(
+        metadata.contains("xtask"),
+        "cargo does not report the xtask crate as part of this workspace",
+    );
+
+    // And the recipes select the whole workspace, or a member's sources are
+    // invisible to them however capable the tools are
+    let justfile = std::fs::read_to_string(repo_root().join("Justfile")).unwrap();
+    for measuring in ["cargo llvm-cov nextest", "cargo crap"] {
+        let calls: Vec<&str> = justfile
+            .lines()
+            .map(str::trim)
+            .filter(|line| line.starts_with(measuring))
+            .collect();
+        assert!(!calls.is_empty(), "no recipe runs `{measuring}`");
+        for call in calls {
+            assert!(
+                call.contains("--workspace"),
+                "`{call}` cannot see a workspace member's sources",
+            );
+        }
+    }
+}

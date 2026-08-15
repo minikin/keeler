@@ -1,6 +1,6 @@
 # Spec 04 — Release tooling moves to cargo xtask
 
-**Status:** Approved
+**Status:** Implemented
 **Effort:** Medium
 **Module:** `xtask/`, `.github/workflows/release.yml`, `Justfile`, `tests/release.rs`
 
@@ -151,7 +151,7 @@ without paying a subprocess per case.
       gates still strictly before `gh release create`. Deliverable: the
       three scripts deleted, `release.yml` and the `lint` recipe updated.
       Deps: T2, T3, T4.
-- [ ] **T6 — The gates get something true to say.**
+- [x] **T6 — The gates get something true to say.**
       Scenarios: _The mutation gate is back in business_, _Coverage and
       CRAP measure the xtask crate_. Tests: acceptance — `just cov` and
       `just crap` measure the xtask sources instead of reporting nothing to

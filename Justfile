@@ -92,19 +92,25 @@ crap-delta:
 dev: fmt lint test crap
 
 # Mutation tests for a specific file: just mutants src/lib.rs
+# --workspace, or a member crate's file yields "Found 0 mutants" and the
+# gate passes having tested nothing.
 mutants FILE:
-    cargo mutants --file {{FILE}}
+    cargo mutants --workspace --file {{FILE}}
 
-# Mutation tests on the whole crate (slow)
+# Mutation tests on every member (slow)
 mutants-all:
-    cargo mutants
+    cargo mutants --workspace
 
 # Mutation tests on changed lines only (--in-diff vs HEAD, else the branch
 # base, else the last commit)
 mutants-diff:
     #!/usr/bin/env bash
     set -euo pipefail
-    paths=('src/*.rs' 'src/**/*.rs')
+    # Both shapes: sources beside the root manifest, and sources in a
+    # workspace member. `**/src/*.rs` does not match the root's own src/,
+    # and `src/*.rs` does not match a member's — a gate that watches only
+    # one of them is blind to half the projects it ships to.
+    paths=('src/*.rs' 'src/**/*.rs' '**/src/*.rs' '**/src/**/*.rs')
     # New files aren't in `git diff HEAD` — intent-to-add makes their full
     # content show up in the diff; reset afterwards to leave the index as-is.
     # NUL-delimited into an array: paths with spaces stay whole.
@@ -138,7 +144,7 @@ mutants-diff:
         exit 0
     fi
     echo "Running mutants on changed lines (--in-diff)"
-    cargo mutants --in-diff "$diff_file"
+    cargo mutants --workspace --in-diff "$diff_file"
 
 # Full validation including mutation tests (slow)
 dev-full: dev mutants-all

@@ -11,6 +11,12 @@ Installations pin a version with `KEELER_REF` and record it at the top of
 
 ### Fixed
 
+- The mutation gate can see a workspace member. `cargo mutants` without
+  `--workspace` reports "Found 0 mutants" for a member crate's file and
+  passes having tested nothing, and `mutants-diff` watched only
+  `src/*.rs`, which no member's sources match. Both are fixed, so the gate
+  measures instead of reporting the change out of reach.
+
 - The shipped gates no longer miss a workspace. `just test` ran only the
   root package, so in a project whose root manifest is itself a package a
   member crate's tests never ran at all; `just crap` hard-coded
