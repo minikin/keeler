@@ -6,6 +6,9 @@
 
 pub mod gitignore;
 pub mod manifest;
+pub mod tools;
+
+use std::fmt::Write as _;
 
 use include_dir::{Dir, include_dir};
 
@@ -317,6 +320,121 @@ pub fn configure_gitignore(project: &std::path::Path) -> Result<Vec<String>, Fai
         write(&path, after.as_bytes())?;
     }
     Ok(added)
+}
+
+/// What `keeler` prints when asked what it can do.
+#[must_use]
+pub fn usage() -> String {
+    "keeler <command>\n\nCommands:\n  \
+     init [path] [--no-tools]   put the workflow in a Rust project\n"
+        .to_string()
+}
+
+/// Runs one command and returns what it should print.
+///
+/// # Errors
+///
+/// Returns the command's failure: an unknown command, a directory that is
+/// not a Rust project, or whatever the install itself refused to do.
+pub fn run(args: &[String]) -> Result<String, Failure> {
+    let Some((command, rest)) = args.split_first() else {
+        return Ok(usage());
+    };
+    match command.as_str() {
+        "--help" | "-h" => Ok(usage()),
+        "init" => init_command(rest),
+        unknown => Err(format!("unknown command `{unknown}`\n\n{}", usage()).into()),
+    }
+}
+
+/// `init [path] [--no-tools]`
+fn init_command(args: &[String]) -> Result<String, Failure> {
+    let mut project = std::path::PathBuf::from(".");
+    let mut with_tools = true;
+    for arg in args {
+        match arg.as_str() {
+            "--no-tools" => with_tools = false,
+            other if other.starts_with('-') => {
+                return Err(format!("unknown option `{other}`\n\n{}", usage()).into());
+            }
+            other => project = std::path::PathBuf::from(other),
+        }
+    }
+    init(&project, with_tools)
+}
+
+/// Puts the workflow in `project`, and says what it did.
+///
+/// # Errors
+///
+/// Refuses a directory with no `Cargo.toml` before writing anything: a
+/// project half-Keelered because someone mistyped a path is worse than a
+/// refusal.
+pub fn init(project: &std::path::Path, with_tools: bool) -> Result<String, Failure> {
+    if !project.join("Cargo.toml").is_file() {
+        return Err(format!(
+            "{} is not a Rust project — no Cargo.toml",
+            project.display()
+        )
+        .into());
+    }
+
+    let mut said = String::new();
+    if with_tools {
+        said.push_str(&install_tools()?);
+    }
+
+    let laid = lay_down(project)?;
+    let _ = writeln!(said, "{} file(s) installed", laid.written);
+    for conflict in &laid.conflicts {
+        let _ = writeln!(
+            said,
+            "  {conflict} differs — wrote {conflict}.keeler, merge by hand"
+        );
+    }
+
+    let changes = configure(project)?;
+    for added in &changes.added {
+        let _ = writeln!(said, "  {added} added to Cargo.toml");
+    }
+    for note in &changes.notes {
+        let _ = writeln!(said, "  {note}");
+    }
+
+    let ignored = configure_gitignore(project)?;
+    let _ = writeln!(said, "  {} .gitignore entry(ies) added", ignored.len());
+
+    Ok(said)
+}
+
+/// Installs whatever of the required tools is missing.
+fn install_tools() -> Result<String, Failure> {
+    let missing = tools::missing(&|probe| {
+        let mut parts = probe.split(' ');
+        let Some(program) = parts.next() else {
+            return false;
+        };
+        std::process::Command::new(program)
+            .args(parts)
+            .arg("--version")
+            .output()
+            .is_ok_and(|out| out.status.success())
+    });
+    if missing.is_empty() {
+        return Ok("all tools present\n".to_string());
+    }
+
+    // --locked is passed through when binstall falls back to compiling
+    // from source; nextest refuses to build without it.
+    let status = std::process::Command::new("cargo")
+        .args(["binstall", "--no-confirm", "--locked"])
+        .args(&missing)
+        .status()
+        .map_err(|why| format!("cannot run cargo binstall: {why}"))?;
+    if !status.success() {
+        return Err(format!("installing {} failed", missing.join(", ")).into());
+    }
+    Ok(format!("installed: {}\n", missing.join(", ")))
 }
 
 #[cfg(test)]

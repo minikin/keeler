@@ -240,7 +240,7 @@ published to crates.io; both are installed from the repository itself.
       idempotence: `init(init(x))` leaves the tree byte-identical;
       `.gitignore` merging: no entry is duplicated under any equivalent
       form (`/target`, `target/`, `target`). Deps: T1.
-- [ ] **T4 — The tools, and the refusal.**
+- [x] **T4 — The tools, and the refusal.**
       Scenarios: contributes to _Every spec 01 scenario holds_ (T5).
       Tests: acceptance — missing tools are installed and present ones
       skipped, `--no-tools` installs none, and a directory without a
