@@ -1,5 +1,5 @@
 # The Keeler installer: what adopters run to put the workflow in their
-# project. Unlike xtask, this one is the product — it is published, and it
+# project. Unlike xtask, this one is the product — adopters run it, and it
 # carries everything it installs inside the binary.
 #
 # A library for now. The command line arrives with the behaviour it needs
@@ -10,10 +10,16 @@ name = "keeler"
 version = "0.2.0"
 edition = "2024"
 rust-version = "1.88"
-publish = true
+publish = false
 description = "Spec-first, test-driven workflow for Rust projects — installer"
 license = "MIT"
 repository = "https://github.com/minikin/keeler"
+
+# Not published to crates.io: adopters install with
+# `cargo install --git https://github.com/minikin/keeler --tag vX.Y.Z keeler`,
+# which checks the repository out whole. That is what lets the embedded
+# assets live where the repository already keeps them, with no second copy
+# to keep in step.
 
 [dependencies]
 # Carries the shipped tree inside the binary, so installing needs no

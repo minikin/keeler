@@ -40,14 +40,26 @@ non-Rust directory — must pass unchanged against the binary. This spec adds
 scenarios only for what is genuinely new: embedding, distribution, and the
 end of shell. The same discipline spec 04 applied to spec 02.
 
-**Distribution: crates.io, plus prebuilt binaries.** This is what the Rust
-ecosystem does for a cargo-adjacent developer tool, and Keeler already
-depends on the mechanism: every tool it installs — `cargo-nextest`,
-`cargo-binstall`, `just`, `cargo-llvm-cov`, `cargo-mutants` — is published
-there, and `install.sh` uses `cargo binstall` to fetch them. Publishing
-makes Keeler a participant in the scheme it relies on: `cargo binstall
-keeler` takes the prebuilt binary from the release, `cargo install keeler
---locked` compiles when no binary matches.
+**Distribution: `cargo install --git`, against a tag.**
+
+```
+cargo install --git https://github.com/minikin/keeler --tag v0.3.0 keeler
+keeler init .
+```
+
+Adopters are Rust projects — the installer's first act is to refuse a
+directory without a `Cargo.toml` — so cargo is present by definition and
+nothing else is needed. Pinning is cargo's own `--tag`.
+
+Publishing to crates.io was the first choice, on the grounds that every
+tool Keeler installs lives there and `install.sh` already fetches them with
+`cargo binstall`. It was dropped for two reasons. The practical one: a
+published package may only carry files under its own root, and the embedded
+assets are the repository's own working files — packaging them means either
+a second copy to keep in step or symlinks into the parent, and neither is
+worth a second source of truth. The plain one: a crates.io version cannot
+be withdrawn, only yanked, and there is no need to make releases
+irreversible before anyone depends on them.
 
 `curl | bash` is right for a tool that bootstraps the toolchain (`rustup`)
 or whose users may not have Rust at all (`ripgrep`). Neither is true here:
@@ -122,14 +134,13 @@ And   the lint gate no longer runs shellcheck
 And   coverage, CRAP and mutation reach every line of the deliverable
 ```
 
-### Scenario: A release publishes what each platform needs
+### Scenario: A release is installable from its tag
 
 ```
 Given a pushed tag that the guard accepts
 When  the release workflow runs
-Then  a prebuilt binary is attached for each supported platform, each with
-      its checksum
-And   the crate is published to crates.io
+Then  the tag is installable with cargo install --git, verified by
+      installing from it
 And   the gates still strictly precede publication
 ```
 
@@ -175,7 +186,7 @@ The crate is `keeler/` — bin plus lib, `publish = true`. Not `xtask`: that
 one is repository machinery and unpublishable by definition, while this is
 the product.
 
-- [ ] **T1 — The crate, the embedded tree, and both directions of the set.**
+- [x] **T1 — The crate, the embedded tree, and both directions of the set.**
       Scenarios: _What the binary carries is what the repository holds_,
       _Adopters receive nothing of the repository's own_. Tests:
       acceptance — the embedded set equals the repository's shipped set,
@@ -227,18 +238,18 @@ the product.
       the real-world CI job calls the xtask command. Deliverable:
       `scripts/` deleted. Deps: T5.
 - [ ] **T7 — The release ships a binary, and a version can be pinned.**
-      Scenarios: _A release publishes what each platform needs_, _An
-      adopter installs and pins a version_. Tests: static over
-      `release.yml` — a build matrix covering the supported targets, each
-      binary attached with the checksum `cargo xtask checksum` produces,
-      the crate published, and the guard and gates still strictly before
-      publication; acceptance — the version the binary reports is the one
+      Scenarios: _A release is installable from its tag_, _An adopter
+      installs and pins a version_. Tests: static over `release.yml` — the
+      guard and gates still strictly before the release is created, and a
+      job that installs the crate from the tag with `cargo install --git`
+      and runs it, so a tag nobody can install fails the release rather
+      than the first adopter; acceptance — the version the binary reports is the one
       it writes into the rules-file marker, so a pinned install is
       self-evident. Deps: T6.
 - [ ] **T8 — The way in, as written down.**
       Scenarios: _The upgrade path works after the installer moves_.
       Tests: acceptance — the shipped `keeler-upgrade` recipe installs
-      through cargo and no recipe names `install.sh`. Also rewrites
+      through `cargo install --git` and no recipe names `install.sh`. Also rewrites
       README, SECURITY.md and CONTRIBUTING.md, which name the script
       thirteen times between them, including the verify story — no
       scenario of their own, by decision. Deps: T7.
@@ -251,9 +262,8 @@ tell people how to install it.
 1. The shipped `Justfile` has a `keeler-upgrade` recipe that runs
    `curl … install.sh | bash -s .`. After T5 that URL 404s and every
    adopter's upgrade path breaks silently. It becomes
-   `cargo install keeler --locked` followed by `keeler init .` — the
-   always-works path, chosen over `cargo binstall` so an upgrade never
-   depends on a tool the project may not have. It is shipped behaviour, so
+   `cargo install --git … --tag` followed by `keeler init .`, the same
+   command an adopter used to install in the first place. It is shipped behaviour, so
    it is gated by the scenario above rather than left to a code review.
 
 2. `README.md`, `SECURITY.md` and `CONTRIBUTING.md` name `install.sh`
@@ -294,10 +304,10 @@ budget allowed. `tests/wild.rs` follows the checker into xtask.
 is process orchestration with an exit code to check, not logic — and it is
 the one place where a stub in the tests still earns its keep.
 
-**Release.** The workflow gains a build matrix — `x86_64` and `aarch64`,
-Linux and macOS — attaching each binary with the checksum `cargo xtask
-checksum` already produces, then publishes the crate. The guard and `just
-ci` keep their place strictly before anything is published.
+**Release.** No build matrix and no publish step: what a release must
+prove is that its tag is installable, so the workflow installs the crate
+from the tag it just created and runs it. The guard and `just ci` keep
+their place strictly before the release is created.
 
 **Invariants worth property tests.** Idempotence (`init(init(x))` leaves
 the tree byte-identical), own-content preservation (for any pre-existing
@@ -313,6 +323,9 @@ totality (the set of `.keeler` files equals the set reported), and
   a CI job proving it would be a lie.
 - `cargo-dist`. Its own decision, once the current release machinery has
   run on a real tag.
+- Publishing to crates.io, and the prebuilt-binary matrix that would
+  make `cargo binstall` worthwhile. Both become reasonable once there are
+  users for whom a minute of compiling is a cost worth removing.
 - Package managers — Homebrew, AUR, nixpkgs.
 - Keeping a `curl | bash` entry point, in any form.
 - Recreating or replacing the v0.1.0 release.
