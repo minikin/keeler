@@ -17,6 +17,9 @@ static SKILLS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../.claude/skills");
 /// project)`. The two differ only where a name would collide: the workflow
 /// template is `templates/keeler.yml` here and `keeler.yml` there, so a
 /// project's own workflows are never shadowed.
+/// The one file Keeler owns outright rather than merges.
+const RULES_FILE: &str = ".claude/keeler.md";
+
 const SINGLES: [(&str, &str); 7] = [
     (".claude/keeler.md", ".claude/keeler.md"),
     ("KEELER.md", "KEELER.md"),
@@ -123,37 +126,105 @@ fn embedded_single(source: &str) -> Option<&'static [u8]> {
 /// What a run did, so a silent no-op cannot pass for an install.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Report {
-    /// Files written because nothing was there before.
+    /// Files written because nothing was there before, or because they
+    /// already held exactly what Keeler carries.
     pub written: usize,
+    /// Files the project already had with content of its own. Theirs was
+    /// kept; Keeler's landed beside it as `<name>.keeler`. Reported by
+    /// name, because a conflict nobody is told about is a file nobody
+    /// merges.
+    pub conflicts: Vec<String>,
 }
 
 /// Anything a command can fail with, phrased for someone reading its output.
 pub type Failure = Box<dyn std::error::Error>;
 
-/// Writes every carried file into `project`.
+/// Writes every carried file into `project`, keeping whatever the project
+/// already had.
 ///
-/// Only the carrying, for now: what happens when a file is already there is
-/// the next task's business.
+/// A file with content of its own is never overwritten: Keeler's copy
+/// lands beside it as `<name>.keeler` and the run reports it by name. The
+/// rules file is the documented exception — it is Keeler's to own, so it is
+/// replaced and the text it replaced is kept as `.bak` rather than lost.
 ///
 /// # Errors
 ///
-/// Returns the first write that fails, naming the path — a half-installed
-/// project with no explanation is worse than a loud stop.
+/// Returns the first write that fails, naming the path. Every byte is
+/// resolved before the first write, so a missing carried file cannot leave
+/// a half-installed project behind.
 pub fn lay_down(project: &std::path::Path) -> Result<Report, Failure> {
-    let mut report = Report::default();
+    // Resolve everything first: a lookup that fails after twelve files are
+    // on disk leaves a tree nobody asked for.
+    let mut resolved = Vec::new();
     for (source, destination) in shipped_files() {
+        let bytes =
+            carried_bytes(&source).ok_or_else(|| format!("nothing is carried for {source}"))?;
+        resolved.push((source, destination, bytes));
+    }
+
+    let mut report = Report::default();
+    for (source, destination, bytes) in resolved {
         let target = project.join(&destination);
         if let Some(parent) = target.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|why| format!("cannot create {}: {why}", parent.display()))?;
         }
-        let bytes =
-            carried_bytes(&source).ok_or_else(|| format!("nothing is carried for {source}"))?;
-        std::fs::write(&target, bytes)
-            .map_err(|why| format!("cannot write {}: {why}", target.display()))?;
+
+        if source == RULES_FILE {
+            replace_rules(&target, bytes, &mut report)?;
+            continue;
+        }
+
+        match std::fs::read(&target) {
+            Ok(existing) if existing == bytes => {}
+            Ok(_) => {
+                let beside = with_suffix(&target, ".keeler");
+                write(&beside, bytes)?;
+                report.conflicts.push(destination);
+                continue;
+            }
+            Err(_) => {
+                write(&target, bytes)?;
+            }
+        }
         report.written += 1;
     }
     Ok(report)
+}
+
+/// The rules file: Keeler's to own, so an upgrade replaces it and keeps
+/// what it replaced. A project that edited it anyway must not lose the text
+/// silently — project-specific instructions belong in CLAUDE.md.
+fn replace_rules(
+    target: &std::path::Path,
+    bytes: &[u8],
+    report: &mut Report,
+) -> Result<(), Failure> {
+    match std::fs::read(target) {
+        Ok(existing) if existing == bytes => {}
+        Ok(existing) => {
+            write(&with_suffix(target, ".bak"), &existing)?;
+            write(target, bytes)?;
+            report.written += 1;
+            return Ok(());
+        }
+        Err(_) => {
+            write(target, bytes)?;
+        }
+    }
+    report.written += 1;
+    Ok(())
+}
+
+fn with_suffix(path: &std::path::Path, suffix: &str) -> std::path::PathBuf {
+    let mut name = path.as_os_str().to_os_string();
+    name.push(suffix);
+    std::path::PathBuf::from(name)
+}
+
+fn write(target: &std::path::Path, bytes: &[u8]) -> Result<(), Failure> {
+    std::fs::write(target, bytes)
+        .map_err(|why| format!("cannot write {}: {why}", target.display()).into())
 }
 
 #[cfg(test)]

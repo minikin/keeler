@@ -26,5 +26,8 @@ repository = "https://github.com/minikin/keeler"
 # network, no tarball and no clone to copy from.
 include_dir = "0.7"
 
+[dev-dependencies]
+proptest = "1"
+
 [lints]
 workspace = true

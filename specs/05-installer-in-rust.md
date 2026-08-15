@@ -194,7 +194,7 @@ the product.
       something embedded that adopters must never see); `keeler init` into
       an empty Rust project lays every one of them down. Deliverable:
       `keeler/` with `include_dir!`. Deps: none.
-- [ ] **T2 — A project's own content survives.**
+- [x] **T2 — A project's own content survives.**
       Scenarios: contributes to _Every spec 01 scenario holds_ (T5).
       Tests: acceptance — a pre-existing file with its own content is kept
       and Keeler's copy lands as `<name>.keeler`; the rules file is the

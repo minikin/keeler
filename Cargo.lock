@@ -152,6 +152,7 @@ name = "keeler"
 version = "0.2.0"
 dependencies = [
  "include_dir",
+ "proptest",
 ]
 
 [[package]]
