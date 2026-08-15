@@ -74,6 +74,8 @@ When  Keeler is installed into it
 Then  no pre-existing file's content changes except the documented
       append-only edits (CLAUDE.md import, .gitignore entries, Cargo.toml
       sections)
+And   Cargo.lock may be refreshed, but only when the manifest was edited —
+      it is cargo's record of that edit, not a change of Keeler's own
 And   every conflicting file is named and lands alongside as <name>.keeler
 ```
 
@@ -179,7 +181,10 @@ snapshots.
 
 **What is asserted, per shape.** Exit zero; the completeness-guard file
 list present; pre-existing files unchanged except the three documented
-append targets; conflict report names ⊆ actual `.keeler` files; second
+append targets, plus a `Cargo.lock` refresh when and only when the
+manifest was edited (`cargo add` cannot add a dev-dependency without one —
+found against `ripgrep`, the first pinned project that commits a
+lockfile); conflict report names ⊆ actual `.keeler` files; second
 run: zero tree delta. The workspace clone additionally asserts the
 workspace-root note. No `just dev`, no gates on their code.
 

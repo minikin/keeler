@@ -98,6 +98,24 @@ impl Fixture {
         fixture
     }
 
+    /// A project whose manifest already carries everything Keeler would
+    /// add, and which commits its lockfile. Installing into it edits no
+    /// manifest, so nothing can explain a lockfile that moves.
+    fn settled(name: &str) -> Self {
+        let fixture = Self::library(name);
+        let project = fixture.project();
+        std::fs::write(
+            project.join("Cargo.toml"),
+            "[package]\nname = \"wild\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+             [dev-dependencies]\nproptest = \"1\"\n\n\
+             [profile.mutants]\ninherits = \"dev\"\ndebug = 0\n\n\
+             [lints.clippy]\npedantic = { level = \"warn\", priority = -1 }\n",
+        )
+        .unwrap();
+        std::fs::write(project.join("Cargo.lock"), "# their pinned build\n").unwrap();
+        fixture
+    }
+
     fn empty(name: &str) -> Self {
         let root = std::env::temp_dir().join(format!("keeler-wild-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
@@ -709,5 +727,62 @@ fn the_local_suite_stays_offline() {
         std::fs::read_to_string(&log).unwrap_or_default(),
         after_probe,
         "the contract checker tried to reach the network",
+    );
+}
+
+#[test]
+fn a_lockfile_refreshed_by_a_manifest_edit_is_allowed() {
+    // Given a project that commits its lockfile — every binary crate does
+    let fixture = Fixture::lived_in("committed-lockfile");
+    std::fs::write(
+        fixture.project().join("Cargo.lock"),
+        "# their pinned build\n",
+    )
+    .unwrap();
+    // And a cargo that refreshes the lockfile when the manifest gains a
+    // dependency, the way a real one does
+    fixture.cargo_writes_a_lockfile();
+
+    // When Keeler is installed into it under the contract checker
+    let output = fixture.check();
+    let report = combined(&output);
+
+    // Then the refreshed lockfile is not held against the installer: it is
+    // cargo's record of an edit the contract already permits
+    assert!(
+        output.status.success(),
+        "the checker rejected a lockfile refresh that followed a manifest edit:\n{report}",
+    );
+}
+
+#[test]
+fn a_lockfile_moved_with_no_manifest_edit_is_caught() {
+    // Given a project whose manifest already has everything Keeler adds, so
+    // the installer edits no manifest at all
+    let fixture = Fixture::settled("unexplained-lockfile");
+    // And an installer that rewrites the lockfile anyway
+    let defective = fixture.write_script(
+        "bin/lockfile-install.sh",
+        &format!(
+            "#!/usr/bin/env bash\n\
+             set -euo pipefail\n\
+             bash {} \"$@\"\n\
+             printf 'not theirs\\n' > \"$1/Cargo.lock\"\n",
+            repo_root().join("install.sh").display(),
+        ),
+    );
+
+    // When the contract checker runs against it
+    let output = fixture.check_with(Some(&defective));
+    let report = combined(&output);
+
+    // Then the exemption does not cover it — nothing explains the change
+    assert!(
+        !output.status.success(),
+        "the checker excused a lockfile change with no manifest edit behind it:\n{report}",
+    );
+    assert!(
+        report.contains("Cargo.lock"),
+        "the checker did not name the lockfile it lost:\n{report}",
     );
 }

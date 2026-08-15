@@ -10,7 +10,8 @@
 #
 # What it asserts: the installer exits zero; every file a clean install
 # produces exists in the project afterwards; nothing the project already had
-# changed, bar the three documented append targets; every conflict is named
+# changed, bar the three documented append targets and a Cargo.lock the
+# manifest edit explains; every conflict is named
 # and matches the .keeler files on disk; a workspace root is told that its
 # manifest is the project's own to manage; and a second run moves nothing.
 #
@@ -131,10 +132,23 @@ echo "integration-check: $tracked_count tracked files present in $project"
 # other file the project already had must come out byte-identical — a
 # project's own content is not Keeler's to rewrite.
 clobbered=()
+
+# A refreshed Cargo.lock is cargo's record of the manifest edit, not a
+# change of Keeler's own: `cargo add --dev proptest` cannot leave the lock
+# alone. It is excused only when the manifest actually moved — a lockfile
+# that changes with nothing behind it is still the project's loss.
+manifest_edited=0
+if [ -e "$before/Cargo.toml" ] && ! cmp -s "$before/Cargo.toml" "$project/Cargo.toml"; then
+    manifest_edited=1
+fi
+
 while IFS= read -r rel; do
     [ -n "$rel" ] || continue
     case "$rel" in
         CLAUDE.md | .gitignore | Cargo.toml) continue ;;
+        Cargo.lock)
+            if [ "$manifest_edited" -eq 1 ]; then continue; fi
+            ;;
     esac
     if [ ! -e "$project/$rel" ]; then
         clobbered+=("$rel (deleted)")
@@ -167,7 +181,7 @@ if ! diff -u "$work/reported" "$work/on-disk" > "$work/conflict-diff" 2>&1; then
     exit 1
 fi
 
-echo "integration-check: $(wc -l < "$work/on-disk" | tr -d ' ') conflicts named and kept alongside"
+echo "integration-check: $(wc -l < "$work/on-disk" | tr -d ' ') conflict(s) named and kept alongside"
 
 # --- 7. A workspace root must be told it is one ---------------------------
 # Keeler cannot add proptest and the mutants profile to a root that has no

@@ -23,7 +23,10 @@ Installations pin a version with `KEELER_REF` and record it at the top of
   documented append targets (`CLAUDE.md`, `.gitignore`, `Cargo.toml`), and
   the conflicts the installer reports must match the `.keeler` files on
   disk exactly — an unnamed one is a surprise, a named one that does not
-  exist is a lie.
+  exist is a lie. A refreshed `Cargo.lock` is excused when, and only when,
+  the manifest was edited: `cargo add` cannot add a dev-dependency without
+  one, but a lockfile that moves with nothing behind it is still the
+  project's loss.
 - The checker installs a second time and requires the tree to be
   byte-identical afterwards. The second run has no exemptions: not one
   byte may move, including the three files the first run was allowed to
