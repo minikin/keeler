@@ -9,7 +9,52 @@ Installations pin a version with `KEELER_REF` and record it at the top of
 
 ## [Unreleased]
 
+### Added
+
+- `scripts/integration-check.sh` — the contract checker from spec 03. It
+  installs Keeler into a project directory and asserts the installer's
+  contract on it: exit zero, and every file a clean install produces
+  present afterwards. The tracked set is derived from a reference install
+  rather than listed, so it cannot drift from what `install.sh` does. CI
+  will point it at pinned real-world clones; the script never clones, so
+  the local suite stays offline.
+- The checker holds the installer to the project's own content: every file
+  the project already had must come out byte-identical, except the three
+  documented append targets (`CLAUDE.md`, `.gitignore`, `Cargo.toml`), and
+  the conflicts the installer reports must match the `.keeler` files on
+  disk exactly — an unnamed one is a surprise, a named one that does not
+  exist is a lie. A refreshed `Cargo.lock` is excused when, and only when,
+  the manifest was edited: `cargo add` cannot add a dev-dependency without
+  one, but a lockfile that moves with nothing behind it is still the
+  project's loss.
+- The checker installs a second time and requires the tree to be
+  byte-identical afterwards. The second run has no exemptions: not one
+  byte may move, including the three files the first run was allowed to
+  append to.
+- CI gained an `installer-real-world` job: it shallow-fetches
+  `dtolnay/anyhow`, `serde-rs/serde` and `BurntSushi/ripgrep` at pinned
+  commit SHAs — never a branch head, so nobody else's push can change what
+  our CI tests — and runs the contract checker against each. Bumping a pin
+  is a deliberate, reviewable diff.
+- The checker also holds the installer to its workspace contract: a root
+  with no `[package]` of its own must be told that its manifest is the
+  project's to manage, since Keeler cannot add proptest and the mutants
+  profile to member crates on its behalf.
+
 ### Changed
+
+- A gate now scans every installed file for prose about the Keeler
+  repository — its test files, spec numbers and divergences — and fails
+  naming the file, line and marker. Two leaks got in by hand before this
+  existed; the scan reproduces both. It matches prose, never mechanism, so
+  the shipped `Justfile` may still name `templates/keeler.yml` and the
+  upgrade URL.
+- The shipped `Justfile` no longer explains Keeler's own repository to the
+  projects it lands in. Its `lint` recipe carried a comment about the
+  Keeler repository's shell deliverable, `templates/keeler.yml` and the
+  release scripts — internals of no use to an adopter reading their own
+  Justfile. The comment now says what the recipe does for *them*, and that
+  the shellcheck branch is inert in their project.
 
 - The shipped workflow rules no longer talk about Keeler itself. Notes
   about this repository's own divergences — a shell deliverable, per-area

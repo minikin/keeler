@@ -18,8 +18,9 @@ here instead — project-specific instructions, in the file meant for them.
 
 - **The deliverable is shell, not Rust.** The crate is the installer's
   test harness, so the suite is not one `tests/acceptance.rs` but
-  per-area files: `tests/installer.rs` (spec 01) and `tests/release.rs`
-  (spec 02). One test per scenario, named after it, as usual.
+  per-area files: `tests/installer.rs` (spec 01), `tests/release.rs`
+  (spec 02) and `tests/wild.rs` (spec 03). One test per scenario, named
+  after it, as usual.
 - **Proptest seeds live beside the tests.** With no `lib.rs` to anchor
   proptest's default path, the harness sets
   `FileFailurePersistence::WithSource("proptest-regressions")`, so seeds
