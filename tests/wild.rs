@@ -577,3 +577,137 @@ fn an_installer_that_drifts_on_every_run_is_caught() {
         "the checker did not name the drifting path:\n{report}",
     );
 }
+
+/// The block of `ci.yml` belonging to one job, by name.
+fn job_block(workflow: &str, job: &str) -> String {
+    let mut block = String::new();
+    let mut inside = false;
+    for line in workflow.lines() {
+        let entry = line.strip_prefix("  ").map(str::trim_end);
+        if let Some(entry) =
+            entry.filter(|e| !e.starts_with(' ') && !e.starts_with('#') && e.ends_with(':'))
+        {
+            inside = entry.trim_end_matches(':') == job;
+        }
+        if inside {
+            block.push_str(line);
+            block.push('\n');
+        }
+    }
+    block
+}
+
+#[test]
+fn the_pins_are_exact() {
+    // Given the integration job's project list
+    let workflow = std::fs::read_to_string(repo_root().join(".github/workflows/ci.yml")).unwrap();
+    let job = job_block(&workflow, "installer-real-world");
+    assert!(
+        !job.is_empty(),
+        "ci.yml has no installer-real-world job — nothing points the checker at real projects",
+    );
+
+    // Then the three projects are there, by different authors
+    for repo in ["dtolnay/anyhow", "serde-rs/serde", "BurntSushi/ripgrep"] {
+        assert!(
+            job.contains(repo),
+            "the real-world matrix does not pin {repo}"
+        );
+    }
+
+    // And every ref is a full commit SHA, never a branch head: a third
+    // party's push must not change what CI tests
+    let shas: Vec<&str> = job
+        .lines()
+        .filter_map(|line| line.split_once("sha:"))
+        .map(|(_, sha)| sha.trim().trim_matches('"'))
+        .collect();
+    assert_eq!(
+        shas.len(),
+        3,
+        "expected one pinned sha per project: {shas:?}"
+    );
+    for sha in &shas {
+        assert!(
+            sha.len() == 40
+                && sha
+                    .chars()
+                    .all(|c| c.is_ascii_hexdigit() && !c.is_uppercase()),
+            "{sha} is not a full lowercase commit SHA — a pin must be exact",
+        );
+    }
+
+    // And the clone is a shallow fetch of that SHA, with no branch anywhere
+    assert!(
+        job.contains("--depth 1") && job.contains("matrix.sha"),
+        "the clone step does not shallow-fetch the pinned SHA:\n{job}",
+    );
+    for branchy in ["--branch", "origin/main", "origin/master", "clone https"] {
+        assert!(
+            !job.contains(branchy),
+            "the clone step reaches for `{branchy}` — that is a moving target, not a pin",
+        );
+    }
+
+    // And each entry is judged by the contract checker
+    assert!(
+        job.contains("scripts/integration-check.sh"),
+        "the real-world job does not run the contract checker:\n{job}",
+    );
+
+    // And the job says how a pin gets bumped, since nothing automatic will
+    assert!(
+        job.to_lowercase().contains("bump"),
+        "nothing tells a reader how to move a pin deliberately:\n{job}",
+    );
+}
+
+#[test]
+fn the_local_suite_stays_offline() {
+    // Given the integration checks
+    let checker =
+        std::fs::read_to_string(repo_root().join("scripts/integration-check.sh")).unwrap();
+
+    // Then the checker itself never reaches for a repository: cloning is the
+    // workflow's job, which is what keeps this suite runnable with no network
+    for reach in ["git clone", "git fetch", "ls-remote", "curl ", "wget "] {
+        assert!(
+            !checker.contains(reach),
+            "integration-check.sh reaches for `{reach}` — the local suite would need network",
+        );
+    }
+
+    // And when the harness runs it, the network guarantee of spec 01 holds:
+    // the curl stub intercepts, and nothing calls it
+    let fixture = Fixture::lived_in("offline");
+    let log = fixture.root.join("network-calls.log");
+    let intercepted = std::process::Command::new("bash")
+        .args(["-c", "curl --version"])
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                fixture.root.join("bin").display(),
+                std::env::var("PATH").unwrap(),
+            ),
+        )
+        .output()
+        .unwrap();
+    assert!(
+        !intercepted.status.success(),
+        "the fixture does not stub out curl — a case could reach the network",
+    );
+    let after_probe = std::fs::read_to_string(&log).unwrap_or_default();
+
+    let output = fixture.check();
+    assert!(
+        output.status.success(),
+        "the checker failed:\n{}",
+        combined(&output),
+    );
+    assert_eq!(
+        std::fs::read_to_string(&log).unwrap_or_default(),
+        after_probe,
+        "the contract checker tried to reach the network",
+    );
+}

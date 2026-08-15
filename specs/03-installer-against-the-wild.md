@@ -146,7 +146,7 @@ is pinned by both a passing and a failing case.
       snapshots, passing on a byte-identical second run; against a
       non-idempotent installer (one that appends on every run) it fails
       naming the drifting path. Deps: T1.
-- [ ] **T5 — The real-world job, on exact pins.**
+- [x] **T5 — The real-world job, on exact pins.**
       Scenarios: _The pins are exact_. Tests: acceptance (static, over
       `ci.yml`) — an `installer-real-world` job whose matrix carries the
       three projects, each ref a 40-character lowercase hex SHA, fetched
@@ -155,7 +155,7 @@ is pinned by both a passing and a failing case.
       The end-to-end contract over real repositories is observable only in
       CI — like spec 02's release job, its first real run is its
       integration test. Deps: T1, T2, T3, T4.
-- [ ] **T6 — The local suite stays offline.**
+- [x] **T6 — The local suite stays offline.**
       Scenarios: _The local suite stays offline_. Tests: acceptance — the
       checker contains no `clone`, `fetch` or `ls-remote` (cloning is the
       workflow's job, not the script's), and a full harness run leaves the

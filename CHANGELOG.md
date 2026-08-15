@@ -28,6 +28,11 @@ Installations pin a version with `KEELER_REF` and record it at the top of
   byte-identical afterwards. The second run has no exemptions: not one
   byte may move, including the three files the first run was allowed to
   append to.
+- CI gained an `installer-real-world` job: it shallow-fetches
+  `dtolnay/anyhow`, `serde-rs/serde` and `BurntSushi/ripgrep` at pinned
+  commit SHAs — never a branch head, so nobody else's push can change what
+  our CI tests — and runs the contract checker against each. Bumping a pin
+  is a deliberate, reviewable diff.
 - The checker also holds the installer to its workspace contract: a root
   with no `[package]` of its own must be told that its manifest is the
   project's to manage, since Keeler cannot add proptest and the mutants

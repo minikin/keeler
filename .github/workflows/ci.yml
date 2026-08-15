@@ -162,6 +162,44 @@ jobs:
           [ "$(git status --short | sort)" = "$before" ] || {
             echo "second run modified the project"; git status --short; exit 1; }
 
+  installer-real-world:
+    name: Installer against ${{ matrix.repo }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Pinned commits, never branches: a third party's push must not
+          # change what our CI tests. Nothing bumps these automatically —
+          # to bump one, resolve the new commit yourself
+          # (`git ls-remote https://github.com/<repo> HEAD`) and send it as
+          # its own reviewable diff.
+          - repo: dtolnay/anyhow
+            sha: bf3ed9149f4334c984c1ad252b534107b307078c
+            shape: single-crate library
+          - repo: serde-rs/serde
+            sha: 747814f7d5fbab872df3b02f070c165b91bde062
+            shape: workspace root with member crates
+          - repo: BurntSushi/ripgrep
+            sha: 3fce3b5bb0236da2df6d99672afb8a719642eca7
+            shape: binary workspace with its own workflows
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Fetch ${{ matrix.repo }} at its pinned commit
+        run: |
+          # A shallow fetch of one exact object. No clone, no branch name,
+          # no default-branch head — the pin is the only thing named.
+          mkdir -p "$RUNNER_TEMP/subject"
+          cd "$RUNNER_TEMP/subject"
+          git init -q .
+          git remote add origin "https://github.com/${{ matrix.repo }}"
+          git fetch -q --depth 1 origin "${{ matrix.sha }}"
+          git checkout -q FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "${{ matrix.sha }}"
+      - name: The installer's contract holds on a ${{ matrix.shape }}
+        run: ./scripts/integration-check.sh "$RUNNER_TEMP/subject"
+
   installer-bootstrap:
     name: Installer bootstrap (installs the tools itself)
     runs-on: ubuntu-latest
