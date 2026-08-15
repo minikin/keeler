@@ -75,7 +75,7 @@ jobs:
       # run. One owner for that law: the same guard the release workflow
       # runs at tag time (the constructed tag makes its tag-check a no-op).
       - name: VERSION, marker and CHANGELOG agree
-        run: scripts/release-guard.sh "v$(tr -d '[:space:]' < VERSION)"
+        run: cargo xtask release-guard "v$(tr -d '[:space:]' < VERSION)"
 
   installer:
     name: Installer (${{ matrix.os }})

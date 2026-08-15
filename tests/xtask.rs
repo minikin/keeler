@@ -93,3 +93,126 @@ fn adopters_receive_nothing_new() {
         "the shipped workflow set changed",
     );
 }
+
+fn release_workflow() -> String {
+    std::fs::read_to_string(repo_root().join(".github/workflows/release.yml")).unwrap()
+}
+
+#[test]
+fn the_release_workflow_speaks_xtask() {
+    // Given the release workflow
+    let workflow = release_workflow();
+
+    // Then guard, notes and checksum run through `cargo xtask`
+    for command in ["release-guard", "release-notes", "checksum"] {
+        assert!(
+            workflow.contains(&format!("cargo xtask {command}")),
+            "the workflow does not run `cargo xtask {command}`",
+        );
+    }
+
+    // And no step invokes a script under scripts/
+    let script_steps: Vec<&str> = workflow
+        .lines()
+        .filter(|line| line.contains("scripts/"))
+        .collect();
+    assert!(
+        script_steps.is_empty(),
+        "the release still runs shell scripts: {script_steps:?}",
+    );
+
+    // And the guard and the gates still strictly precede publication
+    let position = |needle: &str| {
+        workflow
+            .find(needle)
+            .unwrap_or_else(|| panic!("the workflow lost `{needle}`"))
+    };
+    let publish = position("gh release create");
+    assert!(
+        position("cargo xtask release-guard") < publish && position("just ci") < publish,
+        "the guard or the gates no longer precede publication",
+    );
+}
+
+#[test]
+fn no_workflow_calls_a_script_that_is_not_there() {
+    // A workflow naming a deleted script fails only when it runs, which for
+    // the release workflow means at the moment of a release. Cheap to check
+    // here, expensive to discover there.
+    let workflows = repo_root().join(".github/workflows");
+    let mut dangling = Vec::new();
+    for entry in std::fs::read_dir(&workflows).unwrap().map(Result::unwrap) {
+        let workflow = std::fs::read_to_string(entry.path()).unwrap();
+        for (number, line) in workflow.lines().enumerate() {
+            let Some(rest) = line.split("scripts/").nth(1) else {
+                continue;
+            };
+            let script: String = rest
+                .chars()
+                .take_while(|c| !c.is_whitespace() && *c != '"' && *c != '\'')
+                .collect();
+            if !repo_root().join("scripts").join(&script).exists() {
+                dangling.push(format!(
+                    "{}: line {}: scripts/{script}",
+                    entry.file_name().to_string_lossy(),
+                    number + 1,
+                ));
+            }
+        }
+    }
+    assert!(
+        dangling.is_empty(),
+        "workflows call scripts that do not exist: {dangling:?}",
+    );
+}
+
+#[test]
+fn the_shell_gate_covers_exactly_the_shell_that_remains() {
+    // Given the repository after the migration
+    let mut scripts: Vec<String> = Vec::new();
+    for dir in [".", "scripts"] {
+        let Ok(entries) = std::fs::read_dir(repo_root().join(dir)) else {
+            continue;
+        };
+        for entry in entries.map(Result::unwrap) {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if path.extension().is_some_and(|ext| ext == "sh") {
+                scripts.push(if dir == "." {
+                    name
+                } else {
+                    format!("{dir}/{name}")
+                });
+            }
+        }
+    }
+    scripts.sort();
+
+    // Then install.sh and the spec 03 contract checker are the only ones
+    assert_eq!(
+        scripts,
+        vec![
+            "install.sh".to_string(),
+            "scripts/integration-check.sh".to_string(),
+        ],
+        "the shell that remains is not what the spec says it should be",
+    );
+
+    // And no release logic remains in shell
+    for gone in ["release-notes.sh", "release-guard.sh", "checksum.sh"] {
+        assert!(
+            !repo_root().join("scripts").join(gone).exists(),
+            "{gone} is still here — the release logic did not move",
+        );
+    }
+
+    // And the lint gate covers exactly those two — by covering everything
+    // under scripts/, which is the same set while the inventory above
+    // holds. Naming them instead would leave tomorrow's script ungated,
+    // which spec 02 forbids.
+    let justfile = std::fs::read_to_string(repo_root().join("Justfile")).unwrap();
+    assert!(
+        justfile.contains("shellcheck install.sh scripts/*.sh"),
+        "the lint gate no longer covers the shell that remains",
+    );
+}

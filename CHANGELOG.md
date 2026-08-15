@@ -73,6 +73,12 @@ Installations pin a version with `KEELER_REF` and record it at the top of
 
 ### Changed
 
+- The release runs through `cargo xtask`, not shell. `scripts/`
+  release-notes.sh, checksum.sh and release-guard.sh are gone; the release
+  workflow and CI's version job call the commands directly. Spec 02's
+  acceptance suite kept every scenario name and now drives the binary, so
+  the contracts are the same ones, verified the same way.
+
 - A gate now scans every installed file for prose about the Keeler
   repository — its test files, spec numbers and divergences — and fails
   naming the file, line and marker. Two leaks got in by hand before this

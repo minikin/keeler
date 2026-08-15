@@ -141,7 +141,7 @@ without paying a subprocess per case.
       property — guard diagnosis: for any disagreeing (tag, VERSION,
       marker) triple the error names every mismatched pair, never just the
       first. Deps: T1.
-- [ ] **T5 — The switch: xtask is what runs, and the scripts go.**
+- [x] **T5 — The switch: xtask is what runs, and the scripts go.**
       Scenarios: _The xtask commands honor every spec 02 contract_, _The
       release workflow speaks xtask_, _The shell gate covers exactly the
       shell that remains_. Tests: spec 02's

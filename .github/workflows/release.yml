@@ -38,13 +38,13 @@ jobs:
       # GITHUB_REF_NAME is the tag; the guard re-checks the same consistency
       # the version CI job enforces, at the moment it matters most.
       - name: The tag tells the truth
-        run: scripts/release-guard.sh "$GITHUB_REF_NAME"
+        run: cargo xtask release-guard "$GITHUB_REF_NAME"
       - name: Gates before anything is published
         run: just ci
       - name: Release notes are the CHANGELOG section
-        run: scripts/release-notes.sh "$(tr -d '[:space:]' < VERSION)" CHANGELOG.md > notes.md
+        run: cargo xtask release-notes "$(tr -d '[:space:]' < VERSION)" CHANGELOG.md > notes.md
       - name: Checksum for install.sh
-        run: scripts/checksum.sh install.sh > install.sh.sha256
+        run: cargo xtask checksum install.sh > install.sh.sha256
       # `create` fails if the release already exists — a published release
       # is never overwritten, edited, or clobbered by a rerun.
       - name: Create the release

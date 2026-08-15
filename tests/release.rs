@@ -1,7 +1,13 @@
-//! Tests for the release scripts under `scripts/` — the offline pieces of
-//! the release machinery (spec 02). The end-to-end act of publishing is
-//! only observable on GitHub; everything the workflow delegates to a
-//! script is pinned here against fixture files.
+//! Spec 02's contracts, now met by `cargo xtask` instead of shell.
+//!
+//! The scenario names and fixtures are unchanged on purpose: spec 02 is the
+//! oracle for the migration in spec 04, so these tests must pass verbatim
+//! against the new implementation. They drive the built binary, not the
+//! library, because the exit code and the stream a message lands on are
+//! part of the contract the release workflow depends on.
+//!
+//! The end-to-end act of publishing is only observable on GitHub; whatever
+//! the workflow delegates to a command is pinned here against fixtures.
 
 use std::fmt::Write as _;
 use std::path::PathBuf;
@@ -10,13 +16,33 @@ fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
-/// Runs a script from `scripts/` with the given arguments.
-fn run_script(script: &str, args: &[&str]) -> std::process::Output {
-    std::process::Command::new("bash")
-        .arg(repo_root().join("scripts").join(script))
+/// The xtask binary this suite drives.
+///
+/// `CARGO_BIN_EXE_xtask` is only defined for the package that declares the
+/// binary, and this suite lives in the harness — so the path is derived from
+/// where the test binary itself was put, which follows the profile and any
+/// `CARGO_TARGET_DIR` without being told.
+fn xtask_bin() -> PathBuf {
+    let mut path = std::env::current_exe().expect("the test binary has a path");
+    path.pop();
+    if path.ends_with("deps") {
+        path.pop();
+    }
+    let binary = path.join("xtask");
+    assert!(
+        binary.is_file(),
+        "{} is not built — run the suite with `--workspace` so it is",
+        binary.display(),
+    );
+    binary
+}
+
+/// Runs an xtask command, as the release workflow does.
+fn run_xtask(args: &[&str]) -> std::process::Output {
+    std::process::Command::new(xtask_bin())
         .args(args)
         .output()
-        .expect("failed to spawn bash")
+        .expect("failed to run the xtask binary")
 }
 
 /// A fixture file in its own temp directory, removed on drop — no test run
@@ -88,7 +114,7 @@ fn the_release_notes_are_exactly_the_versions_changelog_section() {
     let changelog = temp_file("notes-fixture", FIXTURE_CHANGELOG);
 
     // When the notes for version 0.2.0 are extracted
-    let output = run_script("release-notes.sh", &["0.2.0", changelog.to_str().unwrap()]);
+    let output = run_xtask(&["release-notes", "0.2.0", changelog.to_str().unwrap()]);
     let notes = String::from_utf8_lossy(&output.stdout);
 
     // Then the output is the body of the 0.2.0 section ...
@@ -126,7 +152,7 @@ fn extracting_notes_for_an_absent_version_fails_loudly() {
     let changelog = temp_file("absent-fixture", FIXTURE_CHANGELOG);
 
     // When the notes for 9.9.9 are extracted
-    let output = run_script("release-notes.sh", &["9.9.9", changelog.to_str().unwrap()]);
+    let output = run_xtask(&["release-notes", "9.9.9", changelog.to_str().unwrap()]);
 
     // Then the extraction exits non-zero and names the version
     assert!(
@@ -153,9 +179,9 @@ fn a_pushed_tag_that_matches_version_produces_the_release() {
     let workflow = release_workflow();
     for wired in [
         "tags:",
-        "scripts/release-guard.sh",
-        "scripts/release-notes.sh",
-        "scripts/checksum.sh",
+        "cargo xtask release-guard",
+        "cargo xtask release-notes",
+        "cargo xtask checksum",
         "--notes-file",
         "install.sh.sha256",
     ] {
@@ -169,7 +195,9 @@ fn the_gates_run_before_anything_is_published() {
     // die before creating anything: guard and gates strictly precede the
     // release step.
     let workflow = release_workflow();
-    let guard = workflow.find("release-guard.sh").expect("no guard step");
+    let guard = workflow
+        .find("cargo xtask release-guard")
+        .expect("no guard step");
     let gates = workflow.find("just ci").expect("no gates step");
     let create = workflow.find("gh release create").expect("no create step");
     assert!(
@@ -234,12 +262,11 @@ fn release_fixture(name: &str, version: &str) -> PathBuf {
 
 /// Runs the release guard from inside a fixture directory.
 fn run_guard(dir: &std::path::Path, tag: &str) -> std::process::Output {
-    std::process::Command::new("bash")
-        .arg(repo_root().join("scripts/release-guard.sh"))
-        .arg(tag)
+    std::process::Command::new(xtask_bin())
+        .args(["release-guard", tag])
         .current_dir(dir)
         .output()
-        .expect("failed to spawn bash")
+        .expect("failed to run the xtask binary")
 }
 
 #[test]
@@ -321,10 +348,10 @@ fn the_published_checksum_verifies_the_script() {
     std::fs::create_dir_all(&dir).unwrap();
     let script = dir.join("install.sh");
     std::fs::write(&script, "#!/usr/bin/env bash\necho keeler\n").unwrap();
-    let output = run_script("checksum.sh", &[script.to_str().unwrap()]);
+    let output = run_xtask(&["checksum", script.to_str().unwrap()]);
     assert!(
         output.status.success(),
-        "checksum.sh failed: {}",
+        "checksum failed: {}",
         String::from_utf8_lossy(&output.stderr),
     );
     std::fs::write(dir.join("install.sh.sha256"), &output.stdout).unwrap();
@@ -384,7 +411,7 @@ proptest::proptest! {
         // When each version is extracted, every entry appears in its own
         // extraction and in no other
         for (i, version) in versions.iter().enumerate() {
-            let output = run_script("release-notes.sh", &[version, path.to_str().unwrap()]);
+            let output = run_xtask(&["release-notes", version, path.to_str().unwrap()]);
             proptest::prop_assert!(output.status.success(), "extraction failed for {version}");
             let notes = String::from_utf8_lossy(&output.stdout).into_owned();
             for (k, count) in entry_counts.iter().enumerate() {
