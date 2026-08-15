@@ -25,9 +25,15 @@ here instead — project-specific instructions, in the file meant for them.
   proptest's default path, the harness sets
   `FileFailurePersistence::WithSource("proptest-regressions")`, so seeds
   land at `tests/installer.proptest-regressions`. Commit them.
-- **There is no `crap-baseline.json` here.** The harness has no library
-  or binary targets, so coverage, CRAP and mutation have nothing to
-  measure and the recipes say so instead of failing (spec 01). Spec 04
-  ends this divergence: once the release tooling becomes an xtask crate,
-  the baseline returns and the gates measure real sources.
+- **The gates measure `xtask/`, and only it.** The harness itself has no
+  library or binary target — its job is to drive `install.sh` as a
+  subprocess — so coverage, CRAP and mutation see the release tooling and
+  nothing else. That is real code doing a real job, so `crap-baseline.json`
+  is committed and `just crap-delta` ratchets against it. Until spec 04
+  there was nothing here to measure at all, and the recipes said so rather
+  than failing (spec 01).
+- **Run the gates with the workspace selected.** The shipped recipes
+  already pass `--workspace`; a bare `cargo nextest run` or `cargo mutants`
+  in this repository silently skips the xtask member and reports success
+  having tested nothing.
 
