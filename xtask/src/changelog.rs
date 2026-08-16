@@ -67,16 +67,14 @@ fn is_fence(line: &str) -> bool {
     line.starts_with("```") || line.starts_with("~~~")
 }
 
-/// The body of `version`'s section: everything between its heading and the
-/// next `## ` heading, minus the trailing link-reference block and blank
-/// lines at either edge.
+/// Every line between `version`'s heading and the next one, or `None`
+/// when there is no such heading.
 ///
-/// # Errors
-///
-/// Returns [`NotesError::NoSuchVersion`] when the CHANGELOG has no section
-/// for the version — an absent version is loud, never empty notes.
-pub fn release_notes(changelog: &str, version: &str) -> Result<String, NotesError> {
-    let mut body: Vec<&str> = Vec::new();
+/// A heading is only a heading outside a fenced code block. Boundary
+/// finding is separated from the trimming below so that neither has to be
+/// read while thinking about the other.
+fn section_lines<'a>(changelog: &'a str, version: &str) -> Option<Vec<&'a str>> {
+    let mut body = Vec::new();
     let mut found = false;
     let mut inside = false;
     let mut fenced = false;
@@ -92,10 +90,23 @@ pub fn release_notes(changelog: &str, version: &str) -> Result<String, NotesErro
             body.push(line);
         }
     }
-    if !found {
-        return Err(NotesError::NoSuchVersion(version.to_string()));
-    }
+    found.then_some(body)
+}
 
+/// The body of `version`'s section: everything between its heading and the
+/// next `## ` heading, minus the trailing link-reference block and blank
+/// lines at either edge.
+///
+/// # Errors
+///
+/// Returns [`NotesError::NoSuchVersion`] when the CHANGELOG has no section
+/// for the version — an absent version is loud, never empty notes.
+pub fn release_notes(changelog: &str, version: &str) -> Result<String, NotesError> {
+    let Some(body) = section_lines(changelog, version) else {
+        return Err(NotesError::NoSuchVersion(version.to_string()));
+    };
+
+    let mut body = body;
     // Only the trailing link block is scenery, and only the last section can
     // have collected it — a link-style line inside the body is content.
     while body
@@ -167,6 +178,17 @@ mod tests {
         // by policy, so nothing can repair it afterwards.
         let changelog = "# Changelog\n\n## [1.0.0] — 2026-01-01\n\n## [0.9.0]\n\n- old\n";
         assert!(release_notes(changelog, "1.0.0").is_err());
+    }
+
+    #[test]
+    fn an_empty_section_says_where_the_entries_probably_are() {
+        // This message is read at release time by someone who is about to
+        // tag. Naming the likely cause turns a refusal into an
+        // instruction.
+        let changelog = "## [1.0.0]\n\n## [0.9.0]\n\n- old\n";
+        let said = release_notes(changelog, "1.0.0").unwrap_err().to_string();
+        assert!(said.contains("1.0.0"), "{said}");
+        assert!(said.contains("Unreleased"), "{said}");
     }
 
     #[test]

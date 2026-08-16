@@ -64,38 +64,47 @@ fn release_notes_command(args: &[String]) -> Result<String, Failure> {
 /// contributes nothing to compare.
 fn declared_versions(root: &std::path::Path) -> Result<Vec<(String, String)>, Failure> {
     let root_manifest = read(&root.join("Cargo.toml").display().to_string())?;
-    let mut found = Vec::new();
-    if let Some(version) = guard::package_version(&root_manifest) {
-        found.push(("Cargo.toml".to_string(), version.to_string()));
-    }
-    // The claim a workspace makes on behalf of every member that inherits
-    // it. Without this, a workspace that moved to `version.workspace =
-    // true` left the guard with nothing to compare and calling that
-    // agreement — the very drift T7 exists to catch.
-    if let Some(version) = guard::workspace_version(&root_manifest) {
-        found.push((
-            "Cargo.toml [workspace.package]".to_string(),
-            version.to_string(),
-        ));
-    }
+    let mut claims = root_claims(&root_manifest);
     for member in guard::workspace_members(&root_manifest) {
-        let rel = format!("{member}/Cargo.toml");
-        let path = root.join(&rel);
-        if !path.is_file() {
-            return Err(format!("workspace member {member} has no Cargo.toml").into());
-        }
-        let manifest = read(&path.display().to_string())?;
-        if let Some(version) = guard::package_version(&manifest) {
-            found.push((rel, version.to_string()));
-        }
+        claims.push(member_claim(root, &member)?);
     }
+
     // A gate that measured nothing must not report success. Every
     // repository this runs in declares a version somewhere; finding none
     // means the parse failed, not that everything agrees.
-    if found.is_empty() {
+    let declared: Vec<(String, String)> = claims.into_iter().flatten().collect();
+    if declared.is_empty() {
         return Err("no manifest declares a version — nothing could be compared".into());
     }
-    Ok(found)
+    Ok(declared)
+}
+
+/// What the root manifest claims: its own package version, and the version
+/// it declares for members that inherit one. Without the second, a
+/// workspace that moved to `version.workspace = true` left the guard with
+/// nothing to compare and called that agreement.
+fn root_claims(manifest: &str) -> Vec<Option<(String, String)>> {
+    vec![
+        guard::package_version(manifest)
+            .map(|version| ("Cargo.toml".to_string(), version.to_string())),
+        guard::workspace_version(manifest).map(|version| {
+            (
+                "Cargo.toml [workspace.package]".to_string(),
+                version.to_string(),
+            )
+        }),
+    ]
+}
+
+/// What one member declares, if it declares a version of its own.
+fn member_claim(root: &std::path::Path, member: &str) -> Result<Option<(String, String)>, Failure> {
+    let rel = format!("{member}/Cargo.toml");
+    let path = root.join(&rel);
+    if !path.is_file() {
+        return Err(format!("workspace member {member} has no Cargo.toml").into());
+    }
+    let manifest = read(&path.display().to_string())?;
+    Ok(guard::package_version(&manifest).map(|version| (rel, version.to_string())))
 }
 
 /// `release-guard <tag>`, against the repository rooted at `root`.
@@ -309,6 +318,40 @@ mod tests {
             error.contains("member/Cargo.toml") && error.contains("0.0.1"),
             "the refusal does not name the member and its version: {error}",
         );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_repository_where_no_manifest_declares_a_version_is_refused() {
+        // Not "everything agrees" — nothing was compared. A gate that
+        // measured nothing must not report success, which is how the
+        // inherited-version case slipped through before.
+        let root = repo_fixture("no-version", "1.2.3", "1.2.3", "## [1.2.3]\n\n- shipped\n");
+        std::fs::write(root.join("Cargo.toml"), "[workspace]\nmembers = []\n").unwrap();
+        let _ = std::fs::remove_dir_all(root.join("member"));
+
+        let error = release_guard_command(&root, &["v1.2.3".into()])
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("nothing could be compared"), "{error}");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_workspace_that_declares_the_version_for_its_members_is_checked() {
+        let root = repo_fixture("inherited", "1.2.3", "1.2.3", "## [1.2.3]\n\n- shipped\n");
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = []\n\n[workspace.package]\nversion = \"0.0.1\"\n",
+        )
+        .unwrap();
+        let _ = std::fs::remove_dir_all(root.join("member"));
+
+        let error = release_guard_command(&root, &["v1.2.3".into()])
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("workspace.package"), "{error}");
+        assert!(error.contains("0.0.1"), "{error}");
         let _ = std::fs::remove_dir_all(root);
     }
 
