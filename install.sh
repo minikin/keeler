@@ -69,7 +69,12 @@ fi
 # The sentinel must be repo-only: Keeler ships specs/TEMPLATE.md into every
 # project, so probing for a shipped file would mistake an already-Keelered
 # project for the source and turn every piped upgrade into a silent no-op.
-if [ ! -f "$SRC/VERSION" ] || [ ! -f "$SRC/templates/keeler.yml" ]; then
+# An explicit pin means fetch, always. Piped, the script has no file of
+# its own, so SRC becomes the working directory — and a Keeler clone looks
+# exactly like an unpacked tarball. Using it would install whatever is
+# checked out while the caller believes they pinned a version.
+if [ -n "${KEELER_REF:-}${KEELER_TARBALL:-}" ] \
+    || [ ! -f "$SRC/VERSION" ] || [ ! -f "$SRC/templates/keeler.yml" ]; then
     tmp="$(mktemp -d)"
     trap 'rm -rf "$tmp"' EXIT
     say "Fetching Keeler"

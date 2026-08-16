@@ -1589,3 +1589,43 @@ fn a_mistyped_flag_is_refused_rather_than_taken_for_a_path() {
         "it installed anyway"
     );
 }
+
+#[test]
+fn a_pinned_version_is_fetched_even_from_inside_a_clone() {
+    // Given a piped run whose working directory happens to be a Keeler
+    // clone, and an explicit pin
+    let project = TempProject::new("pin-honoured", MANIFEST_WITH_PROPTEST);
+    let output = std::process::Command::new("bash")
+        .arg("-c")
+        .arg(format!(
+            "cd {} && cat install.sh | bash -s -- {} --no-tools",
+            repo_root().display(),
+            project.path().display(),
+        ))
+        .env("KEELER_REF", "v0.0.0-does-not-exist")
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                project.path().join("bin").display(),
+                std::env::var("PATH").unwrap(),
+            ),
+        )
+        .output()
+        .expect("failed to run install.sh");
+
+    // Then the pin is honoured rather than silently ignored. Piped, the
+    // script has no file of its own, so SRC becomes the working directory
+    // — and a Keeler clone looks exactly like an unpacked tarball. The run
+    // then installs whatever is checked out, while the caller believes
+    // they pinned a version.
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert!(
+        !output.status.success(),
+        "an unfetchable pin was silently ignored and the checkout used instead:\n{said}",
+    );
+}

@@ -47,6 +47,15 @@ pub fn package_version(manifest: &str) -> Option<&str> {
     None
 }
 
+/// Whether a member entry is a pattern rather than a directory.
+///
+/// Cargo expands these; this parser does not, and a pattern taken for a
+/// path refused a repository that had done nothing wrong.
+#[must_use]
+pub fn is_glob(member: &str) -> bool {
+    member.contains(['*', '?', '['])
+}
+
 /// The workspace members a root manifest lists, in order.
 ///
 /// A deliberately small parse: the `members = [...]` array inside

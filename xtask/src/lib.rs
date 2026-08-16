@@ -66,6 +66,12 @@ fn declared_versions(root: &std::path::Path) -> Result<Vec<(String, String)>, Fa
     let root_manifest = read(&root.join("Cargo.toml").display().to_string())?;
     let mut claims = root_claims(&root_manifest);
     for member in guard::workspace_members(&root_manifest) {
+        // A glob is cargo's to expand. Skipping it leaves those members
+        // unchecked, which is a smaller wrong than refusing a repository
+        // whose manifest is perfectly valid.
+        if guard::is_glob(&member) {
+            continue;
+        }
         claims.push(member_claim(root, &member)?);
     }
 
@@ -352,6 +358,26 @@ mod tests {
             .to_string();
         assert!(error.contains("workspace.package"), "{error}");
         assert!(error.contains("0.0.1"), "{error}");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_glob_member_does_not_refuse_the_repository() {
+        // `members = ["crates/*"]` is valid and ordinary. Cargo expands
+        // it; this parser does not, so the pattern was looked up as a
+        // directory and a truthful repository was refused.
+        let root = repo_fixture("glob", "1.2.3", "1.2.3", "## [1.2.3]\n\n- shipped\n");
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/*\"]\n\n\
+             [package]\nname = \"root\"\nversion = \"1.2.3\"\n",
+        )
+        .unwrap();
+        let _ = std::fs::remove_dir_all(root.join("member"));
+
+        let out = release_guard_command(&root, &["v1.2.3".into()])
+            .expect("a valid workspace was refused");
+        assert!(out.contains("consistent"), "{out}");
         let _ = std::fs::remove_dir_all(root);
     }
 
