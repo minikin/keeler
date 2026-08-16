@@ -49,6 +49,32 @@ extracts that section as the release notes, and attaches `install.sh` plus
 its SHA256. A tag that disagrees with `VERSION` fails the workflow and
 publishes nothing. Reruns never overwrite a published release.
 
+## Review debt
+
+The review stage was skipped for every task in specs 01 through 04 —
+twenty-odd of them — and nothing noticed. Each had green gates, and a
+skipped review leaves no artifact whose absence could fail anything.
+
+It is being worked off by **area**, not by task. Half those tasks describe
+code that was later rewritten, so reading their diffs would be archaeology;
+what matters is the code as it stands. Three areas, and the state of each:
+
+| Area | Reviewed | Outcome |
+| --- | --- | --- |
+| `install.sh` and its harness (spec 01) | yes | 13 defects found, 11 fixed. Two shipped ones destroyed data: a manifest with inherited `[lints]` was left unparseable, and a dangling symlink was written through, outside the project. |
+| `xtask` — the release tooling (specs 02, 04) | in progress | — |
+| `scripts/integration-check.sh` (spec 03) | in progress | — |
+
+Two findings are open on the first area, both low: no integrity check on
+the fetched tarball, and a piped run from inside a Keeler clone can
+silently ignore `KEELER_REF`.
+
+**Nothing enforces this.** A gate was built and its own review found three
+blocking defects, so it is parked on `feat/pipeline-enforces-itself`. Until
+something replaces it, the pipeline's commands lead from each stage to the
+next and the discipline is the only mechanism there is. When a review
+happens, add a row here.
+
 ## Conventions
 
 - Commit messages: imperative, `fix:`/`feat:`/`chore:` prefixes.

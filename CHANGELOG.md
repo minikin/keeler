@@ -11,6 +11,17 @@ Installations pin a version with `KEELER_REF` and record it at the top of
 
 ### Fixed
 
+- The pipeline commands lead through the review stage. `/keeler:tdd` ended
+  by naming the next *task* rather than the next *stage*, so working task
+  by task — the normal way — review never came up; that is how twenty
+  tasks here skipped it unnoticed. Each stage now names its successor, and
+  only the last names the next task.
+- The task checkbox is ticked by `/keeler:mutants`, not `/keeler:tdd`.
+  Ticked at the start it meant "one stage of four ran", so an unreviewed
+  task looked exactly like a finished one.
+
+### Fixed
+
 - `cargo xtask release-guard` now checks the crate versions too. It
   compared the tag, VERSION, the rules-file marker and the CHANGELOG, but
   never `Cargo.toml` — those agreed only by coincidence, and the v0.2.0

@@ -20,7 +20,10 @@ For the task's each behavior:
 After the task's cycles are done:
 
 4. Run `just dev` (fmt, lint, tests, coverage, CRAP). Fix anything red.
-5. Tick the task's checkbox in the spec's Tasks section.
-6. Report: which tests were written (and the failure you observed at RED), what the implementation does, gate results, and which task is next.
+5. Report: which tests were written (and the failure you observed at RED), what the implementation does, and gate results.
+
+**Do not tick the task's checkbox.** The box means the whole pipeline ran, and one stage of four has. /keeler:mutants ticks it at the end.
+
+**Next stage: `/keeler:qa` for this task** — not the next task. The pipeline is `tdd → qa → review → mutants`, and a task is finished when it comes out of the far end, not when its tests pass.
 
 If while implementing you discover the spec is wrong or incomplete — stop, propose a spec change, and wait for approval. Never silently drift from the spec.
