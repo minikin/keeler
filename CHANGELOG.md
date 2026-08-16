@@ -9,26 +9,76 @@ Installations pin a version with `KEELER_REF` and record it at the top of
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-08-16
+
+Everything Keeler had never reviewed, reviewed. Three areas — the
+installer, the release tooling, the contract checker — went through a
+review stage that had been skipped for every task in specs 01 through 04.
+It found 37 defects. Two of them destroyed adopters' work.
+
 ### Fixed
 
-- The pipeline commands lead through the review stage. `/keeler:tdd` ended
+- **The installer left projects unbuildable.** A `Cargo.toml` with
+  `[lints] workspace = true` — the standard modern idiom — had
+  `[lints.clippy]` appended beside it. Cargo refuses to let a manifest
+  override inherited lints, so every cargo command in the project failed
+  afterwards, the installer reported success, and running it again did not
+  repair the file.
+- **The installer wrote outside the project.** `[ -e ]` is false for a
+  symlink whose target does not exist, so a `KEELER.md` symlinked
+  elsewhere had Keeler's copy written *through* the link — outside the
+  destination, which is the one boundary the installer promises to keep —
+  counted as installed and reported as no conflict.
+- Nothing parsed `Cargo.toml` after editing it. It is read with cargo
+  before and after now, and a manifest broken by the edits is restored
+  rather than shipped.
+- A failed `cargo add` was swallowed: the run printed "Keeler installed",
+  exited 0, and left a project with no proptest whose first `just dev`
+  cannot compile.
+- A project's own `.keeler` and `.bak` files were overwritten, so a second
+  upgrade destroyed the first one's backup — the original text, which is
+  the only reason that backup exists.
+- The proptest check read the whole manifest, so a `[workspace.dependencies]`
+  entry counted as a dev-dependency and the package could not compile its
+  property tests. It is scoped to `[dev-dependencies]` and understands
+  every declaration form, including `proptest.workspace = true`.
+- `--help` aborted on the documented `curl | bash` path, and an
+  unrecognised flag silently became the destination directory.
+- An explicit `KEELER_REF` was ignored when the script was piped from
+  inside a Keeler clone, installing the checkout while the caller believed
+  they had pinned a version.
+
+### Changed
+
+- **The release refuses more, and lies less.** An empty CHANGELOG section
+  used to publish a release with blank notes that the create-only policy
+  could not repair; a workspace with inherited versions had *zero*
+  manifests checked and reported as agreement; a `##` inside a fenced code
+  block truncated the notes; a comment beside `version =` produced a
+  garbled refusal. A release candidate is no longer published as the
+  latest release, the release resolves with `--locked` as its own comment
+  claimed, and two pushes of one tag cannot race.
+- **The contract checker stopped being green and blind.** It verified that
+  files existed and that a second run changed nothing, and almost nothing
+  about what was installed: an installer that wiped `.gitignore`, left an
+  unparseable manifest, kept no conflicts, installed empty files, added
+  scratch files, deleted the lockfile or wrote through a symlink all
+  passed. The reference tree is kept now and used as the oracle.
+- **The pipeline leads through its own review stage.** `/keeler:tdd` ended
   by naming the next *task* rather than the next *stage*, so working task
-  by task — the normal way — review never came up; that is how twenty
-  tasks here skipped it unnoticed. Each stage now names its successor, and
-  only the last names the next task.
-- The task checkbox is ticked by `/keeler:mutants`, not `/keeler:tdd`.
-  Ticked at the start it meant "one stage of four ran", so an unreviewed
-  task looked exactly like a finished one.
+  by task the review never came up — which is how twenty tasks skipped it
+  unnoticed. Each stage names its successor, and the task checkbox is
+  ticked by `/keeler:mutants`, the only stage that can honestly say the
+  pipeline ran.
+- `cargo xtask release-guard` checks the crate versions too, in every
+  workspace member and in `[workspace.package]`. They agreed before only
+  by coincidence.
 
-### Fixed
+### Known
 
-- `cargo xtask release-guard` now checks the crate versions too. It
-  compared the tag, VERSION, the rules-file marker and the CHANGELOG, but
-  never `Cargo.toml` — those agreed only by coincidence, and the v0.2.0
-  preparation broke the coincidence: VERSION said 0.2.0 while both
-  manifests still said 0.1.0, and nothing objected. Every workspace member
-  is checked, not just the root, and a member inheriting its version from
-  the workspace is not mistaken for a disagreement.
+- The tarball the installer fetches is not checksummed, and
+  `KEELER_TARBALL` will substitute any URL. `SECURITY.md` says so;
+  closing it means publishing per-release archive digests.
 
 ## [0.2.0] — 2026-08-15
 
@@ -217,6 +267,7 @@ repository that holds itself to the same standard it installs.
   failed with "no library targets found" in binary-only projects. Every job
   now goes through the `just` recipes, so CI runs what `just dev` runs.
 
-[Unreleased]: https://github.com/minikin/keeler/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/minikin/keeler/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/minikin/keeler/releases/tag/v0.3.0
 [0.2.0]: https://github.com/minikin/keeler/releases/tag/v0.2.0
 [0.1.0]: https://github.com/minikin/keeler/releases/tag/v0.1.0

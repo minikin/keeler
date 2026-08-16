@@ -130,7 +130,7 @@ dependencies = [
 
 [[package]]
 name = "keeler-harness"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "proptest",
 ]
@@ -395,7 +395,7 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 
 [[package]]
 name = "xtask"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "proptest",
  "sha2",
