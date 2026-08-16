@@ -35,19 +35,21 @@ including the forced source-compile fallback), and version consistency
 
 ## Cutting a release
 
-Releases are cut by machine (`.github/workflows/release.yml`); the human
-part is the prep commit:
+1. Move the `[Unreleased]` entries into a new `## [X.Y.Z] — date` section.
+   An empty section is refused: the notes are that section verbatim, and a
+   release must not ship blank ones.
+2. Bump `VERSION`, the `<!-- keeler-version: -->` marker in
+   `.claude/keeler.md`, and the `version` in every manifest — the root
+   `Cargo.toml` and each workspace member. `cargo xtask release-guard`
+   holds all of them in agreement and names every one that disagrees.
+3. `cargo check` to refresh `Cargo.lock`, which CI verifies is in step.
+4. Open the release PR, merge it, then `git tag vX.Y.Z && git push origin
+   vX.Y.Z`.
 
-1. Fold `[Unreleased]` into a `## [X.Y.Z] — YYYY-MM-DD` section in
-   `CHANGELOG.md` and update the compare links.
-2. Set `VERSION` and the `keeler-version` marker in `.claude/keeler.md` to
-   `X.Y.Z` (the version CI job holds these three in agreement).
-3. Merge, then tag: `git tag vX.Y.Z && git push origin vX.Y.Z`.
-
-The workflow re-checks that the tag tells the truth, runs the gates,
-extracts that section as the release notes, and attaches `install.sh` plus
-its SHA256. A tag that disagrees with `VERSION` fails the workflow and
-publishes nothing. Reruns never overwrite a published release.
+The tag push is what cuts the release: the guard runs, then `just ci`, then
+the notes and the checksum, then `gh release create`. A published release
+is never overwritten, so a bad one has to be deleted rather than fixed —
+which is why the guard refuses before anything is published.
 
 ## Review debt
 

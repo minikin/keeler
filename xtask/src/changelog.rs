@@ -11,6 +11,9 @@ use std::fmt;
 pub enum NotesError {
     /// The CHANGELOG has no section for this version.
     NoSuchVersion(String),
+    /// The section is there but says nothing. A release must not ship with
+    /// silent, blank notes, and `create` cannot be repaired afterwards.
+    EmptySection(String),
 }
 
 impl fmt::Display for NotesError {
@@ -19,6 +22,11 @@ impl fmt::Display for NotesError {
             Self::NoSuchVersion(version) => {
                 write!(f, "no CHANGELOG section for version {version}")
             }
+            Self::EmptySection(version) => write!(
+                f,
+                "the CHANGELOG section for {version} is empty — \
+                 the entries are probably still under [Unreleased]"
+            ),
         }
     }
 }
@@ -42,10 +50,21 @@ fn is_link_reference(line: &str) -> bool {
             .is_some_and(|(tag, _)| !tag.contains(']'))
 }
 
-/// True when the CHANGELOG carries a section for `version`.
+/// True when the CHANGELOG carries a section for `version`, and that
+/// section says something.
+///
+/// A heading is only a heading outside a fenced code block: a CHANGELOG
+/// for a tool that documents markdown will quote one, and treating the
+/// quote as a boundary invents sections and truncates notes.
 #[must_use]
 pub fn has_section(changelog: &str, version: &str) -> bool {
-    changelog.lines().any(|line| opens_section(line, version))
+    release_notes(changelog, version).is_ok()
+}
+
+/// Whether a line opens or closes a fenced code block.
+fn is_fence(line: &str) -> bool {
+    let line = line.trim_start();
+    line.starts_with("```") || line.starts_with("~~~")
 }
 
 /// The body of `version`'s section: everything between its heading and the
@@ -60,8 +79,11 @@ pub fn release_notes(changelog: &str, version: &str) -> Result<String, NotesErro
     let mut body: Vec<&str> = Vec::new();
     let mut found = false;
     let mut inside = false;
+    let mut fenced = false;
     for line in changelog.lines() {
-        if line.starts_with("## ") {
+        if is_fence(line) {
+            fenced = !fenced;
+        } else if !fenced && line.starts_with("## ") {
             inside = opens_section(line, version);
             found = found || inside;
             continue;
@@ -87,6 +109,9 @@ pub fn release_notes(changelog: &str, version: &str) -> Result<String, NotesErro
         .position(|line| !line.trim().is_empty())
         .unwrap_or(body.len());
 
+    if start >= body.len() {
+        return Err(NotesError::EmptySection(version.to_string()));
+    }
     Ok(body[start..].join("\n"))
 }
 
@@ -130,6 +155,56 @@ mod tests {
     fn a_link_block_at_the_foot_is_not_part_of_the_last_section() {
         let notes = release_notes(FIXTURE, "0.1.0").unwrap();
         assert_eq!(notes, "- the first thing");
+    }
+
+    #[test]
+    fn a_present_but_empty_section_is_an_error_too() {
+        // The heading gets added in the release-prep commit while the
+        // entries stay under [Unreleased] — a half-finished edit, and the
+        // exact shape the checklist invites. `has_section` is satisfied,
+        // so the guard passes, the tag goes up, and `gh release create`
+        // publishes a release with no notes. The workflow is create-only
+        // by policy, so nothing can repair it afterwards.
+        let changelog = "# Changelog\n\n## [1.0.0] — 2026-01-01\n\n## [0.9.0]\n\n- old\n";
+        assert!(release_notes(changelog, "1.0.0").is_err());
+    }
+
+    #[test]
+    fn a_section_holding_only_links_is_empty_too() {
+        let changelog = "## [1.0.0]\n\n[1.0.0]: https://example.com/1.0.0\n";
+        assert!(release_notes(changelog, "1.0.0").is_err());
+    }
+
+    #[test]
+    fn a_heading_inside_a_code_fence_does_not_end_the_section() {
+        // A CHANGELOG for a tool that documents markdown will quote
+        // headings. Treating one as a boundary truncates the notes
+        // silently — short notes look like short notes.
+        let changelog = "\
+## [1.0.0]
+
+- the first thing
+
+```markdown
+## [0.0.0]
+- an example
+```
+
+- the second thing, after the fence
+
+## [0.9.0]
+
+- old
+";
+        let notes = release_notes(changelog, "1.0.0").unwrap();
+        assert!(
+            notes.contains("the second thing"),
+            "the notes were truncated:\n{notes}"
+        );
+        assert!(
+            release_notes(changelog, "0.0.0").is_err(),
+            "a quoted heading became a section"
+        );
     }
 
     #[test]

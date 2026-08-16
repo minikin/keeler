@@ -41,7 +41,7 @@ pub fn package_version(manifest: &str) -> Option<&str> {
             let Some(value) = rest.strip_prefix('=') else {
                 continue; // `version.workspace = true` and friends
             };
-            return value.trim().trim_matches('"').into();
+            return Some(unquote(value));
         }
     }
     None
@@ -91,6 +91,42 @@ pub fn workspace_members(manifest: &str) -> Vec<String> {
     members
 }
 
+/// A TOML string value: the quotes off, and any trailing comment with
+/// them. Either quote character is valid TOML.
+fn unquote(value: &str) -> &str {
+    let value = value.trim();
+    let quote = value.chars().next().filter(|c| *c == '"' || *c == '\'');
+    match quote {
+        Some(quote) => value[1..].split(quote).next().unwrap_or(value),
+        None => value.split('#').next().unwrap_or(value).trim(),
+    }
+}
+
+/// The version a workspace declares for the members that inherit it.
+///
+/// `version.workspace = true` is not an independent claim, but this is —
+/// and reading neither meant the guard could check nothing while
+/// reporting that everything agreed.
+#[must_use]
+pub fn workspace_version(manifest: &str) -> Option<&str> {
+    let mut in_workspace_package = false;
+    for line in manifest.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            in_workspace_package = line == "[workspace.package]";
+            continue;
+        }
+        if let Some(value) = line
+            .strip_prefix("version")
+            .filter(|_| in_workspace_package)
+            .and_then(|rest| rest.trim_start().strip_prefix('='))
+        {
+            return Some(unquote(value));
+        }
+    }
+    None
+}
+
 /// Everything that disagrees about which version is being released. Empty
 /// means tag, VERSION, marker, CHANGELOG and every manifest say the same
 /// thing. `manifests` is `(path, declared version)` per package.
@@ -126,10 +162,27 @@ pub fn disagreements(
 
 #[cfg(test)]
 mod tests {
-    use super::{disagreements, marker, package_version};
+    use super::{disagreements, marker, package_version, workspace_version};
 
     const RULES: &str = "<!-- keeler-version: 1.2.3 -->\n\n# Keeler\n";
     const CHANGELOG: &str = "# Changelog\n\n## [1.2.3] — 2026-01-01\n\n- shipped\n";
+
+    #[test]
+    fn a_comment_beside_the_version_is_not_part_of_it() {
+        // `version = "0.3.0"  # keep in sync with VERSION` is a comment
+        // this repository's own style invites. Reading it as part of the
+        // version turned a truthful release into a refusal whose message
+        // read like a mismatch, sending the reader after drift that was
+        // not there.
+        assert_eq!(
+            package_version("[package]\nversion = \"1.2.3\"  # keep in sync\n"),
+            Some("1.2.3"),
+        );
+        assert_eq!(
+            package_version("[package]\nversion = '1.2.3'\n"),
+            Some("1.2.3")
+        );
+    }
 
     #[test]
     fn a_manifest_version_is_read_from_its_package_section() {
@@ -158,6 +211,18 @@ mod tests {
     #[test]
     fn a_virtual_manifest_has_no_package_version() {
         assert_eq!(package_version("[workspace]\nmembers = [\"a\"]\n"), None);
+    }
+
+    #[test]
+    fn a_workspace_inherited_version_is_the_workspaces_to_declare() {
+        // `version.workspace = true` is not an independent claim, but
+        // [workspace.package] version is — and reading neither meant the
+        // guard checked nothing while reporting success.
+        let root = "[workspace]\nmembers = [\"m\"]\n\n\
+                    [workspace.package]\nversion = \"1.2.3\"\n\n\
+                    [package]\nname = \"root\"\nversion.workspace = true\n";
+        assert_eq!(workspace_version(root), Some("1.2.3"));
+        assert_eq!(workspace_version("[workspace]\nmembers = []\n"), None);
     }
 
     #[test]

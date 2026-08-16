@@ -68,6 +68,16 @@ fn declared_versions(root: &std::path::Path) -> Result<Vec<(String, String)>, Fa
     if let Some(version) = guard::package_version(&root_manifest) {
         found.push(("Cargo.toml".to_string(), version.to_string()));
     }
+    // The claim a workspace makes on behalf of every member that inherits
+    // it. Without this, a workspace that moved to `version.workspace =
+    // true` left the guard with nothing to compare and calling that
+    // agreement — the very drift T7 exists to catch.
+    if let Some(version) = guard::workspace_version(&root_manifest) {
+        found.push((
+            "Cargo.toml [workspace.package]".to_string(),
+            version.to_string(),
+        ));
+    }
     for member in guard::workspace_members(&root_manifest) {
         let rel = format!("{member}/Cargo.toml");
         let path = root.join(&rel);
@@ -78,6 +88,12 @@ fn declared_versions(root: &std::path::Path) -> Result<Vec<(String, String)>, Fa
         if let Some(version) = guard::package_version(&manifest) {
             found.push((rel, version.to_string()));
         }
+    }
+    // A gate that measured nothing must not report success. Every
+    // repository this runs in declares a version somewhere; finding none
+    // means the parse failed, not that everything agrees.
+    if found.is_empty() {
+        return Err("no manifest declares a version — nothing could be compared".into());
     }
     Ok(found)
 }
