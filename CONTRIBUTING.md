@@ -62,12 +62,13 @@ what matters is the code as it stands. Three areas, and the state of each:
 | Area | Reviewed | Outcome |
 | --- | --- | --- |
 | `install.sh` and its harness (spec 01) | yes | 13 defects found, 11 fixed. Two shipped ones destroyed data: a manifest with inherited `[lints]` was left unparseable, and a dangling symlink was written through, outside the project. |
-| `xtask` — the release tooling (specs 02, 04) | in progress | — |
-| `scripts/integration-check.sh` (spec 03) | in progress | — |
+| `xtask` — the release tooling (specs 02, 04) | yes | 12 defects found. Three high: an empty CHANGELOG section publishes a release with blank notes and the `create`-only policy cannot repair it; the guard checks zero manifests when versions are workspace-inherited and prints that as success; nothing ties a tag to a commit that passed the full CI while the release assumes it did. |
+| `scripts/integration-check.sh` (spec 03) | yes | 12 defects found. Two critical: the three append targets are exempt from every comparison, so an installer that wipes `.gitignore` passes; and the manifest is never parsed, so the whole of the installer's Cargo.toml work is unverified — which is how a manifest cargo refuses to read once shipped. |
 
-Two findings are open on the first area, both low: no integrity check on
-the fetched tarball, and a piped run from inside a Keeler clone can
-silently ignore `KEELER_REF`.
+Open: two low findings on `install.sh` (no integrity check on the fetched
+tarball; a piped run from inside a Keeler clone can silently ignore
+`KEELER_REF`), and the 24 from the other two areas, which are being worked
+through highest-risk first.
 
 **Nothing enforces this.** A gate was built and its own review found three
 blocking defects, so it is parked on `feat/pipeline-enforces-itself`. Until

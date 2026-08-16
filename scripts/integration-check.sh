@@ -62,7 +62,38 @@ fail_with_log() {
 # Every file in a directory, relative and sorted. `.git` is the project's
 # own business and never part of the install set.
 list_files() {
-    (cd "$1" && find . -type f -not -path './.git/*' | sed 's|^\./||' | sort)
+    (cd "$1" && find . \( -type f -o -type l \) -not -path './.git/*' | sed 's|^\./||' | sort)
+}
+
+# The package and every dependency a manifest declares, by name. Asking
+# cargo rather than reading the text: the declaration forms are many and
+# the point is what the manifest *means*.
+manifest_names() {
+    # `|| true`: a manifest cargo cannot read yields no names, and with
+    # pipefail a grep that matches nothing would otherwise kill the script
+    # silently — losing the very refusal this is here to produce.
+    { cargo metadata --manifest-path "$1" --no-deps --format-version 1 2>/dev/null \
+        | tr ',' '\n' | grep -oE '"name":"[^"]*"' || true; } | sort -u
+}
+
+# Whether the first file begins with the whole of the second — what
+# "appended to" means, as opposed to "replaced".
+starts_with() {
+    local size
+    size="$(wc -c < "$2" | tr -d ' ')"
+    [ "$size" -eq 0 ] || head -c "$size" "$1" 2>/dev/null | cmp -s - "$2"
+}
+
+# Compares two paths, symlinks included. `cmp` follows links, so a link
+# replaced by a regular file of the same content would look unchanged —
+# and a link written *through* would look untouched while a file outside
+# the project changed.
+same_entry() {
+    if [ -L "$1" ] || [ -L "$2" ]; then
+        [ -L "$1" ] && [ -L "$2" ] && [ "$(readlink "$1")" = "$(readlink "$2")" ]
+    else
+        cmp -s "$1" "$2"
+    fi
 }
 
 # --- 1. What does a correct install produce? ------------------------------
@@ -101,6 +132,15 @@ fi
 # says nothing about how the bytes differ, only that they do.
 before="$work/before"
 mkdir -p "$before"
+# Whether cargo could read the manifest before we touched it: a project
+# with no sources cannot be parsed either, and holding the installer to
+# a state it did not create would be a false failure.
+manifest_read_before=0
+if command -v cargo >/dev/null 2>&1 \
+    && cargo metadata --manifest-path "$project/Cargo.toml" --no-deps \
+        --format-version 1 >/dev/null 2>&1; then
+    manifest_read_before=1
+fi
 (cd "$project" && tar -cf - --exclude=./.git .) | (cd "$before" && tar -xf -)
 list_files "$project" > "$work/project-before"
 
@@ -110,17 +150,41 @@ if ! bash "$install_sh" "$project" --no-tools > "$work/install.log" 2>&1; then
 fi
 
 # --- 4. Completeness ------------------------------------------------------
+# The reference tree is the oracle and is kept, not thrown away after the
+# `comm`: it holds Keeler's exact bytes for every tracked file, which is
+# what makes it possible to ask whether a file *is what it should be*
+# rather than merely whether something of that name exists.
 missing=()
+wrong=()
 tracked_count=0
 while IFS= read -r rel; do
     [ -n "$rel" ] || continue
     tracked_count=$((tracked_count + 1))
-    [ -e "$project/$rel" ] || missing+=("$rel")
+    if [ ! -e "$project/$rel" ] && [ ! -L "$project/$rel" ]; then
+        missing+=("$rel")
+        continue
+    fi
+    # CLAUDE.md and .gitignore legitimately differ: the installer appends
+    # to whatever the project already had. Everything else must be ours,
+    # unless the project owned it first, in which case theirs is kept and
+    # the conflict check below accounts for it.
+    case "$rel" in
+        CLAUDE.md | .gitignore) continue ;;
+    esac
+    if [ ! -e "$before/$rel" ] && ! same_entry "$reference/$rel" "$project/$rel"; then
+        wrong+=("$rel")
+    fi
 done < "$work/tracked"
 
 if [ "${#missing[@]}" -gt 0 ]; then
     echo "integration-check: the install is incomplete — these never landed:" >&2
     printf '  %s\n' "${missing[@]}" >&2
+    exit 1
+fi
+
+if [ "${#wrong[@]}" -gt 0 ]; then
+    echo "integration-check: these landed, but not with Keeler's content:" >&2
+    printf '  %s\n' "${wrong[@]}" >&2
     exit 1
 fi
 
@@ -144,17 +208,61 @@ fi
 
 while IFS= read -r rel; do
     [ -n "$rel" ] || continue
+    # Deletion is never permitted, whatever the file. The exemptions below
+    # are for *edits*, and skipping this check for them meant a deleted
+    # lockfile counted as a refresh.
+    if [ ! -e "$project/$rel" ] && [ ! -L "$project/$rel" ]; then
+        clobbered+=("$rel (deleted)")
+        continue
+    fi
     case "$rel" in
-        CLAUDE.md | .gitignore | Cargo.toml) continue ;;
+        # Append-only, not anything-goes: the contract says these three
+        # gain lines, so what they held must still be there, at the front.
+        # Exempting them from every comparison let an installer empty a
+        # project's .gitignore and pass.
+        # The manifest is edited by a TOML-aware tool, which may insert a
+        # section rather than append one — so a byte prefix is the wrong
+        # law for it. What must hold is that nothing the project declared
+        # disappeared; that it still parses is checked further down.
+        Cargo.toml)
+            if [ "$manifest_read_before" = 1 ]; then
+                manifest_names "$before/$rel" > "$work/names-before"
+                manifest_names "$project/$rel" > "$work/names-after"
+                lost="$(comm -23 "$work/names-before" "$work/names-after" | tr '\n' ' ')"
+                if [ -n "${lost// /}" ]; then
+                    clobbered+=("$rel (lost:$lost)")
+                fi
+            fi
+            continue
+            ;;
+        CLAUDE.md | .gitignore)
+            # `head -c`, not `cmp -n`: BSD cmp reads -n as "compare at most
+            # n bytes and still report EOF on the shorter file", so the
+            # prefix test passed on GNU and failed here.
+            if ! starts_with "$project/$rel" "$before/$rel"; then
+                # A file whose last line had no newline gains one before
+                # the first appended entry. That is still an append.
+                { cat "$before/$rel"; printf '\n'; } > "$work/with-newline"
+                if ! starts_with "$project/$rel" "$work/with-newline"; then
+                    clobbered+=("$rel (rewritten, not appended to)")
+                fi
+            fi
+            continue
+            ;;
+        # Keeler's to own: replaced wholesale, with the replaced text kept.
+        .claude/keeler.md)
+            if ! same_entry "$before/$rel" "$project/$rel"; then
+                if ! cmp -s "$before/$rel" "$project/$rel.bak"; then
+                    clobbered+=("$rel (replaced without keeping the old text)")
+                fi
+            fi
+            continue
+            ;;
         Cargo.lock)
             if [ "$manifest_edited" -eq 1 ]; then continue; fi
             ;;
     esac
-    if [ ! -e "$project/$rel" ]; then
-        clobbered+=("$rel (deleted)")
-    elif ! cmp -s "$before/$rel" "$project/$rel"; then
-        clobbered+=("$rel")
-    fi
+    same_entry "$before/$rel" "$project/$rel" || clobbered+=("$rel")
 done < "$work/project-before"
 
 if [ "${#clobbered[@]}" -gt 0 ]; then
@@ -169,17 +277,45 @@ fi
 # and the disk must agree: an unnamed .keeler file is a surprise, and a
 # named one that does not exist is a lie.
 sed -n 's/^  · \(.*\) differs .*wrote .*/\1/p' "$work/install.log" | sort > "$work/reported"
-(cd "$project" && find . -type f -name '*.keeler' -not -path './.git/*' | sed 's|^\./||') \
-    | while IFS= read -r keeler; do
-        [ -e "$before/$keeler" ] || printf '%s\n' "${keeler%.keeler}"
-    done | sort > "$work/on-disk"
-
-if ! diff -u "$work/reported" "$work/on-disk" > "$work/conflict-diff" 2>&1; then
-    echo "integration-check: the conflicts reported and the .keeler files on disk disagree" >&2
-    echo "  (-) reported but absent, (+) present but unreported:" >&2
-    cat "$work/conflict-diff" >&2
-    exit 1
+if [ ! -s "$work/reported" ] && grep -q 'differs' "$work/install.log"; then
+    fail "the install log mentions conflicts but none could be parsed — the report format moved"
 fi
+
+# `.keeler.1` and friends: the installer picks a free name when an earlier
+# upgrade already left a `.keeler`, so a glob for `*.keeler` alone misses
+# them in both directions.
+(cd "$project" && find . \( -type f -o -type l \) \
+    \( -name '*.keeler' -o -name '*.keeler.[0-9]*' \) -not -path './.git/*' \
+    | sed 's|^\./||') \
+    | while IFS= read -r keeler; do
+        [ -e "$before/$keeler" ] || printf '%s\n' "${keeler%%.keeler*}"
+    done | sort -u > "$work/on-disk"
+
+# What the conflicts *should* have been, from the reference rather than
+# from the installer's own account of itself. Comparing the installer's
+# report against the installer's own files is two of its outputs agreeing
+# with each other: an installer that keeps nothing and says nothing gives
+# ∅ == ∅ and passes.
+: > "$work/expected"
+while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    case "$rel" in
+        CLAUDE.md | .gitignore | Cargo.toml | .claude/keeler.md) continue ;;
+    esac
+    if [ -e "$before/$rel" ] || [ -L "$before/$rel" ]; then
+        same_entry "$before/$rel" "$reference/$rel" || printf '%s\n' "$rel" >> "$work/expected"
+    fi
+done < "$work/tracked"
+sort -o "$work/expected" "$work/expected"
+
+for side in reported on-disk; do
+    if ! diff -u "$work/expected" "$work/$side" > "$work/conflict-diff" 2>&1; then
+        echo "integration-check: the conflicts $side do not match the ones that exist" >&2
+        echo "  (-) should have been a conflict, (+) claimed but is not one:" >&2
+        cat "$work/conflict-diff" >&2
+        exit 1
+    fi
+done
 
 echo "integration-check: $(wc -l < "$work/on-disk" | tr -d ' ') conflict(s) named and kept alongside"
 
@@ -197,7 +333,50 @@ if grep -q '^\[workspace\]' "$project/Cargo.toml" && ! grep -q '^\[package\]' "$
     echo "integration-check: the workspace root was told to manage its own manifest"
 fi
 
-# --- 8. A second run must change nothing ----------------------------------
+# --- 8. Nothing was added that has no business being there ----------------
+# Step 4 asks whether everything expected arrived; nothing asked whether
+# anything else did. Scratch files, editor droppings and half-written
+# temporaries are all things an installer should not leave behind.
+{
+    cat "$work/tracked"
+    sed 's/$/.keeler/' "$work/expected"
+    if [ "$manifest_edited" -eq 1 ]; then echo "Cargo.lock"; fi
+    if [ -e "$project/.claude/keeler.md.bak" ]; then echo ".claude/keeler.md.bak"; fi
+} | sort -u > "$work/allowed"
+list_files "$project" > "$work/project-after"
+comm -13 "$work/project-before" "$work/project-after" | sort > "$work/added"
+if ! comm -23 "$work/added" "$work/allowed" > "$work/unexpected" 2>/dev/null; then
+    : # comm needs sorted input; both are
+fi
+if [ -s "$work/unexpected" ]; then
+    echo "integration-check: the installer left files nobody asked for:" >&2
+    sed 's/^/  /' "$work/unexpected" >&2
+    exit 1
+fi
+
+# --- 9. The manifest is still a manifest, and it was actually configured --
+# The edit is the part real repositories exercise hardest — table-form
+# dependencies, inherited lints, workspace roots — and it was the one thing
+# nothing checked. A manifest cargo refuses to read shipped because of it.
+if [ "$manifest_read_before" = 1 ]; then
+    if ! cargo metadata --manifest-path "$project/Cargo.toml" --no-deps \
+        --format-version 1 > /dev/null 2>&1; then
+        fail "the installer left a Cargo.toml cargo cannot read"
+    fi
+fi
+if ! grep -q '^\[workspace\]' "$project/Cargo.toml" \
+    || grep -q '^\[package\]' "$project/Cargo.toml"; then
+    # The profile and the lints the installer writes itself, so they must
+    # be in the file. Adding the dependency is cargo's job, and cargo can
+    # be offline or stubbed — so for proptest the installer is held to
+    # having accounted for it, not to a tool's success.
+    grep -q '^\[profile\.mutants\]' "$project/Cargo.toml" \
+        || fail "the manifest gained no [profile.mutants] — the mutation gate loses its profile"
+    grep -q 'proptest' "$work/install.log" \
+        || fail "the run says nothing about proptest — the property tests cannot compile"
+fi
+
+# --- 10. A second run must change nothing ----------------------------------
 # Installing twice is the ordinary case — an upgrade, a re-run after a
 # failure, a CI step that does not know the project already has Keeler. The
 # second run has no exemptions: not one byte may move, including the three

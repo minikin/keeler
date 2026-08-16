@@ -786,3 +786,153 @@ fn a_lockfile_moved_with_no_manifest_edit_is_caught() {
         "the checker did not name the lockfile it lost:\n{report}",
     );
 }
+
+/// An installer that runs the real one and then does something it should
+/// not. The checker exists to notice; each of these is a way it did not.
+fn defective(fixture: &Fixture, name: &str, mischief: &str) -> PathBuf {
+    fixture.write_script(
+        &format!("bin/{name}.sh"),
+        &format!(
+            // The installer's output is not noise here: the checker
+            // parses it for the conflicts it reported, so swallowing it
+            // makes every defective installer look silent.
+            "#!/usr/bin/env bash\nset -euo pipefail\nbash {} \"$@\"\n{mischief}\n",
+            repo_root().join("install.sh").display(),
+        ),
+    )
+}
+
+/// Runs the checker against a defective installer and requires a refusal
+/// that names something recognisable.
+fn must_catch(fixture: &Fixture, name: &str, mischief: &str, expected: &str) {
+    let script = defective(fixture, name, mischief);
+    let output = fixture.check_with(Some(&script));
+    let report = combined(&output);
+    assert!(
+        !output.status.success(),
+        "the checker passed an installer that {name}:\n{report}",
+    );
+    assert!(
+        report.contains(expected),
+        "the refusal does not mention `{expected}`:\n{report}",
+    );
+}
+
+#[test]
+fn an_append_target_that_is_replaced_wholesale_is_caught() {
+    // The contract is append-only for these three, not "anything goes".
+    // Exempting them from every comparison meant an installer could empty
+    // a project's .gitignore, rewrite its CLAUDE.md, or swap its manifest
+    // for another package's, and the checker would report a clean install.
+    let fixture = Fixture::lived_in("wiped-gitignore");
+    must_catch(
+        &fixture,
+        "wipes-gitignore",
+        "printf 'WIPED\\n' > \"$1/.gitignore\"",
+        ".gitignore",
+    );
+}
+
+#[test]
+fn a_manifest_the_installer_broke_is_caught() {
+    // The manifest edit is the part real repositories exercise hardest,
+    // and it was the one thing nothing checked — which is how a manifest
+    // cargo refuses to read once shipped.
+    let fixture = Fixture::lived_in("broken-manifest");
+    must_catch(
+        &fixture,
+        "breaks-the-manifest",
+        "printf '[package\\nnot toml\\n' > \"$1/Cargo.toml\"",
+        "Cargo.toml",
+    );
+}
+
+#[test]
+fn an_installer_that_configures_nothing_is_caught() {
+    // Landing the files is half the job. An installer that restores the
+    // manifest afterwards adds no proptest, no profile and no lints, and
+    // the project's gates cannot run — but every file is present, so
+    // existence checks say yes.
+    let fixture = Fixture::lived_in("no-config");
+    must_catch(
+        &fixture,
+        "undoes-its-manifest-edits",
+        "cp \"$1/Cargo.toml.probe\" \"$1/Cargo.toml\" 2>/dev/null || true\n\
+         printf '[package]\\nname = \"wild\"\\nversion = \"0.1.0\"\\nedition = \"2021\"\\n' \
+         > \"$1/Cargo.toml\"",
+        "[profile.mutants]",
+    );
+}
+
+#[test]
+fn an_installer_that_declines_every_conflict_is_caught() {
+    // Reported and on-disk both come from the installer, so zero and zero
+    // agree. Without an oracle for what the conflicts should have been,
+    // an installer that quietly keeps nothing passes.
+    let fixture = Fixture::lived_in("silent-conflicts");
+    must_catch(
+        &fixture,
+        "keeps-no-conflicts",
+        "find \"$1\" -name '*.keeler' -delete",
+        "conflict",
+    );
+}
+
+#[test]
+fn a_file_installed_empty_is_caught() {
+    // Completeness was existence-only: an empty .claude/keeler.md is the
+    // whole payload missing, and it passed.
+    let fixture = Fixture::lived_in("empty-file");
+    must_catch(
+        &fixture,
+        "installs-an-empty-rules-file",
+        ": > \"$1/.claude/keeler.md\"",
+        "keeler.md",
+    );
+}
+
+#[test]
+fn files_the_installer_had_no_business_adding_are_caught() {
+    let fixture = Fixture::lived_in("stray");
+    must_catch(
+        &fixture,
+        "leaves-scratch-files",
+        "printf 'scratch\\n' > \"$1/keeler-tmp.txt\"",
+        "keeler-tmp.txt",
+    );
+}
+
+#[test]
+fn a_deleted_lockfile_is_not_excused_as_a_refresh() {
+    // The exemption is for a lockfile cargo refreshed. Deleting it is not
+    // a refresh, and the exemption skipped the deletion check entirely.
+    let fixture = Fixture::lived_in("deleted-lock");
+    std::fs::write(fixture.project().join("Cargo.lock"), "# theirs\n").unwrap();
+    must_catch(
+        &fixture,
+        "deletes-the-lockfile",
+        "rm -f \"$1/Cargo.lock\"",
+        "Cargo.lock",
+    );
+}
+
+#[test]
+fn an_upgrade_over_an_older_rules_file_is_not_called_a_clobber() {
+    // The real installer replaces .claude/keeler.md wholesale and keeps a
+    // .bak — that is its documented job. The checker's exemption list did
+    // not know, so it failed a correct installer on every upgrade.
+    let fixture = Fixture::lived_in("upgrade-rules");
+    std::fs::create_dir_all(fixture.project().join(".claude")).unwrap();
+    std::fs::write(
+        fixture.project().join(".claude/keeler.md"),
+        "<!-- keeler-version: 0.0.1 -->\nolder rules\n",
+    )
+    .unwrap();
+
+    let output = fixture.check();
+    assert!(
+        output.status.success(),
+        "the checker called a documented replacement a clobber:\n{}",
+        combined(&output),
+    );
+}
