@@ -86,8 +86,22 @@ starts_with() {
 }
 
 # A file's permission bits, in whichever dialect of stat is present.
+#
+# The result is checked, not just the exit code: GNU's `-f` is
+# `--file-system` and succeeds while printing something else entirely, so
+# trying BSD's form first reported every file as changed on Linux — the
+# same file compared across two filesystems. Digits or nothing.
 file_mode() {
-    stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1" 2>/dev/null || echo unknown
+    local mode
+    for form in '-c %a' '-f %Lp'; do
+        # shellcheck disable=SC2086 # two words on purpose
+        mode="$(stat $form "$1" 2>/dev/null || true)"
+        case "$mode" in
+            "" | *[!0-7]*) ;;
+            *) printf '%s' "$mode"; return ;;
+        esac
+    done
+    printf 'unknown'
 }
 
 # Compares two paths, symlinks included. `cmp` follows links, so a link
