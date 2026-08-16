@@ -5,7 +5,16 @@
 
 > Named after [Leonarde Keeler](https://en.wikipedia.org/wiki/Leonarde_Keeler), builder of the first practical polygraph.
 
-Keeler is a quality workflow for **Rust** projects built with AI.
+Keeler is a quality workflow for **Rust** projects built with
+[Claude Code](https://claude.com/claude-code).
+
+It installs Claude Code's own furniture — slash commands under
+`.claude/commands/keeler/`, skills under `.claude/skills/`, and a rules
+file imported by `CLAUDE.md`. Another coding agent will not find them, so
+Keeler is not a general AI tool and does not pretend to be one. The
+*method* is portable — spec first, test first, gates that check each other
+— and the gates themselves are plain `cargo` and `just`, which any agent
+or none can run. Only the commands assume Claude Code.
 
 The rules are simple: no code before a spec you approved, no bugfix without
 a failing test first, and no change is done until it passes a set of gates
@@ -13,7 +22,7 @@ that check each other — tests, coverage, complexity, review, and mutation
 testing that checks the tests themselves. Any single gate can be fooled.
 All of them together — rarely.
 
-Keeler doesn't ask the AI to be careful. It makes carelessness fail the
+Keeler doesn't ask the agent to be careful. It makes carelessness fail the
 build.
 
 ## How it works
@@ -61,7 +70,7 @@ Three roads, by weight of the change:
   ceremony.
 
 See [KEELER.md](KEELER.md) for the full picture with diagrams, and
-[.claude/keeler.md](.claude/keeler.md) for the rules the AI operates under.
+[.claude/keeler.md](.claude/keeler.md) for the rules Claude Code operates under.
 
 ## Install
 

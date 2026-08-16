@@ -1,11 +1,18 @@
 # Keeler — a Polygraph for AI-Written Code
 
 **Keeler** is a way of building software *with* AI that stays trustworthy:
-the human owns decisions, the AI does the labor, and machines — not vibes —
-verify the result. It targets **Rust** projects: every gate below is a Rust
-tool (`cargo nextest`, `cargo llvm-cov`, `cargo mutants`, `cargo crap`,
-`proptest`), though the method itself carries over to any language with an
-equivalent toolchain.
+the human owns decisions, the agent does the labor, and machines — not
+vibes — verify the result.
+
+It is built for **[Claude Code](https://claude.com/claude-code)** and
+**Rust**, and both are load-bearing rather than incidental. The pipeline
+below is a set of Claude Code slash commands and skills; another agent
+will not find them. Every gate is a Rust tool — `cargo nextest`,
+`cargo llvm-cov`, `cargo mutants`, `cargo crap`, `proptest`.
+
+The method carries over to any agent and any language with an equivalent
+toolchain. This implementation does not, and saying otherwise would be the
+kind of comfortable overclaim the gates below exist to catch.
 
 It is named after **[Leonarde Keeler](https://en.wikipedia.org/wiki/Leonarde_Keeler)**, who built the first practical
 polygraph (it's in the Smithsonian). A polygraph doesn't detect lies — it

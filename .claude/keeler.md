@@ -3,8 +3,11 @@
 
 The spec-first, test-driven workflow this project follows. Imported by CLAUDE.md.
 
-This is a **Rust** project: the gates run through `cargo` (nextest, llvm-cov,
-mutants, crap) and `just`. Tests use `proptest` for property tests.
+The stages below are Claude Code slash commands (`.claude/commands/keeler/`)
+and the skills beside them; they exist for Claude Code and no other agent.
+The gates are plain `cargo` (nextest, llvm-cov, mutants, crap) and `just`,
+so anyone — or any tool — can run those. Tests use `proptest` for property
+tests.
 
 ## Workflow (THE LAW)
 
