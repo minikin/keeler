@@ -65,7 +65,7 @@ Never bury a discovered problem in the middle of a transcript — it must reappe
 
 All feature specs live in `specs/`, written Gherkin style (Given/When/Then). Copy `specs/TEMPLATE.md` for new ones; number them `NN-slug.md`.
 
-- **Never modify a spec file without explicit permission from the user.** The one exception is the `Status:` line and task checkboxes — pipeline bookkeeping: /keeler:spec sets Approved on the user's approval, /keeler:tdd ticks tasks, /keeler:mutants sets Implemented when the final gate is clean.
+- **Never modify a spec file without explicit permission from the user.** The one exception is the `Status:` line and task checkboxes — pipeline bookkeeping: /keeler:spec sets Approved on the user's approval, /keeler:mutants ticks a task's box and sets the spec Implemented when the final gate is clean. Nothing earlier ticks anything — a box ticked after /keeler:tdd would mean "one stage of four ran", and an unreviewed task would look exactly like a finished one.
 - A spec's Acceptance Tests section IS the acceptance criteria — every scenario must map to at least one test named after it.
 - When a spec needs to change (scope change, new edge case), propose the change and wait for approval before editing the file.
 
@@ -82,6 +82,13 @@ All of these must be green before a feature is considered done:
 | CRAP       | `just crap`                                           | no function above threshold 15                 |
 | Mutation   | `just mutants-diff`                                   | zero surviving mutants in changed files        |
 | CRAP delta | `just crap-delta`                                     | no function's CRAP score regressed vs baseline |
+
+**The review stage leaves no artifact.** Every other gate in this table
+fails loudly when it is not met. Review does not — nothing can notice when
+it is skipped, and in the repository that ships Keeler it was skipped for
+twenty tasks before anyone did. There is no mechanism that will catch this
+for you; what there is, is a pipeline whose commands lead from each stage
+to the next, and the discipline to follow them.
 
 **Baseline discipline:** `crap-baseline.json` is **committed to the repository** — it is the shared reference every developer and CI measures against, so the ratchet works for the whole team, not just one machine. `just crap-delta` shows per-function before/after and fails on any regression: the "did this change make the codebase worse?" gate. Refresh the baseline (`just crap-baseline`) only deliberately, in its own commit — a moved baseline is a visible decision, reviewable like any other diff.
 

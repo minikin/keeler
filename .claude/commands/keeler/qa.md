@@ -19,4 +19,6 @@ You are in the **QA stage** (see .claude/keeler.md). Run the full fast gate and 
 | CRAP (threshold 15)            | worst function + score                   |
 | CRAP delta (if baseline)       | regressed / improved / new counts        |
 
-6. Close with the status (.claude/keeler.md § Reporting): **PASS** if every gate is green and the change is ready for /keeler:review; **FAIL + gate name** otherwise; **FLAKY** if a signal was unstable.
+6. Close with the status (.claude/keeler.md § Reporting): **PASS** if every gate is green; **FAIL + gate name** otherwise; **FLAKY** if a signal was unstable.
+
+**Next stage: `/keeler:review`.** Green gates say the code does what it does; they say nothing about whether that is what the spec asked for. Only review reads the two against each other.

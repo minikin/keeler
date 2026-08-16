@@ -17,3 +17,6 @@ You are in the **mutation testing stage** (see .claude/keeler.md) — the final 
    - `just dev` (fmt, lint, tests, coverage, CRAP — the new tests changed coverage),
    - the same mutation run again.
 5. Repeat until zero survivors. Then report: total mutants, caught/survived per round, which tests were added, and final gate status.
+6. **Tick the task's checkbox** in the spec's Tasks section. This is the end of the pipeline, so this is the stage that can honestly say the task is done — tdd → qa → review → mutants all ran.
+
+Then, and only then, move to the next task with `/keeler:tdd`.
