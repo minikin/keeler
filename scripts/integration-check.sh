@@ -62,7 +62,8 @@ fail_with_log() {
 # Every file in a directory, relative and sorted. `.git` is the project's
 # own business and never part of the install set.
 list_files() {
-    (cd "$1" && find . \( -type f -o -type l \) -not -path './.git/*' | sed 's|^\./||' | sort)
+    (cd "$1" && find . \( -type f -o -type l \) \
+        -not -path './.git/*' -not -path './.git' | sed 's|^\./||' | sort)
 }
 
 # The package and every dependency a manifest declares, by name. Asking
@@ -82,6 +83,25 @@ starts_with() {
     local size
     size="$(wc -c < "$2" | tr -d ' ')"
     [ "$size" -eq 0 ] || head -c "$size" "$1" 2>/dev/null | cmp -s - "$2"
+}
+
+# A file's permission bits, in whichever dialect of stat is present.
+#
+# The result is checked, not just the exit code: GNU's `-f` is
+# `--file-system` and succeeds while printing something else entirely, so
+# trying BSD's form first reported every file as changed on Linux — the
+# same file compared across two filesystems. Digits or nothing.
+file_mode() {
+    local mode
+    for form in '-c %a' '-f %Lp'; do
+        # shellcheck disable=SC2086 # two words on purpose
+        mode="$(stat $form "$1" 2>/dev/null || true)"
+        case "$mode" in
+            "" | *[!0-7]*) ;;
+            *) printf '%s' "$mode"; return ;;
+        esac
+    done
+    printf 'unknown'
 }
 
 # Compares two paths, symlinks included. `cmp` follows links, so a link
@@ -262,7 +282,13 @@ while IFS= read -r rel; do
             if [ "$manifest_edited" -eq 1 ]; then continue; fi
             ;;
     esac
-    same_entry "$before/$rel" "$project/$rel" || clobbered+=("$rel")
+    if ! same_entry "$before/$rel" "$project/$rel"; then
+        clobbered+=("$rel")
+    elif [ "$(file_mode "$before/$rel")" != "$(file_mode "$project/$rel")" ]; then
+        # A repository's executable script stops working when its mode
+        # changes, and content comparison sees nothing.
+        clobbered+=("$rel (permissions changed)")
+    fi
 done < "$work/project-before"
 
 if [ "${#clobbered[@]}" -gt 0 ]; then

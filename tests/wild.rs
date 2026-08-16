@@ -936,3 +936,26 @@ fn an_upgrade_over_an_older_rules_file_is_not_called_a_clobber() {
         combined(&output),
     );
 }
+
+#[test]
+fn a_mode_the_installer_changed_is_caught() {
+    // Real repositories ship executable scripts. A mode change breaks one
+    // as surely as a content change, and `cmp` compares neither.
+    let fixture = Fixture::lived_in("modes");
+    std::fs::write(fixture.project().join("run.sh"), "#!/bin/sh\necho hi\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(
+            fixture.project().join("run.sh"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+    }
+    must_catch(
+        &fixture,
+        "changes-a-mode",
+        "chmod 600 \"$1/run.sh\"",
+        "run.sh",
+    );
+}

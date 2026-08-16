@@ -207,6 +207,40 @@ fn the_gates_run_before_anything_is_published() {
 }
 
 #[test]
+fn a_prerelease_tag_is_not_published_as_the_latest_release() {
+    // `v0.3.0-rc.1` passes the guard — the comparison is a string one —
+    // and `gh release create` without --prerelease makes it Latest, which
+    // is what README points adopters at.
+    let workflow = release_workflow();
+    assert!(
+        workflow.contains("--prerelease"),
+        "a release candidate would be published as the latest release",
+    );
+}
+
+#[test]
+fn the_release_resolves_the_dependencies_it_committed() {
+    // xtask/Cargo.toml claims "the release runs --locked, so the digest
+    // that ships is reproducible". Nothing passed it, so a stale lockfile
+    // would be rewritten and the sha2 computing the published digest
+    // would not be the pinned one.
+    let workflow = release_workflow();
+    assert!(
+        workflow.contains("--locked"),
+        "the release resolves dependencies freely while claiming otherwise",
+    );
+}
+
+#[test]
+fn two_pushes_of_one_tag_cannot_race() {
+    let workflow = release_workflow();
+    assert!(
+        workflow.contains("concurrency:"),
+        "two runs for the same tag could publish over each other",
+    );
+}
+
+#[test]
 fn a_release_is_never_overwritten() {
     // `create` fails on an existing release; nothing may edit or clobber
     let workflow = release_workflow();

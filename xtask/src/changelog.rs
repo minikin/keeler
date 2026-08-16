@@ -9,6 +9,8 @@ use std::fmt;
 /// The reason a version's notes could not be produced.
 #[derive(Debug, PartialEq, Eq)]
 pub enum NotesError {
+    /// Two headings open the same version's section.
+    DeclaredTwice(String),
     /// The CHANGELOG has no section for this version.
     NoSuchVersion(String),
     /// The section is there but says nothing. A release must not ship with
@@ -22,6 +24,11 @@ impl fmt::Display for NotesError {
             Self::NoSuchVersion(version) => {
                 write!(f, "no CHANGELOG section for version {version}")
             }
+            Self::DeclaredTwice(version) => write!(
+                f,
+                "the CHANGELOG opens a section for {version} more than once — \
+                 probably a merge that kept both copies"
+            ),
             Self::EmptySection(version) => write!(
                 f,
                 "the CHANGELOG section for {version} is empty — \
@@ -42,12 +49,23 @@ fn opens_section(line: &str, version: &str) -> bool {
     line.starts_with(&format!("## [{version}]"))
 }
 
-/// A link-reference line, as Markdown collects at the foot of a file.
-fn is_link_reference(line: &str) -> bool {
-    line.starts_with('[')
-        && line
-            .split_once("]: ")
-            .is_some_and(|(tag, _)| !tag.contains(']'))
+/// A link reference for a *version*, as Keep a Changelog collects at the
+/// foot of the file: `[1.2.3]: …` or `[Unreleased]: …`, with or without a
+/// space after the colon.
+///
+/// Scoped to versions on purpose. A link-style line in a body is content —
+/// `[breaking]: the --foo flag was removed` is an entry — while no body
+/// contains its own version's link definition. Telling them apart means
+/// the block can be dropped wherever it sits, rather than only when it
+/// happens to be the last thing in the file.
+fn is_version_link(line: &str) -> bool {
+    let Some((tag, _)) = line
+        .strip_prefix('[')
+        .and_then(|rest| rest.split_once("]:"))
+    else {
+        return false;
+    };
+    !tag.contains(']') && (tag == "Unreleased" || tag.starts_with(|c: char| c.is_ascii_digit()))
 }
 
 /// True when the CHANGELOG carries a section for `version`, and that
@@ -73,9 +91,9 @@ fn is_fence(line: &str) -> bool {
 /// A heading is only a heading outside a fenced code block. Boundary
 /// finding is separated from the trimming below so that neither has to be
 /// read while thinking about the other.
-fn section_lines<'a>(changelog: &'a str, version: &str) -> Option<Vec<&'a str>> {
+fn section_lines<'a>(changelog: &'a str, version: &str) -> Option<(Vec<&'a str>, u32)> {
     let mut body = Vec::new();
-    let mut found = false;
+    let mut found = 0_u32;
     let mut inside = false;
     let mut fenced = false;
     for line in changelog.lines() {
@@ -83,14 +101,16 @@ fn section_lines<'a>(changelog: &'a str, version: &str) -> Option<Vec<&'a str>> 
             fenced = !fenced;
         } else if !fenced && line.starts_with("## ") {
             inside = opens_section(line, version);
-            found = found || inside;
+            if inside {
+                found += 1;
+            }
             continue;
         }
         if inside {
             body.push(line);
         }
     }
-    found.then_some(body)
+    (found > 0).then_some((body, found))
 }
 
 /// The body of `version`'s section: everything between its heading and the
@@ -102,17 +122,21 @@ fn section_lines<'a>(changelog: &'a str, version: &str) -> Option<Vec<&'a str>> 
 /// Returns [`NotesError::NoSuchVersion`] when the CHANGELOG has no section
 /// for the version — an absent version is loud, never empty notes.
 pub fn release_notes(changelog: &str, version: &str) -> Result<String, NotesError> {
-    let Some(body) = section_lines(changelog, version) else {
+    let Some((body, headings)) = section_lines(changelog, version) else {
         return Err(NotesError::NoSuchVersion(version.to_string()));
     };
+    if headings > 1 {
+        return Err(NotesError::DeclaredTwice(version.to_string()));
+    }
 
-    let mut body = body;
-    // Only the trailing link block is scenery, and only the last section can
-    // have collected it — a link-style line inside the body is content.
-    while body
-        .last()
-        .is_some_and(|line| line.trim().is_empty() || is_link_reference(line))
-    {
+    // The version links are scenery wherever they sit: only the last
+    // section collects them, and a footer after the block used to keep
+    // the whole thing in the notes.
+    let mut body: Vec<&str> = body
+        .into_iter()
+        .filter(|line| !is_version_link(line))
+        .collect();
+    while body.last().is_some_and(|line| line.trim().is_empty()) {
         body.pop();
     }
     let start = body
@@ -189,6 +213,62 @@ mod tests {
         let said = release_notes(changelog, "1.0.0").unwrap_err().to_string();
         assert!(said.contains("1.0.0"), "{said}");
         assert!(said.contains("Unreleased"), "{said}");
+    }
+
+    #[test]
+    fn two_headings_for_one_version_are_refused() {
+        // A bad merge leaves both copies. Concatenating them produces
+        // plausible-looking notes that are wrong, with nothing to notice.
+        let changelog = "\
+## [1.0.0]
+
+- from the first copy
+
+## [0.9.0]
+
+- old
+
+## [1.0.0]
+
+- from the accidental second copy
+";
+        let said = release_notes(changelog, "1.0.0").unwrap_err().to_string();
+        assert!(
+            said.contains("twice") || said.contains("more than once"),
+            "{said}"
+        );
+    }
+
+    #[test]
+    fn a_link_definition_that_is_not_a_version_is_content() {
+        // A body may define links of its own. Only the version block at
+        // the foot of the file is scenery, and telling them apart is what
+        // lets the block be dropped wherever it sits.
+        let changelog = "## [1.0.0]\n\n[breaking]: the --foo flag was removed\n";
+        assert_eq!(
+            release_notes(changelog, "1.0.0").unwrap(),
+            "[breaking]: the --foo flag was removed",
+        );
+    }
+
+    #[test]
+    fn a_link_written_without_a_space_is_still_a_link() {
+        let changelog = "## [1.0.0]\n\n- shipped\n\n[1.0.0]:https://example.com/1.0.0\n";
+        assert_eq!(release_notes(changelog, "1.0.0").unwrap(), "- shipped");
+    }
+
+    #[test]
+    fn a_footer_after_the_link_block_does_not_drag_it_into_the_notes() {
+        // The tail strip stopped at the first line that was neither blank
+        // nor a link, so anything after the block — an HTML comment, a
+        // badge — kept the whole block in the notes.
+        let changelog =
+            "## [1.0.0]\n\n- shipped\n\n[1.0.0]: https://example.com/1.0.0\n\n<!-- generated -->\n";
+        let notes = release_notes(changelog, "1.0.0").unwrap();
+        assert!(
+            !notes.contains("example.com"),
+            "the link block leaked:\n{notes}"
+        );
     }
 
     #[test]
