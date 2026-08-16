@@ -74,6 +74,17 @@ It found 37 defects. Two of them destroyed adopters' work.
   workspace member and in `[workspace.package]`. They agreed before only
   by coincidence.
 
+### Documentation
+
+- Keeler says which agent it is for. The README and `KEELER.md` described
+  a workflow for "projects built with AI" while everything installed is
+  Claude Code's own furniture: slash commands under
+  `.claude/commands/keeler/`, skills beside them, and a rules file
+  imported by `CLAUDE.md`. Another agent finds none of it. The method is
+  portable and the gates are plain `cargo` and `just`, which anyone can
+  run — but the pipeline assumes Claude Code, and the documentation now
+  says so instead of implying otherwise.
+
 ### Known
 
 - The tarball the installer fetches is not checksummed, and
