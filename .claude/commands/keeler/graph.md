@@ -19,8 +19,8 @@ and report what it printed, task by task:
 
 Say plainly when nothing is ready: either the graph is complete (every task done) or every unfinished task is blocked, and those are different states.
 
-If the recipe **refuses** — a cycle, a Needs: naming no task, an id defined twice, two Needs: in one item — it exits non-zero naming the line and what is wrong. Report the refusal verbatim and stop: nothing is ready until the spec is fixed, and the fix goes through /keeler:spec, not through you. The refusal is the script's, on purpose: a cycle is refused by a program, so the verdict is machine-checkable and not an agent's opinion. Do not second-guess it by reading the spec.
+If the recipe **refuses** — a cycle, a Needs: naming no task, an id defined twice, two Needs: in one item — it exits non-zero naming the line and what is wrong. Report the refusal verbatim and stop: nothing is ready until the Tasks section is fixed, and that is a spec edit — /keeler:tasks, with the user's say-so — not something to patch from here. The refusal is the script's, on purpose: a cycle is refused by a program, so the verdict is machine-checkable and not an agent's opinion. Do not second-guess it by reading the spec.
 
 Readiness is read from the spec **on main**. A tick on an unlanded branch unblocks nothing.
 
-Do not implement anything here — that is /keeler:tdd on a ready task, or `just keeler-spawn <spec> <task>` when the recipe exists.
+Do not implement anything here — that is /keeler:tdd on a ready task, or `just keeler-spawn <spec> <task>` to hand one to an agent on its own branch.
