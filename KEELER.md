@@ -194,7 +194,9 @@ carries the invariant catalog (round-trips, idempotence, ordering, bounds)
 for the TDD and mutation stages, and **gherkin-specs** the scenario-writing
 rules for the spec stage. Recommended companions, installed on your machine
 rather than in the repo:
-[rust-best-practices](https://github.com/apollographql/rust-best-practices)
-for idiomatic Rust, [clean-code](https://github.com/jackjin1997/ClawForge)
-for the refactor step, and rust-async-patterns once the project grows
-async code.
+**[rust-best-practices](https://github.com/apollographql/rust-best-practices)**
+for idiomatic Rust,
+**[clean-code](https://github.com/jackjin1997/ClawForge)** for the
+refactor step, and
+**[rust-async-patterns](https://github.com/search?q=rust-async-patterns+SKILL.md&type=code)**
+once the project grows async code.
