@@ -64,6 +64,17 @@ And   the needs lists reference only task ids defined in the same spec
 And   the graph they form is acyclic
 ```
 
+### Scenario: A malformed Tasks section is refused naming the line
+
+```
+Given a spec whose Tasks section has a Needs: naming an id no task
+      defines, or two items opening with the same id, or one item carrying
+      two Needs: lines
+When  `just keeler-graph` runs against it
+Then  it fails naming the line and what is wrong with it
+And   nothing is reported as ready
+```
+
 ### Scenario: Graph status names what is unblocked
 
 ```
@@ -110,13 +121,19 @@ And   the shipped rules say this is the one place an agent commits
       without asking, and why the spawn was the asking
 ```
 
-### Scenario: A finished agent leaves its verdict where the shell can read it
+### Scenario: A finished agent leaves a verdict the gate decided, and a log
 
 ```
 Given a spawned session that has exited
 When  its tmux session is gone
-Then  .keeler/runs/<spec-slug>/<task-id>.exit holds the session's exit code
-And   `just keeler-status <spec>` lists each task as running, done or failed
+Then  .keeler/runs/<spec-slug>/<task-id>.exit holds the exit code of
+      `just keeler-branch`, run after the agent finished — not the agent's
+      own, which is zero for a turn that ended in FAIL
+And   .keeler/runs/<spec-slug>/<task-id>.log holds everything the session
+      printed, so the run can be read after the window is gone
+And   `just keeler-status <spec>` lists each task as running, passed or
+      failed, deciding "running" by asking tmux and not by the absence of
+      a file
 ```
 
 ### Scenario: Spawning without tmux is refused, and says how to get it
@@ -125,6 +142,17 @@ And   `just keeler-status <spec>` lists each task as running, done or failed
 Given a machine without tmux
 When  `just keeler-spawn <spec> T3` runs
 Then  it refuses before creating anything, naming tmux and how to install it
+```
+
+### Scenario: Spawning from an uncommitted or unapproved spec is refused
+
+```
+Given a spec whose working-tree copy differs from HEAD, or whose Status:
+      is not Approved
+When  `just keeler-spawn <spec> T3` runs
+Then  it refuses before creating anything, saying which — the worktree is
+      cut from HEAD and would not see an uncommitted graph, and an
+      unapproved spec is not a contract any agent should build from
 ```
 
 ### Scenario: Spawning a task that is already spawned is refused
@@ -244,9 +272,10 @@ Given a keeler/* branch pull request
 When  the shipped CI workflow runs on it
 Then  it fails if reviews/<spec-slug>/<task-id>.md is missing
 And   it fails if the record's Commit: is not an ancestor of the branch
-      head — a record copied from another task, or written before the
-      code it claims to cover, does not count
-And   a record whose Commit: is on the branch passes
+      head, or is an ancestor of main — a record copied from another task
+      names a commit that is not here, and one that names the merge base
+      names work the branch has not done
+And   a record whose Commit: is a commit the branch itself made passes
 ```
 
 ### Scenario: Adopters opt in, not out
@@ -272,7 +301,8 @@ installer wiring lands last, when there is something real to ship. T3, T4
 and T5 need only T1's format — they are the fan-out of this very spec.
 
 - [ ] **T1 — Task lines grow ids and needs.** Scenarios: _The tasks stage
-      emits a dependency graph_. Tests: acceptance — the harness drives
+      emits a dependency graph_, _A malformed Tasks section is refused
+      naming the line_. Tests: acceptance — the harness drives
       `scripts/keeler-graph.sh` as a subprocess against fixture specs (the
       pattern `tests/installer.rs` uses for `install.sh`): the extended
       task line is read, a wrapped one is joined, a malformed one is
@@ -295,7 +325,8 @@ and T5 need only T1's format — they are the fan-out of this very spec.
       creates an isolated agent_, _A spawned agent commits on its branch,
       and nowhere else_, _A finished agent leaves its verdict where the
       shell can read it_, _Spawning without tmux is refused, and says
-      how to get it_, _Spawning a task that is already spawned is refused_,
+      how to get it_, _Spawning from an uncommitted or unapproved spec is
+      refused_, _Spawning a task that is already spawned is refused_,
       _Spawning a blocked task is refused_. Tests:
       acceptance — harness drives the recipe against a generated project
       with stub `claude` and `tmux` on PATH, offline; the stubs record what
@@ -358,13 +389,20 @@ The task line format extends the existing one minimally:
 
 **The grammar the parser reads, so that it and a human agree:**
 
+- The Tasks section runs from the `## Tasks` heading to the next `## `
+  heading. Nothing outside it is a task — the example item quoted in these
+  notes is deliberately outside, and a parser that reads it has read the
+  wrong region.
 - A task item runs from a line beginning `- [ ]` or `- [x]` to the next
   such line or the end of the section, however many physical lines it
   wraps across. Continuation lines are indented; the parser joins them.
 - The item opens with `**Tn — `, and `n` is one or more digits. `Tn` is
   the id; the em dash and title follow.
 - `Needs: Ta, Tb.` may appear anywhere in the item, once. Ids in it must
-  be defined in the same spec. An item without it is a root.
+  be defined in the same spec. An item without it is a root. A second
+  `Needs:`, an id defined twice, or a need naming no task are each a
+  refusal that names the line — silently taking the first, or the last,
+  would be a graph nobody wrote.
 - The checkbox is the only completion signal. Prose elsewhere may mention
   `T1` freely; only the opening `**Tn — ` of an item defines one.
 
@@ -395,11 +433,14 @@ that is its own spec about delivering one, not a side effect of this.
 `Spec:`, `Task:`, `Commit:`, `Verdict:` — then the findings, or an
 explicit "none", because a review that found nothing still happened. CI
 on a keeler/* pull request checks two things: the file exists, and its
-`Commit:` is an ancestor of the branch head. Existence alone is a gate
-`touch` satisfies; the commit is what makes the record hard to fake in
-passing — a record copied from another task names the wrong SHA, and one
-written before the code it claims to cover names one that is not there
-yet. `/keeler:review` writes the file itself, at the end of the stage;
+`Commit:` is on the branch — an ancestor of the head and *not* an
+ancestor of main. Existence alone is a gate `touch` satisfies. Ancestry
+of the head alone is not enough either: the merge base is an ancestor of
+every branch, so a record naming it would pass while covering none of the
+branch's work. Both together mean the SHA is one this branch made, which
+is what "reviewed this branch" should mean. A branch with no commits of
+its own therefore cannot carry a record — correctly, since there is
+nothing to review. `/keeler:review` writes the file itself, at the end of the stage;
 this is the second of the parked gate's blockers, and it is why the format
 lives in `review.md` and not in a spec nobody reads at review time. The
 check needs `fetch-depth: 0` in the shipped workflow, or a shallow
@@ -422,6 +463,14 @@ Worktrees land as siblings of the repository root
 (`../<repo>-<spec-slug>-<task-id>`), never inside it — inside would be
 visible to every other agent's globbing, and the spec slug in the path is
 what stops two in-flight specs' T3s from colliding.
+
+**`keeler-spawn` reads the spec as committed, because that is what the
+worktree will see.** `/keeler:tasks` writes the graph into the working
+tree and, by the commit law, leaves it uncommitted; a spawn straight after
+would compute readiness from a file the new worktree does not have. So the
+recipe refuses when the spec differs from HEAD, and refuses when its
+`Status:` is not `Approved` — the same requirement `tdd.md` already puts
+on the linear road, carried to this one.
 
 **The spawned agent runs the whole per-task pipeline**, not one stage:
 tdd, then qa, review and mutants, with `just keeler-branch` as its gate.
@@ -454,9 +503,16 @@ recipe.
 visible.** `keeler-spawn` creates a detached session named
 `keeler-<spec-slug>-<task-id>` and returns at once; three spawns are three
 sessions and the human is back at their prompt. `tmux ls` is the status
-board, `tmux attach` is the log — live, and one you can type into. When
-the session exits it writes its code to `.keeler/runs/<slug>/<task>.exit`,
-which is what `keeler-status` reads. Nothing here decides *what* to spawn:
+board and `tmux attach` the live view. The session runs two things in
+order: the agent, then `just keeler-branch` — and it is the *gate's* exit
+code that goes to `.keeler/runs/<slug>/<task>.exit`, because `claude -p`
+exits zero for any finished turn, including one that ended in FAIL. The
+verdict is the machine's, as everywhere else in this pipeline. Everything
+printed is teed to `<task>.log` beside it, so a run can be read after its
+window is gone; `keeler-status` reads both, and asks `tmux has-session`
+for "running" rather than inferring it from a missing file. The paths are
+absolute and under the main checkout, and `.keeler/` is added to the
+ignore list the installer already writes. Nothing here decides *what* to spawn:
 every session is one the human named, so the no-scheduler line holds. The
 alternatives — plain background processes with log files and PID
 tracking, or N terminals by hand — are respectively half a scheduler and
