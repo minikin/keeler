@@ -453,7 +453,10 @@ name is already unique by construction, and a second identity for the
 same spec is a second thing that can collide. So the branch is
 `keeler/06-graph-mode/t3`, the tmux session `keeler-06-graph-mode-t3`,
 the worktree `../<repo>-06-graph-mode-t3`, and the record
-`reviews/06-graph-mode/t3.md` — one name, four places, no slugging.
+`reviews/06-graph-mode/t3.md` — one name, four places, no slugging. The
+task id is `T3` in the spec and `t3` in every path: lowercased once, on
+the way out of the parser, because Linux CI is case-sensitive and a
+branch named for `T3` and a record named for `t3` would never meet.
 
 Branch naming `keeler/<spec-slug>/<task-id>` is the invariant everything
 else hangs on: the CI review check triggers on it, `keeler-land` cleans it
@@ -503,7 +506,8 @@ recipe.
 visible.** `keeler-spawn` creates a detached session named
 `keeler-<spec-slug>-<task-id>` and returns at once; three spawns are three
 sessions and the human is back at their prompt. `tmux ls` is the status
-board and `tmux attach` the live view. The session runs two things in
+board and `tmux attach` the live view — a view only: `claude -p` is not
+interactive, so attaching shows the run and does not join it. The session runs two things in
 order: the agent, then `just keeler-branch` — and it is the *gate's* exit
 code that goes to `.keeler/runs/<slug>/<task>.exit`, because `claude -p`
 exits zero for any finished turn, including one that ended in FAIL. The
