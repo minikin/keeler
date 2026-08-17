@@ -2,7 +2,7 @@
 
 **Status:** Draft
 **Effort:** Large
-**Module:** `.claude/commands/keeler/`, `.claude/keeler.md`, `templates/`, `Justfile`, `scripts/`, `install.sh`, `specs/TEMPLATE.md`, `tests/graph.rs`
+**Module:** `.claude/commands/keeler/` (`graph.md` new; `tasks.md`, `review.md`, `mutants.md`, `feature.md` amended), `.claude/keeler.md`, `templates/keeler.yml`, `Justfile`, `scripts/keeler-graph.sh`, `install.sh`, `specs/TEMPLATE.md`, `tests/graph.rs`
 
 ## Context
 
@@ -113,6 +113,24 @@ When  `just keeler-spawn <spec> T3` runs
 Then  it refuses before creating anything, naming tmux and how to install it
 ```
 
+### Scenario: Spawning a task that is already spawned is refused
+
+```
+Given a worktree for T3 already exists, whatever state it is in
+When  `just keeler-spawn <spec> T3` runs again
+Then  it refuses naming the path, and creates nothing
+```
+
+### Scenario: Landing cleans up only what is clean
+
+```
+Given a landed task whose worktree has no uncommitted changes
+When  `just keeler-land` finishes
+Then  the worktree and the branch are removed
+And   a worktree with uncommitted changes is left in place and named,
+      for the human to look at first
+```
+
 ### Scenario: Spawning a blocked task is refused
 
 ```
@@ -143,6 +161,15 @@ Then  `just dev` runs on main
 And   crap-baseline.json is regenerated and staged, not committed, and the
       run says to review the diff and commit
 And   the working tree holds exactly that staged change and nothing else
+```
+
+### Scenario: keeler-land refuses to run anywhere but main
+
+```
+Given the current branch is keeler/06-graph-mode/t3
+When  `just keeler-land` runs
+Then  it refuses before running any gate, naming the branch it is on
+And   crap-baseline.json and the spec are untouched
 ```
 
 ### Scenario: A branch that moved the baseline is refused by CI
@@ -190,10 +217,22 @@ And   a spec with any task unticked is left as it was
 
 ```
 Given a task branch ready for fan-in
-When  /keeler:review completes
-Then  a review file exists under reviews/<spec-slug>/<task-id>.md on the
-      branch, recording findings and a verdict
-And   the keeler CI workflow fails a keeler/* branch PR that lacks it
+When  the review stage's command is read
+Then  it instructs writing reviews/<spec-slug>/<task-id>.md with a header
+      of Spec:, Task:, Commit: and Verdict:, followed by the findings
+And   Commit: is the SHA the review examined
+```
+
+### Scenario: A review record must name a commit on its own branch
+
+```
+Given a keeler/* branch pull request
+When  the shipped CI workflow runs on it
+Then  it fails if reviews/<spec-slug>/<task-id>.md is missing
+And   it fails if the record's Commit: is not an ancestor of the branch
+      head — a record copied from another task, or written before the
+      code it claims to cover, does not count
+And   a record whose Commit: is on the branch passes
 ```
 
 ### Scenario: Adopters opt in, not out
@@ -222,8 +261,9 @@ and T5 need only T1's format — they are the fan-out of this very spec.
       emits a dependency graph_. Tests: acceptance — the harness drives
       `scripts/keeler-graph.sh` as a subprocess against fixture specs (the
       pattern `tests/installer.rs` uses for `install.sh`): the extended
-      task line is read, a malformed one is refused naming the line, and
-      `TEMPLATE.md` and `tasks.md` carry the format. Property — over
+      task line is read, a wrapped one is joined, a malformed one is
+      refused naming the line, and `TEMPLATE.md` and `tasks.md` carry the
+      format; this spec's own Tasks section parses to the graph it draws. Property — over
       generated acyclic graphs, every task is reported exactly once as
       ready, blocked or done. Deliverable: the Tasks format in
       `TEMPLATE.md`, the `/keeler:tasks` command emitting it, and
@@ -238,7 +278,8 @@ and T5 need only T1's format — they are the fan-out of this very spec.
 - [ ] **T3 — just keeler-spawn.** Needs: T1. Scenarios: _Spawning a task
       creates an isolated agent_, _A finished agent leaves its verdict where
       the shell can read it_, _Spawning without tmux is refused, and says
-      how to get it_, _Spawning a blocked task is refused_. Tests:
+      how to get it_, _Spawning a task that is already spawned is refused_,
+      _Spawning a blocked task is refused_. Tests:
       acceptance — harness drives the recipe against a generated project
       with stub `claude` and `tmux` on PATH, offline; the stubs record what
       they were asked to run, so the prompt, the permission flags and the
@@ -247,8 +288,9 @@ and T5 need only T1's format — they are the fan-out of this very spec.
 - [ ] **T4 — Gates split into branch-side and land-side.** Needs: T1.
       Scenarios: _Branch gates are diff-based only_, _Baseline updates
       happen at fan-in, on main_, _A branch that was green alone can still
-      redden main_, _A branch that moved the baseline is refused by CI_,
-      _A branch ticks its task and nothing else_, _Landing the last task
+      redden main_, _keeler-land refuses to run anywhere but main_, _A
+      branch that moved the baseline is refused by CI_, _Landing cleans up
+      only what is clean_, _A branch ticks its task and nothing else_, _Landing the last task
       marks the spec implemented_. Deliverable: `just
       keeler-branch`, `just keeler-land`, and the one-line change to
       `mutants.md`: on a keeler/* branch it ticks the task and leaves
@@ -258,8 +300,11 @@ and T5 need only T1's format — they are the fan-out of this very spec.
       dev` proves the baseline is untouched and the exit is non-zero; CI
       check unit-tested.
 - [ ] **T5 — Review writes a file and CI wants it.** Needs: T1. Scenarios:
-      _Review leaves evidence_. Tests: acceptance — a keeler/* branch
-      without the file fails the shipped workflow, one with it passes.
+      _Review leaves evidence_, _A review record must name a commit on its
+      own branch_. Tests: acceptance — `review.md` carries the instruction
+      and the header format; the shipped workflow's check, driven against
+      fixture repositories, fails on a missing file, fails on a Commit:
+      that is not an ancestor of HEAD, and passes on one that is.
       **This was built once and parked** — `feat/pipeline-enforces-itself`
       holds a working gate whose own review found three blockers, and T5
       starts by reading them: the check ran in a shallow checkout and could
@@ -292,6 +337,22 @@ The task line format extends the existing one minimally:
 
 `Needs:` is optional and empty means root.
 
+**The grammar the parser reads, so that it and a human agree:**
+
+- A task item runs from a line beginning `- [ ]` or `- [x]` to the next
+  such line or the end of the section, however many physical lines it
+  wraps across. Continuation lines are indented; the parser joins them.
+- The item opens with `**Tn — `, and `n` is one or more digits. `Tn` is
+  the id; the em dash and title follow.
+- `Needs: Ta, Tb.` may appear anywhere in the item, once. Ids in it must
+  be defined in the same spec. An item without it is a root.
+- The checkbox is the only completion signal. Prose elsewhere may mention
+  `T1` freely; only the opening `**Tn — ` of an item defines one.
+
+The spec that describes this is its own fixture: `specs/06-graph-mode.md`
+goes through the parser and must yield exactly the graph its Tasks
+section draws — six tasks, T2 through T5 needing T1, T6 needing the four.
+
 **The parser is forty lines of shell, and where it lives is a decision.**
 `scripts/keeler-graph.sh` reads a spec's Tasks section and prints each
 task as ready, blocked (with unmet needs) or done; `just keeler-graph`
@@ -311,10 +372,32 @@ two shell files already there and gated the same way. If the format ever
 outgrows sixty lines of shell, that is the signal to ship a binary — and
 that is its own spec about delivering one, not a side effect of this.
 
+**The review record has a header, and CI reads it.** Four lines —
+`Spec:`, `Task:`, `Commit:`, `Verdict:` — then the findings, or an
+explicit "none", because a review that found nothing still happened. CI
+on a keeler/* pull request checks two things: the file exists, and its
+`Commit:` is an ancestor of the branch head. Existence alone is a gate
+`touch` satisfies; the commit is what makes the record hard to fake in
+passing — a record copied from another task names the wrong SHA, and one
+written before the code it claims to cover names one that is not there
+yet. `/keeler:review` writes the file itself, at the end of the stage;
+this is the second of the parked gate's blockers, and it is why the format
+lives in `review.md` and not in a spec nobody reads at review time. The
+check needs `fetch-depth: 0` in the shipped workflow, or a shallow
+checkout sees no ancestors and every honest record fails — the first of
+those blockers.
+
+**`<spec-slug>` is the spec's file name without `.md`** — `06-graph-mode`
+for `specs/06-graph-mode.md`. Nothing is derived from the title: the file
+name is already unique by construction, and a second identity for the
+same spec is a second thing that can collide. So the branch is
+`keeler/06-graph-mode/t3`, the tmux session `keeler-06-graph-mode-t3`,
+the worktree `../<repo>-06-graph-mode-t3`, and the record
+`reviews/06-graph-mode/t3.md` — one name, four places, no slugging.
+
 Branch naming `keeler/<spec-slug>/<task-id>` is the invariant everything
 else hangs on: the CI review check triggers on it, `keeler-land` cleans it
-up, humans can read it in `git branch`. Property test worth having:
-slugging is stable and collision-free across the spec titles in `specs/`.
+up, humans can read it in `git branch`.
 
 Worktrees land as siblings of the repository root
 (`../<repo>-<spec-slug>-<task-id>`), never inside it — inside would be
@@ -364,6 +447,22 @@ diff. A red main after fan-in means two branches that were each right
 alone are wrong together, and the human decides whether to fix or revert;
 what `keeler-land` guarantees is that the baseline never records a broken
 main as the new normal.
+
+**Two tasks that must touch one file are not independent.** That is a
+rule for `/keeler:tasks`, written into the command: when two tasks would
+edit the same file, one gets a `Needs:` on the other, because parallel
+edits to one file are a merge conflict by construction and the graph is
+where that is prevented, not at fan-in. Some files every branch touches,
+and each has its answer: the spec — one line, its own tick, the human's
+to merge; `Cargo.lock` — regenerated on merge, `cargo` resolves it again;
+`proptest-regressions/` — append-only seed files, which merge cleanly;
+`crap-baseline.json` — never on a branch, settled above.
+
+**"Main" is one thing, decided once.** `keeler-land` and `crap-baseline`
+refuse to run off it, and both find it the way `mutants-diff` already
+does: the branch `origin/HEAD` points at, falling back to `main` then
+`master` when there is no remote. One resolution shared by every recipe
+that cares, so no two of them can disagree about where main is.
 
 **`keeler-land` stages; it never commits.** The rules say no commit
 without the human's word, and that a moved baseline is a decision worth a
