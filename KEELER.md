@@ -11,8 +11,10 @@ will not find them. Every gate is a Rust tool — `cargo nextest`,
 `cargo llvm-cov`, `cargo mutants`, `cargo crap`, `proptest`.
 
 The method carries over to any agent and any language with an equivalent
-toolchain. This implementation does not, and saying otherwise would be the
-kind of comfortable overclaim the gates below exist to catch.
+toolchain — porting it means swapping the `Justfile` recipes and tool
+names, and the pipeline and its rules stay the same. This implementation
+does not carry over, and saying otherwise would be the kind of comfortable
+overclaim the gates below exist to catch.
 
 It is named after **[Leonarde Keeler](https://en.wikipedia.org/wiki/Leonarde_Keeler)**, who built the first practical
 polygraph (it's in the Smithsonian). A polygraph doesn't detect lies — it
@@ -99,8 +101,27 @@ suite catches every injected bug.
 | **CRAP delta**            | Compares scores before/after the feature                                   | Slow erosion: each change "fine", the codebase quietly getting worse                 |
 | **/keeler:fix** (bugfix road)    | Failing regression test before any fix; minimal change after               | "Fixing" what was never reproduced; drive-by rewrites hiding inside a bugfix         |
 
+Behind the stages sit the gates themselves, and each catches what the
+others miss:
+
+| Gate       | What it catches                                              |
+| ---------- | ------------------------------------------------------------ |
+| Format     | style drift (`rustfmt`)                                      |
+| Lints      | warnings and footguns (`clippy`, pedantic, zero tolerance)   |
+| Tests      | broken behavior (`nextest` + doc tests)                      |
+| Coverage   | untested lines in changed code                               |
+| CRAP       | complex code hiding behind missing tests                     |
+| Review     | scope creep, spec mismatches — and what no other gate can see |
+| Mutation   | weak tests — bugs planted on purpose must be caught          |
+| CRAP delta | any function getting worse than the committed baseline       |
+
+One rule is absolute: **a surviving mutant means the test is weak.
+Strengthen the test — never bend the code to satisfy the tool.**
+
 The through-line: **at no point does "the AI said so" count as evidence.**
-Specs are approved by a human; everything else is verified by a machine.
+Specs are approved by a human; everything else is verified by a machine —
+except review, which is the one stage a machine cannot do for you and the
+one it cannot notice you skipping.
 
 ## The polygraph, literally
 
@@ -122,30 +143,16 @@ The control-question row is the deepest part of the mapping: mutation
 testing doesn't test the code, it tests the *tests* — exactly as control
 questions don't probe the examinee, they probe the instrument.
 
-## The moving parts
+## Two rules that make the rest hold
 
-- `specs/` — one Markdown file per feature: context, Given/When/Then
-  scenarios (these ARE the acceptance criteria), task checklist,
-  implementation notes. Specs are law: the AI may not edit one without
-  permission (only `Status:` and task checkboxes move as bookkeeping).
-- `.claude/commands/` — one slash command per stage (`/keeler:spec`, `/keeler:tasks`,
-  `/keeler:tdd`, `/keeler:qa`, `/keeler:review`, `/keeler:mutants`), plus `/keeler:feature` which runs the whole
-  pipeline with a hard stop at spec approval, and `/keeler:fix` for the bugfix road.
-- `.claude/keeler.md` — the standing rules the AI works under (imported by
-  `CLAUDE.md`): the pipeline, change classes, quality bars, "never commit without confirmation", "every task
-  ends with an English summary that re-surfaces discovered problems".
-- `.claude/skills/` — knowledge that loads itself when relevant:
-  **property-testing** (invariant catalog for the TDD and mutation stages)
-  and **gherkin-specs** (scenario-writing rules for the spec stage). Global
-  companions worth installing: rust-best-practices, clean-code,
-  rust-async-patterns.
-- `Justfile` — every gate as one short command (`just dev`, `just
-  mutants-diff`, `just crap-delta`), so the human can re-run anything the AI
-  claims.
-- `.github/workflows/ci.yml` — the same gates in CI (installed as
-  `keeler.yml` in your project): lints, tests,
-  coverage ≥ 90%, CRAP ≤ 15, and mutation tests on the changed lines of every
-  PR. Locally the law is discipline; in CI it's physics.
+- **Specs are law.** The Given/When/Then scenarios in `specs/` *are* the
+  acceptance criteria — every one maps to a test named after it, so `grep`
+  answers "is this scenario enforced?" The agent may not edit a spec
+  without permission; only the `Status:` line and task checkboxes move, as
+  bookkeeping, and only at the end of the pipeline.
+- **Every claim is re-runnable.** Every gate is one `just` recipe, so a
+  human can rerun anything the agent says it did. Locally the law is
+  discipline; in CI it's physics.
 
 ## Tests, three ways
 
@@ -159,6 +166,16 @@ questions don't probe the examinee, they probe the instrument.
    file otherwise; the rules file says how to configure the second.)
 3. **Acceptance tests** — one per spec scenario, named after it, so
    `grep` answers "is this scenario actually enforced?"
+
+Two skills load themselves when the work calls for them: **property-testing**
+carries the invariant catalog (round-trips, idempotence, ordering, bounds)
+for the TDD and mutation stages, and **gherkin-specs** the scenario-writing
+rules for the spec stage. Recommended companions, installed on your machine
+rather than in the repo:
+[rust-best-practices](https://github.com/apollographql/rust-best-practices)
+for idiomatic Rust, [clean-code](https://github.com/jackjin1997/ClawForge)
+for the refactor step, and rust-async-patterns once the project grows
+async code.
 
 ## What this looked like in practice
 
