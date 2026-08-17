@@ -384,9 +384,9 @@ split it rather than ship a task eight scenarios wide.
       starting point.
 - [ ] **T8 — Installer ships graph mode.** Needs: T2, T3, T4, T6, T7.
       Scenarios: _Adopters opt in, not out_. Tests: acceptance — the
-      install harness verifies the new file set lands, that a spec with no
-      `Needs:` anywhere goes through `just keeler-graph` with every task
-      ready, and that the `dev` recipe is byte-identical to before. Not
+      install harness verifies the new file set lands, that a spec in the
+      old format — no dependency annotations at all — goes through `just
+      keeler-graph` with every task ready, and that the `dev` recipe is byte-identical to before. Not
       "the linear road is byte-for-byte unaffected": T1 rewrites
       `TEMPLATE.md` and `tasks.md`, T5 rewrites `review.md` and the
       shipped workflow, and all of them are on the linear road. What is
@@ -415,8 +415,11 @@ The task line format extends the existing one minimally:
   wraps across. Continuation lines are indented; the parser joins them.
 - The item opens with `**Tn — `, and `n` is one or more digits. `Tn` is
   the id; the em dash and title follow.
-- `Needs: Ta, Tb.` may appear anywhere in the item, once. Ids in it must
-  be defined in the same spec. An item without it is a root. A second
+- `Needs: Ta, Tb.` may appear anywhere in the item, once — and "once"
+  counts the token, so an item's prose may not *mention* `Needs:` either.
+  This spec's own T8 did, and was refused by its own parser: the fixture
+  bent, not the rule. Ids in it must be defined in the same spec. An item
+  without it is a root. A second
   `Needs:`, an id defined twice, or a need naming no task are each a
   refusal that names the line — silently taking the first, or the last,
   would be a graph nobody wrote.

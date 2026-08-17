@@ -68,8 +68,9 @@ And   guard and gates still strictly precede `gh release create`
 ```
 Given the repository after the migration
 When  its shell scripts are listed
-Then  install.sh and the spec 03 contract checker are the only ones
-And   the lint gate shellchecks exactly those two
+Then  every remaining shell file was put there by a spec that says why —
+      install.sh, spec 03's contract checker, spec 06's graph reader
+And   the lint gate shellchecks all of them
 And   no release logic remains in shell
 ```
 

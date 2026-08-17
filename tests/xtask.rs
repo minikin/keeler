@@ -188,14 +188,18 @@ fn the_shell_gate_covers_exactly_the_shell_that_remains() {
     }
     scripts.sort();
 
-    // Then install.sh and the spec 03 contract checker are the only ones
+    // Then the shell that remains is exactly the shell a spec put there:
+    // install.sh, spec 03's contract checker, and spec 06's graph reader —
+    // each a decision recorded where it was taken, none of them release
+    // logic. A file joining this list needs a spec that says why.
     assert_eq!(
         scripts,
         vec![
             "install.sh".to_string(),
             "scripts/integration-check.sh".to_string(),
+            "scripts/keeler-graph.sh".to_string(),
         ],
-        "the shell that remains is not what the spec says it should be",
+        "the shell that remains is not what the specs say it should be",
     );
 
     // And no release logic remains in shell
