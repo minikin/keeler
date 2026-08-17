@@ -161,7 +161,7 @@ what one alone cannot, but only when all of them run.
   human can rerun anything the agent says it did. Locally the law is
   discipline; in CI it's physics.
 
-## Tests, three ways
+## Tests, three ways — and the test of the tests
 
 1. **Unit tests** pin individual behaviors, next to the code.
 2. **Property tests** (proptest) pin *invariants* — "display then parse always
@@ -173,6 +173,21 @@ what one alone cannot, but only when all of them run.
    file otherwise; the rules file says how to configure the second.)
 3. **Acceptance tests** — one per spec scenario, named after it, so
    `grep` answers "is this scenario actually enforced?"
+
+**Mutation testing** is not a fourth kind. It is what checks the other
+three. `cargo mutants` edits the code — flips a `<` to `<=`, replaces a
+return value, deletes a branch — and runs the suite against each edit. A
+test that still passes with the bug in place was never testing that line;
+it was describing whatever the code happened to do. Every surviving mutant
+is a claim the suite makes and cannot back, and the response is always a
+stronger test, never a weaker mutant. `just mutants-diff` runs it on the
+lines you changed; the whole crate is for a rainy afternoon.
+
+What it can and cannot see is worth being exact about. It proves the tests
+are sensitive to *the code you wrote*. It cannot tell whether they assert
+the right thing — a test that counts substrings in a manifest instead of
+parsing it will kill every mutant and still miss a manifest cargo refuses
+to read. That is the gap review exists for.
 
 Two skills load themselves when the work calls for them: **property-testing**
 carries the invariant catalog (round-trips, idempotence, ordering, bounds)
