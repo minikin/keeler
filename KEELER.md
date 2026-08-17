@@ -1,8 +1,6 @@
 # Keeler — a Polygraph for AI-Written Code
 
-**Keeler** is a way of building software *with* AI that stays trustworthy:
-the human owns decisions, the agent does the labor, and machines — not
-vibes — verify the result.
+**Keeler** is a way to build software *with* AI that remains trustworthy: humans own the decisions, the agent does the work, and machines — not vibes — verify the result.
 
 It is built for **[Claude Code](https://claude.com/claude-code)** and
 **Rust**, and both are load-bearing rather than incidental. The pipeline
