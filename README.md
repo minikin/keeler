@@ -13,7 +13,7 @@ agent to be careful — it makes carelessness fail the build.
 builder of the first practical polygraph. 
 
 **[KEELER.md](KEELER.md)** explains
-why the workflow is shaped the way it is; this file gets you installed.
+why the workflow is shaped the way it is.
 
 ## Install
 
