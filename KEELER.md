@@ -23,8 +23,10 @@ reader, but it cannot simultaneously fool the test suite, the coverage
 profiler, the complexity score, an independent review, and mutation testing.
 
 > **Verdicts.** Every task's final report ends with a one-line status:
-> **PASS** (all gates green), **FAIL** (a gate failed — the report names
-> which one), or **FLAKY** (unstable signal — rerun before trusting it).
+> 
+> - **PASS** (all gates green),
+> - **FAIL** (a gate failed — the report names which one) or
+> - **FLAKY** (unstable signal — rerun before trusting it).
 
 ## The one-paragraph version
 
@@ -42,7 +44,7 @@ tool.
 ## Three roads: not every change is a feature
 
 A pipeline nobody follows for small changes is a pipeline that gets bypassed
-for big ones too. So the first question is always: *what kind of change is
+for big ones too. So the first question is always:* What kind of change is
 this?*
 
 ```mermaid
@@ -192,9 +194,9 @@ carries the invariant catalog (round-trips, idempotence, ordering, bounds)
 for the TDD and mutation stages, and **gherkin-specs** the scenario-writing
 rules for the spec stage. Recommended companions, installed on your machine
 rather than in the repo:
-**[rust-best-practices](https://github.com/apollographql/rust-best-practices)**
-for idiomatic Rust,
-**[clean-code](https://github.com/jackjin1997/ClawForge)** for the
-refactor step, and
-**[rust-async-patterns](https://github.com/search?q=rust-async-patterns+SKILL.md&type=code)**
+- **[rust-best-practices](https://github.com/apollographql/rust-best-practices)**
+for idiomatic Rust.
+- **[clean-code](https://github.com/jackjin1997/ClawForge)** for the
+refactor step.
+- **[rust-async-patterns](https://github.com/search?q=rust-async-patterns+SKILL.md&type=code)**
 once the project grows async code.
