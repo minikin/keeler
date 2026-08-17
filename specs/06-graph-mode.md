@@ -295,10 +295,14 @@ And   `just dev` is the recipe it was, and /keeler:feature routes as it did
 ## Tasks
 
 The reading side comes first: the graph exists on paper before anything
-spawns from it. Spawning builds on reading; the gate split and review
-evidence are independent of both once the branch naming exists; the
-installer wiring lands last, when there is something real to ship. T3, T4
-and T5 need only T1's format — they are the fan-out of this very spec.
+spawns from it. Spawning builds on reading; the branch gate, the land
+recipe and the review evidence are independent of each other once the
+format exists; the installer wiring lands last, when there is something
+real to ship. T2, T3, T4, T5 and T7 need only T1 — five branches from one
+root, the fan-out of this very spec. The land recipe was one task in the
+draft and is two here: gates-then-baseline is one red-green cycle, and
+finishing a spec and removing worktrees is another, so `/keeler:tasks`
+split it rather than ship a task eight scenarios wide.
 
 - [ ] **T1 — Task lines grow ids and needs.** Scenarios: _The tasks stage
       emits a dependency graph_, _A malformed Tasks section is refused
@@ -323,8 +327,8 @@ and T5 need only T1's format — they are the fan-out of this very spec.
       checkable and not an agent's opinion.
 - [ ] **T3 — just keeler-spawn.** Needs: T1. Scenarios: _Spawning a task
       creates an isolated agent_, _A spawned agent commits on its branch,
-      and nowhere else_, _A finished agent leaves its verdict where the
-      shell can read it_, _Spawning without tmux is refused, and says
+      and nowhere else_, _A finished agent leaves a verdict the gate
+      decided, and a log_, _Spawning without tmux is refused, and says
       how to get it_, _Spawning from an uncommitted or unapproved spec is
       refused_, _Spawning a task that is already spawned is refused_,
       _Spawning a blocked task is refused_. Tests:
@@ -335,21 +339,34 @@ and T5 need only T1's format — they are the fan-out of this very spec.
       carve-out and the prompt carries the instruction. Deliverable:
       `keeler-spawn`, `keeler-status`, the tmux check in `install.sh`, and
       the commit carve-out in the rules.
-- [ ] **T4 — Gates split into branch-side and land-side.** Needs: T1.
-      Scenarios: _Branch gates are diff-based only_, _Baseline updates
-      happen at fan-in, on main_, _A branch that was green alone can still
-      redden main_, _keeler-land refuses to run anywhere but main_, _A
-      branch that moved the baseline is refused by CI_, _Landing cleans up
-      only what is clean_, _A branch ticks its task and nothing else_, _Landing the last task
-      marks the spec implemented_. Deliverable: `just
-      keeler-branch`, `just keeler-land`, and the one-line change to
-      `mutants.md`: on a keeler/* branch it ticks the task and leaves
-      `Status:` to `keeler-land`.
-      Tests: acceptance — the harness runs both recipes and inspects what
-      changed; a fixture where the merged tree fails `just
-      dev` proves the baseline is untouched and the exit is non-zero; CI
-      check unit-tested.
-- [ ] **T5 — Review writes a file and CI wants it.** Needs: T1. Scenarios:
+- [ ] **T4 — The branch gate, and the tick that stays on the branch.**
+      Needs: T1. Scenarios: _Branch gates are diff-based only_, _A branch
+      that moved the baseline is refused by CI_, _A branch ticks its task
+      and nothing else_. Deliverable: `just keeler-branch`; the CI job in
+      `templates/keeler.yml` that diffs `crap-baseline.json` and the `cov`
+      recipe on keeler/* pull requests; the one-line change to
+      `mutants.md` — on a keeler/* branch it ticks the task and leaves
+      `Status:` alone. Tests: acceptance — the harness runs the recipe on a
+      fixture branch and asserts the baseline and the recipe are byte-
+      identical after; the CI check driven against fixture diffs;
+      `mutants.md` text carries the branch condition.
+- [ ] **T5 — keeler-land: gates first, baseline second, staged not
+      committed.** Needs: T1. Scenarios: _Baseline updates happen at
+      fan-in, on main_, _A branch that was green alone can still redden
+      main_, _keeler-land refuses to run anywhere but main_. Deliverable:
+      `just keeler-land`, and the shared main-resolution helper it and
+      `mutants-diff` both call. Tests: acceptance — the harness runs the
+      recipe on a fixture main and inspects the index; a fixture whose
+      merged tree fails `just dev` proves the baseline untouched and the
+      exit non-zero; run on a fixture branch it refuses naming it.
+- [ ] **T6 — keeler-land finishes a spec and cleans up after it.**
+      Needs: T5. Scenarios: _Landing the last task marks the spec
+      implemented_, _Landing cleans up only what is clean_. Deliverable:
+      the `Status:` write and the worktree/branch removal in
+      `keeler-land`. Tests: acceptance — a fixture with every box ticked
+      gets `Implemented` staged and one with a box unticked does not; a
+      clean worktree is removed and a dirty one is left and named.
+- [ ] **T7 — Review writes a file and CI wants it.** Needs: T1. Scenarios:
       _Review leaves evidence_, _A review record must name a commit on its
       own branch_. Tests: acceptance — `review.md` carries the instruction
       and the header format; the shipped workflow's check, driven against
@@ -365,7 +382,7 @@ and T5 need only T1's format — they are the fan-out of this very spec.
       there, not in a spec); and a duplicated backlog line panicked the
       gate. The tests on that branch passed their own review and are the
       starting point.
-- [ ] **T6 — Installer ships graph mode.** Needs: T2, T3, T4, T5.
+- [ ] **T8 — Installer ships graph mode.** Needs: T2, T3, T4, T6, T7.
       Scenarios: _Adopters opt in, not out_. Tests: acceptance — the
       install harness verifies the new file set lands, that a spec with no
       `Needs:` anywhere goes through `just keeler-graph` with every task
@@ -408,7 +425,8 @@ The task line format extends the existing one minimally:
 
 The spec that describes this is its own fixture: `specs/06-graph-mode.md`
 goes through the parser and must yield exactly the graph its Tasks
-section draws — six tasks, T2 through T5 needing T1, T6 needing the four.
+section draws — eight tasks: T2, T3, T4, T5 and T7 needing T1; T6 needing
+T5; T8 needing T2, T3, T4, T6 and T7.
 
 **The parser is forty lines of shell, and where it lives is a decision.**
 `scripts/keeler-graph.sh` reads a spec's Tasks section and prints each
