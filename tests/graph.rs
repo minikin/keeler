@@ -26,19 +26,18 @@ impl Spec {
     }
 
     fn graph(&self) -> Output {
-        std::process::Command::new("bash")
-            .arg(repo_root().join("scripts/keeler-graph.sh"))
-            .arg(&self.0)
-            .output()
-            .expect("failed to run keeler-graph.sh")
+        graph(&self.0)
     }
 }
 
-impl std::ops::Deref for Spec {
-    type Target = Path;
-    fn deref(&self) -> &Path {
-        &self.0
-    }
+/// Runs the parser on any spec path — the repository's own included,
+/// which must not go through `Spec`, whose Drop removes the parent dir.
+fn graph(spec: &Path) -> Output {
+    std::process::Command::new("bash")
+        .arg(repo_root().join("scripts/keeler-graph.sh"))
+        .arg(spec)
+        .output()
+        .expect("failed to run keeler-graph.sh")
 }
 
 impl Drop for Spec {
@@ -180,25 +179,158 @@ fn a_malformed_tasks_section_is_refused_naming_the_line() {
             said.contains(expected),
             "{name}: the refusal does not name `{expected}`:\n{said}"
         );
+        // FRAME is six lines, so the offending item — always the second —
+        // sits on line 8. "line" alone is true of every refusal by
+        // construction and would let a wrong number through.
         assert!(
-            said.contains("line"),
-            "{name}: the refusal does not name the line:\n{said}"
+            said.contains("line 8"),
+            "{name}: the refusal names the wrong line:\n{said}"
         );
         assert!(
-            !stdout(&output).contains("ready"),
-            "{name}: something was reported ready from a malformed section",
+            stdout(&output).is_empty(),
+            "{name}: a refusal printed a report:\n{}",
+            stdout(&output),
         );
     }
 }
 
 #[test]
+fn what_markdown_reads_as_part_of_an_item_is_part_of_it() {
+    // Given a Needs: on a lazy continuation line — unindented, which
+    // markdown still renders as part of the item, and which an editor
+    // reflow produces
+    let fixture = Spec::new(
+        "lazy",
+        &spec("- [ ] **T1 — a.**\n- [ ] **T2 — b.** Scenarios: _foo_.\nNeeds: T1.\n"),
+    );
+
+    // When the graph is read
+    let output = fixture.graph();
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    // Then the dependency is not lost. Dropping the line silently would
+    // report a ready root and fan T2 out in parallel with the task it
+    // needs — the exact conflict the graph exists to prevent.
+    let got = report(&output);
+    assert_eq!(got[1], ("T2".into(), "blocked".into(), vec!["T1".into()]));
+}
+
+#[test]
+fn an_uppercase_tick_is_a_tick_and_an_unknown_checkbox_is_refused() {
+    // Given `- [X]`, which GitHub renders exactly as `- [x]`
+    let fixture = Spec::new(
+        "upper",
+        &spec("- [X] **T1 — a.**\n- [ ] **T2 — b.** Needs: T1.\n"),
+    );
+    let output = fixture.graph();
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        report(&output)[0].1,
+        "done",
+        "an uppercase X was not read as ticked"
+    );
+    assert_eq!(report(&output)[1].1, "ready");
+
+    // And a checkbox line the grammar does not know is refused, not
+    // dropped — a task that vanishes from the graph is never spawned and
+    // never counted at land time
+    let fixture = Spec::new("star", &spec("- [ ] **T1 — a.**\n* [ ] **T2 — b.**\n"));
+    let output = fixture.graph();
+    assert!(
+        !output.status.success(),
+        "an unrecognised checkbox line was silently dropped"
+    );
+    assert!(stderr(&output).contains("line 8"), "{}", stderr(&output));
+}
+
+#[test]
+fn a_spec_with_no_tasks_section_is_refused_not_empty() {
+    // Given a spec with no `## Tasks` at all
+    let missing = Spec::new("no-section", "# Spec\n\n## Context\n\nnothing here\n");
+    let output = missing.graph();
+    assert!(
+        !output.status.success(),
+        "a spec with no Tasks section read as zero tasks"
+    );
+    assert!(stderr(&output).contains("Tasks"), "{}", stderr(&output));
+
+    // And one whose heading is hidden by CRLF endings — a Windows edit or
+    // an autocrlf checkout — still parses
+    let crlf = Spec::new("crlf", &spec("- [ ] **T1 — a.**\n").replace('\n', "\r\n"));
+    let output = crlf.graph();
+    assert!(
+        output.status.success(),
+        "CRLF endings hid the section:\n{}",
+        stderr(&output)
+    );
+    assert_eq!(report(&output)[0].0, "T1");
+}
+
+#[test]
+fn a_needs_list_is_validated_not_guessed_at() {
+    // Given the plausible slips: a lowercase token, a stray file name in
+    // the list, a self-need, a duplicate need
+    let cases = [
+        (
+            "lowercase",
+            "- [ ] **T1 — a.**\n- [ ] **T2 — b.** needs: T1.\n",
+            "needs",
+        ),
+        (
+            "stray-token",
+            "- [ ] **T1 — a.**\n- [ ] **T2 — b.** Needs: T1, T2.md.\n",
+            "T2.md",
+        ),
+        (
+            "self-need",
+            "- [ ] **T1 — a.**\n- [ ] **T2 — b.** Needs: T2.\n",
+            "itself",
+        ),
+        (
+            "duplicate-need",
+            "- [ ] **T1 — a.**\n- [ ] **T2 — b.** Needs: T1, T1.\n",
+            "twice",
+        ),
+    ];
+    for (name, tasks, expected) in cases {
+        let fixture = Spec::new(name, &spec(tasks));
+        let output = fixture.graph();
+        // Then each is refused naming the problem, never read as a
+        // smaller graph than the one written
+        assert!(
+            !output.status.success(),
+            "{name}: read as a graph nobody wrote"
+        );
+        assert!(
+            stderr(&output).contains(expected),
+            "{name}:\n{}",
+            stderr(&output)
+        );
+    }
+}
+
+#[test]
+fn a_fenced_example_inside_the_section_is_not_a_task() {
+    // Given an example task line quoted in a code fence in the intro
+    // prose of the Tasks section — where the next example will be pasted
+    let fixture = Spec::new(
+        "fenced",
+        &spec("Example:\n\n```\n- [ ] **T9 — example.** Needs: T1.\n```\n\n- [ ] **T1 — a.**\n"),
+    );
+    let output = fixture.graph();
+    assert!(output.status.success(), "{}", stderr(&output));
+    let ids: Vec<String> = report(&output).into_iter().map(|(id, _, _)| id).collect();
+    assert_eq!(
+        ids,
+        vec!["T1".to_string()],
+        "the fenced example was read as a task"
+    );
+}
+
+#[test]
 fn this_spec_is_its_own_fixture() {
     // Given specs/06-graph-mode.md, which describes the format
-    let output = std::process::Command::new("bash")
-        .arg(repo_root().join("scripts/keeler-graph.sh"))
-        .arg(repo_root().join("specs/06-graph-mode.md"))
-        .output()
-        .unwrap();
+    let output = graph(&repo_root().join("specs/06-graph-mode.md"));
     assert!(output.status.success(), "{}", stderr(&output));
 
     // Then it parses to exactly the graph its Tasks section draws

@@ -45,7 +45,7 @@ function fail(line, why) {
 function close_item(    id, rest, cnt, list, m, k, need) {
     if (!open) return
     open = 0
-    if (match(text, /^- \[[ x]\] \*\*T[0-9]+ /) == 0)
+    if (match(text, /^- \[[ xX]\] \*\*T[0-9]+ /) == 0)
         fail(open_line, "an item that does not open with **Tn — : " substr(text, 1, 60))
     id = substr(text, RSTART + 8, RLENGTH - 9)
     if (id in seen) fail(open_line, id " is defined twice (first at line " seen[id] ")")
@@ -53,35 +53,67 @@ function close_item(    id, rest, cnt, list, m, k, need) {
 
     cnt = gsub(/Needs:/, "Needs:", text)
     if (cnt > 1) fail(open_line, id " carries two Needs: lines — which one is the graph?")
+    # A lowercase slip is not a root, it is a typo; say so rather than
+    # read a smaller graph than the one written.
+    if (cnt == 0 && text ~ /[Nn]eeds:/)
+        fail(open_line, id " has a lowercase needs: — the token is Needs:")
     list = ""
     if (cnt == 1) {
         rest = text
         sub(/.*Needs:[ \t]*/, "", rest)
-        sub(/\..*/, "", rest)
+        sub(/\.([ \t].*)?$/, "", rest)
         gsub(/,/, " ", rest)
+        k = split(rest, m, " ")
+        delete dup
+        for (j = 1; j <= k; j++) {
+            if (m[j] !~ /^T[0-9]+$/)
+                fail(open_line, id " needs \"" m[j] "\", which is not a task id")
+            if (m[j] == id) fail(open_line, id " needs itself")
+            if (m[j] in dup) fail(open_line, id " names " m[j] " twice in its Needs:")
+            dup[m[j]] = 1
+        }
         list = rest
     }
     n++
     ids[n] = id; lines[n] = open_line; ticked[n] = tick; needs[n] = list
 }
 
-/^## Tasks[ \t]*$/ { in_tasks = 1; next }
+# CRLF endings would hide every heading and every `.` terminator; strip
+# the carriage return before anything else looks at the line.
+{ sub(/\r$/, "") }
+
+/^## Tasks[ \t]*$/ { in_tasks = 1; found_section = 1; next }
 in_tasks && /^## /  { close_item(); in_tasks = 0 }
 !in_tasks           { next }
-/^- \[[ x]\] /      {
+
+# A fenced code block inside the section is prose, not tasks — the
+# example that will be pasted into the intro of the next spec.
+/^[ \t]*```/        { close_item(); in_fence = !in_fence; next }
+in_fence            { next }
+
+/^- \[[ xX]\] /     {
     close_item()
-    open = 1; open_line = NR
-    tick = ($0 ~ /^- \[x\]/) ? 1 : 0
+    open = 1; open_line = NR; blank_after = 0
+    tick = ($0 ~ /^- \[[xX]\]/) ? 1 : 0
     text = $0
     next
 }
+# A checkbox line the grammar does not know is a task that would vanish:
+# never spawned, never counted at land time. Refuse it, do not drop it.
+/^[-*+] \[/          { fail(NR, "a checkbox line the grammar cannot read: " substr($0, 1, 60)) }
 open && /^[ \t]+[^ \t]/ { sub(/^[ \t]+/, " "); text = text $0; next }
-open && /^[ \t]*$/      { next }
+open && /^[ \t]*$/      { blank_after = 1; next }
+# The lazy continuation markdown allows: an unindented, non-blank, non-heading
+# line straight after an item is still the item. An editor reflow puts
+# a Needs: there, and dropping it silently would report a root that is
+# not one.
+open && !blank_after && !/^- / && !/^## / { text = text " " $0; next }
 open                    { close_item() }
 
 END {
     if (refused) exit 1
     close_item()
+    if (!found_section) fail(0, "no ## Tasks section found — nothing to read")
     # Every need must name a task in this spec.
     for (i = 1; i <= n; i++) {
         k = split(needs[i], m, " ")

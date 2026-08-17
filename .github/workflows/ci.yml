@@ -29,7 +29,10 @@ jobs:
           if ! command -v shellcheck >/dev/null; then
             sudo apt-get update && sudo apt-get install -y shellcheck
           fi
-          shellcheck install.sh
+          # The same glob the Justfile's lint recipe uses, so a script
+          # under scripts/ cannot merge with a defect the release job
+          # would be the first to catch.
+          shellcheck install.sh scripts/*.sh
 
   test:
     name: Test
