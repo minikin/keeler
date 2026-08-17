@@ -153,23 +153,49 @@ questions don't probe the examinee, they probe the instrument.
 2. **Property tests** (proptest) pin *invariants* — "display then parse always
    returns the same set", "output is always sorted and non-overlapping" —
    letting randomness hunt for the edge cases nobody thought to write down.
-   When proptest finds a counterexample, its seed file under
-   `proptest-regressions/` is committed: the found case is pinned forever.
+   When proptest finds a counterexample it writes a seed file, and that
+   file is committed: the found case is pinned forever. (Where it lands
+   depends on the crate — beside `lib.rs` when there is one, beside the test
+   file otherwise; the rules file says how to configure the second.)
 3. **Acceptance tests** — one per spec scenario, named after it, so
    `grep` answers "is this scenario actually enforced?"
 
 ## What this looked like in practice
 
-In the first real run of this pipeline (a port-range parser: `"80,443,8000-8100,22"` → canonical port set), the gates caught, mechanically, everything a tired reviewer
-would miss:
+Keeler is developed under its own rules, so its history is the honest
+record of what the gates catch — and of what they do not.
 
-- The CRAP gate flagged user-facing **error messages with 0% test coverage**.
-- Mutation testing found `is_empty` was **unreachable through the public
-  API** — dead branch, now pinned by a test.
-- Mutation testing exposed a **redundant branch** in the merge logic
-  (an equivalent mutant) — the code got *simpler* as a result.
-- The pipeline itself had a hole: new untracked files escaped
-  `mutants-diff`. Found, fixed.
+**What the mechanical gates caught, on the first real feature.** A CRAP
+score flagged user-facing error messages with 0% coverage. Mutation
+testing found a branch unreachable through the public API, and a
+redundant branch in merge logic — the code got *simpler*. And it found a
+hole in the pipeline itself: new untracked files escaped `mutants-diff`.
+None of those were noticed by reading. All were caught by gates.
 
-None of those were noticed by reading the code. All of them were caught by
-gates.
+**What they did not catch — and what did.** For four specs, some twenty
+tasks, the review stage was skipped. Nothing noticed: every task had
+green gates, and a skipped review leaves no artifact whose absence could
+fail anything. When review finally ran — on the installer, the release
+tooling and the contract checker as they stood — it found **37 defects**
+behind 143 passing tests and 103 killed mutants. Two destroyed adopters'
+work: the installer left a `Cargo.toml` cargo refuses to read on any
+project with `[lints] workspace = true`, and it wrote through a dangling
+symlink to a file outside the project. Both shipped in v0.2.0
+([#19](https://github.com/minikin/keeler/pull/19)).
+
+The instructive one is smaller. A test named
+`proptest_derive_alone_is_not_mistaken_for_proptest` constructed *exactly*
+the manifest that breaks cargo — and passed, because it counted
+substrings instead of parsing the result. Mutation testing proved the
+assertions were sensitive to the code; it could not know they were
+asserting on strings rather than on validity. That is what review is for,
+and it is the gate the pipeline had routed everyone past
+([#20](https://github.com/minikin/keeler/pull/20)).
+
+**The lesson the polygraph metaphor predicts.** Each channel is blind to
+something. Tests measure the code you wrote; mutants measure the tests;
+CRAP measures the shape of both. None of them reads the spec, and none of
+them asks whether the thing the code produces is *valid* by some
+authority outside the test — cargo, in that case. The channels together
+catch what one alone cannot, but only when all of them run. The one that
+was skipped was the one that could see.

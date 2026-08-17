@@ -81,7 +81,7 @@ From inside any Rust project — existing or freshly `cargo new`-ed:
 curl -fsSL https://raw.githubusercontent.com/minikin/keeler/main/install.sh | bash -s .
 
 # or pin a release
-KEELER_REF=v0.1.0 curl -fsSL https://raw.githubusercontent.com/minikin/keeler/main/install.sh | bash -s .
+KEELER_REF=v0.3.0 curl -fsSL https://raw.githubusercontent.com/minikin/keeler/main/install.sh | bash -s .
 ```
 
 `just keeler-upgrade` re-runs the installer later; the version you have is
@@ -110,12 +110,13 @@ The installer is safe to re-run, and it keeps its hands off your files:
   added only when missing — a second run has nothing to do.
 - `--no-tools` skips the tool installs. Prefer to read the script first?
   `git clone https://github.com/minikin/keeler && ./keeler/install.sh <project>`
-  does exactly the same.
+  installs whatever the clone has checked out — `main`, unless you check out
+  a tag first.
 - Prefer to **verify** before running? Every release ships `install.sh`
   with its SHA256:
 
   ```bash
-  gh release download v0.1.0 --repo minikin/keeler --pattern 'install.sh*'
+  gh release download v0.3.0 --repo minikin/keeler --pattern 'install.sh*'
   sha256sum -c install.sh.sha256    # shasum -a 256 -c on macOS
   bash install.sh .
   ```
