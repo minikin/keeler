@@ -81,7 +81,13 @@ happens, add a row here.
 
 ## Conventions
 
-- Commit messages: imperative, `fix:`/`feat:`/`chore:` prefixes.
+- **Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).**
+  `<type>(<scope>): <subject>`, imperative mood, no trailing period. Types
+  in use: `feat`, `fix`, `docs`, `chore`, `test`, `refactor`. The scope is
+  optional and, when it is a spec, is the spec's number — `feat(spec-04):`,
+  `fix(spec-05):`. A breaking change carries `!` after the type and a
+  `BREAKING CHANGE:` footer. The body says *why*, not what — the diff
+  already says what.
 - Never weaken a test to make code pass — strengthen the test or fix the
   code.
 - `specs/` files are contracts: propose changes in the PR, don't edit
