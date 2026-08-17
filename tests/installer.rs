@@ -9,8 +9,9 @@
 use std::path::{Path, PathBuf};
 
 /// Jobs a project that adopts Keeler can actually run: they need nothing but
-/// the project's own sources and the tools the installer set up.
-const USER_FACING_JOBS: [&str; 4] = ["lints", "test", "quality", "mutants"];
+/// the project's own sources and the tools the installer set up. The last
+/// reads only git history and a file the review stage writes.
+const USER_FACING_JOBS: [&str; 5] = ["lints", "test", "quality", "mutants", "review-record"];
 
 /// Paths that exist only in the Keeler repository. A shipped workflow that
 /// mentions one of them is a workflow that fails on a user's first push.
