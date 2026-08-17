@@ -96,6 +96,20 @@ And   the recipe returns at once, printing how to attach
 And   the main working tree is untouched
 ```
 
+### Scenario: A spawned agent commits on its branch, and nowhere else
+
+```
+Given a task spawned by `just keeler-spawn`
+When  its pipeline finishes a stage
+Then  the work is committed on keeler/<spec-slug>/<task-id>, in that
+      worktree, so the review record has a commit to name and the
+      worktree is clean when the task lands
+And   nothing is pushed: the branch reaches the remote, and a pull
+      request, only by the human's hand
+And   the shipped rules say this is the one place an agent commits
+      without asking, and why the spawn was the asking
+```
+
 ### Scenario: A finished agent leaves its verdict where the shell can read it
 
 ```
@@ -263,7 +277,9 @@ and T5 need only T1's format — they are the fan-out of this very spec.
       pattern `tests/installer.rs` uses for `install.sh`): the extended
       task line is read, a wrapped one is joined, a malformed one is
       refused naming the line, and `TEMPLATE.md` and `tasks.md` carry the
-      format; this spec's own Tasks section parses to the graph it draws. Property — over
+      format; this spec's own Tasks section parses to the graph it draws;
+      and `tasks.md` carries the same-region rule and the hot-file list, so
+      the graph it emits is one whose branches can merge. Property — over
       generated acyclic graphs, every task is reported exactly once as
       ready, blocked or done. Deliverable: the Tasks format in
       `TEMPLATE.md`, the `/keeler:tasks` command emitting it, and
@@ -276,15 +292,18 @@ and T5 need only T1's format — they are the fan-out of this very spec.
       itself. Cycle detection is the script's, so the refusal is machine
       checkable and not an agent's opinion.
 - [ ] **T3 — just keeler-spawn.** Needs: T1. Scenarios: _Spawning a task
-      creates an isolated agent_, _A finished agent leaves its verdict where
-      the shell can read it_, _Spawning without tmux is refused, and says
+      creates an isolated agent_, _A spawned agent commits on its branch,
+      and nowhere else_, _A finished agent leaves its verdict where the
+      shell can read it_, _Spawning without tmux is refused, and says
       how to get it_, _Spawning a task that is already spawned is refused_,
       _Spawning a blocked task is refused_. Tests:
       acceptance — harness drives the recipe against a generated project
       with stub `claude` and `tmux` on PATH, offline; the stubs record what
       they were asked to run, so the prompt, the permission flags and the
-      session name are all asserted. Deliverable: `keeler-spawn`,
-      `keeler-status`, and the tmux check in `install.sh`.
+      session name are all asserted; `.claude/keeler.md` carries the
+      carve-out and the prompt carries the instruction. Deliverable:
+      `keeler-spawn`, `keeler-status`, the tmux check in `install.sh`, and
+      the commit carve-out in the rules.
 - [ ] **T4 — Gates split into branch-side and land-side.** Needs: T1.
       Scenarios: _Branch gates are diff-based only_, _Baseline updates
       happen at fan-in, on main_, _A branch that was green alone can still
@@ -409,8 +428,20 @@ tdd, then qa, review and mutants, with `just keeler-branch` as its gate.
 The point of a spawn is a branch that finishes unattended, and a branch
 that stops after tdd never produces the review file, never earns its
 tick, and breaks the pipeline law by construction. The prompt is built
-from three things only — the spec path, the task id, and that
-instruction; anything more is context the spec should have contained.
+from four things — the spec path, the task id, that instruction, and the
+commit carve-out below; anything more is context the spec should have
+contained.
+
+**The spawn is the commit consent.** The rules say no commit without the
+human's word, and an unattended branch cannot ask. So the word is given in
+advance and narrowly: on a `keeler/*` branch created by `keeler-spawn`,
+the agent commits on that branch, in that worktree, as each stage
+finishes — which is what gives the review record a `Commit:` to name and
+leaves the worktree clean for `keeler-land` to remove. Nowhere else, and
+never on main; the rules file says so in as many words. The human named
+the task and ran the spawn, and that is the confirmation, given before
+rather than after. What the agent never does is push: the branch reaches
+the remote, and a pull request, only when the human decides.
 
 **Permissions are the spec's decision, not T3's.** The session runs with
 `--permission-mode acceptEdits` and an explicit `--allowedTools` covering
@@ -448,21 +479,38 @@ alone are wrong together, and the human decides whether to fix or revert;
 what `keeler-land` guarantees is that the baseline never records a broken
 main as the new normal.
 
-**Two tasks that must touch one file are not independent.** That is a
-rule for `/keeler:tasks`, written into the command: when two tasks would
-edit the same file, one gets a `Needs:` on the other, because parallel
-edits to one file are a merge conflict by construction and the graph is
-where that is prevented, not at fan-in. Some files every branch touches,
-and each has its answer: the spec — one line, its own tick, the human's
-to merge; `Cargo.lock` — regenerated on merge, `cargo` resolves it again;
-`proptest-regressions/` — append-only seed files, which merge cleanly;
-`crap-baseline.json` — never on a branch, settled above.
+**Two tasks that must edit the same region of one file are not
+independent.** That is a rule for `/keeler:tasks`, written into the
+command by T1: when two tasks would change the same lines, one gets a
+`Needs:` on the other, because parallel edits to one region are a merge
+conflict by construction and the graph is where that is prevented, not at
+fan-in. The rule is about regions, not files, because some files every
+branch adds to and git merges them cleanly *if each task adds in its own
+place*: a recipe in the `Justfile`, a test function in `tests/graph.rs`, a
+job in the workflow — additive files, each task appending under its own
+heading rather than at the end. Those, and the ones every branch touches
+regardless, are the named hot files, each with its answer: the spec — one
+line, its own tick, the human's to merge; `Cargo.lock` — regenerated on
+merge, `cargo` resolves it again; `proptest-regressions/` — append-only
+seed files; `crap-baseline.json` — never on a branch, settled above; the
+`Justfile`, `tests/graph.rs` and `templates/keeler.yml` — additive, own
+place each.
 
-**"Main" is one thing, decided once.** `keeler-land` and `crap-baseline`
-refuse to run off it, and both find it the way `mutants-diff` already
-does: the branch `origin/HEAD` points at, falling back to `main` then
-`master` when there is no remote. One resolution shared by every recipe
-that cares, so no two of them can disagree about where main is.
+This spec is its own first test of the rule. T2, T3 and T4 all add
+recipes to the `Justfile`; T4 and T5 both add a job to the workflow; every
+task adds tests. Under a per-file rule they would have to be chained and
+the fan-out would be gone. Under the per-region rule they stay parallel,
+and the fan-in works only if each adds where the rule says. If that fails
+in practice, the rule was wrong and the spec should say so.
+
+**"Main" is one thing, decided once.** `keeler-land` refuses to run off
+it, and finds it exactly the way `mutants-diff` already does — the first
+of `origin/main`, `origin/master`, `main`, `master` that exists — through
+one shared helper, so no two recipes can disagree about where main is.
+`crap-baseline` is *not* changed: `/keeler:feature` runs it at step 0 on
+whatever branch the human is on, and a recipe that refused there would
+break the linear road at its first step. What keeps a branch from moving
+the baseline is CI (the scenario above), not a refusal in the recipe.
 
 **`keeler-land` stages; it never commits.** The rules say no commit
 without the human's word, and that a moved baseline is a decision worth a
@@ -474,9 +522,9 @@ would have an agent committing without asking the moment it ran one.
 The branch-side gate is one new recipe, `just keeler-branch`: `dev`, then
 `crap-delta`, then `mutants-diff`. `just dev` is untouched — an adopter on
 the linear road never sees a change — and the branch gate is what a
-spawned agent is told to run. The rest of the split is configuration:
-`crap-baseline` refuses to run off main, and CI diffs `crap-baseline.json`
-and the `cov` recipe on keeler/* PRs and fails if a branch touched them.
+spawned agent is told to run. The rest of the split is CI: it diffs
+`crap-baseline.json` and the `cov` recipe on keeler/* PRs and fails if a
+branch touched them.
 
 ### Non-goals
 
@@ -485,6 +533,9 @@ and the `cov` recipe on keeler/* PRs and fails if a branch touched them.
   ready is a natural next step and a spec of its own — one that builds on
   tmux sessions that already work, rather than inventing its own
   background story.
+- No pushing: a spawned agent commits on its branch and stops there.
+  Nothing leaves the machine — no push, no pull request — without the
+  human's hand.
 - No merge automation: `keeler-land` verifies and updates baselines; it
   does not decide merge order or resolve conflicts. That includes the spec
   file itself: five branches each ticking one box edit adjacent lines of
