@@ -34,13 +34,13 @@ sha256sum -c install.sh.sha256    # shasum -a 256 -c on macOS
 bash install.sh .
 ```
 
-|              | What lands in your project                                                                              |
-| ------------ | ------------------------------------------------------------------------------------------------------- |
-| **Workflow** | slash commands under `.claude/commands/keeler/`, two skills, a spec template, `Justfile`, gate configs  |
-| **Rules**    | `.claude/keeler.md`, imported by `CLAUDE.md` with one line — your `CLAUDE.md` is otherwise untouched     |
-| **CI**       | `.github/workflows/keeler.yml` — the gates and nothing else, beside your own workflows                   |
-| **Manifest** | `proptest` as a dev-dependency, `[profile.mutants]`, `[lints.clippy]` — each only if missing            |
-| **Ignores**  | the gates' artifacts, appended to `.gitignore`; equivalent spellings are not duplicated                 |
+|              | What lands in your project                                                                                                 |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| **Workflow** | slash commands under `.claude/commands/keeler/`, two skills, a spec template, `Justfile`, gate configs                     |
+| **Rules**    | `.claude/keeler.md`, imported by `CLAUDE.md` with one line — your `CLAUDE.md` is otherwise untouched                       |
+| **CI**       | `.github/workflows/keeler.yml` — the gates and nothing else, beside your own workflows                                     |
+| **Manifest** | `proptest` as a dev-dependency, `[profile.mutants]`, `[lints.clippy]` — each only if missing                               |
+| **Ignores**  | the gates' artifacts, appended to `.gitignore`; equivalent spellings are not duplicated                                    |
 | **Tools**    | `cargo-nextest`, `cargo-llvm-cov`, `cargo-mutants`, `cargo-crap`, `just` — only the ones you lack; `--no-tools` skips this |
 
 The installer keeps its hands off your files. Anything you already had is
@@ -77,15 +77,9 @@ not the past.
 - **Not for other agents.** It installs Claude Code's slash commands and
   skills. The *method* is portable and the gates are plain `cargo` and
   `just`, which anything can run — but the pipeline assumes Claude Code.
-- **Not a substitute for review.** Every gate leaves evidence except review,
-  so nothing notices when review is skipped. In this repository it was
-  skipped for twenty tasks, and when it finally ran it found what 143 green
-  tests and 103 killed mutants had not — see
-  [KEELER.md](KEELER.md#what-this-looked-like-in-practice). The commands
-  lead from each stage to the next; following them is on you.
-- **Not verified end to end.** `install.sh` is checksummed; the tarball it
-  fetches for the files it installs is not, and `KEELER_TARBALL` will
-  substitute any URL. See [SECURITY.md](SECURITY.md).
+- **Not a substitute for review.** Every gate leaves evidence except
+  review, so nothing notices when review is skipped. The commands lead from
+  each stage to the next; following them is on you.
 - **Not Windows-native.** The installer is a shell script — WSL or Git
   Bash — and the shipped gates have no Windows CI job behind them.
 
