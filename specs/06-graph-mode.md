@@ -2,7 +2,7 @@
 
 **Status:** Draft
 **Effort:** Large
-**Module:** `.claude/commands/keeler/`, `templates/`, `Justfile`, `specs/TEMPLATE.md`, `tests/graph.rs`
+**Module:** `.claude/commands/keeler/`, `.claude/keeler.md`, `templates/`, `Justfile`, `scripts/`, `install.sh`, `specs/TEMPLATE.md`, `tests/graph.rs`
 
 ## Context
 
@@ -85,12 +85,32 @@ And   no task is reported as ready
 ### Scenario: Spawning a task creates an isolated agent
 
 ```
-Given a spec with an unblocked task T3
+Given a spec with an unblocked task T3, and tmux on PATH
 When  `just keeler-spawn <spec> T3` runs
 Then  a worktree exists outside the repository root on branch keeler/<spec-slug>/t3
-And   a headless Claude Code session starts in it with a prompt naming the
-      spec file, the task id, and the tdd stage
+And   a detached tmux session named keeler-<spec-slug>-t3 is running a
+      Claude Code session in it, whose prompt names the spec file, the
+      task id, and the whole per-task pipeline — tdd, qa, review, mutants,
+      with `just keeler-branch` as its gate
+And   the recipe returns at once, printing how to attach
 And   the main working tree is untouched
+```
+
+### Scenario: A finished agent leaves its verdict where the shell can read it
+
+```
+Given a spawned session that has exited
+When  its tmux session is gone
+Then  .keeler/runs/<spec-slug>/<task-id>.exit holds the session's exit code
+And   `just keeler-status <spec>` lists each task as running, done or failed
+```
+
+### Scenario: Spawning without tmux is refused, and says how to get it
+
+```
+Given a machine without tmux
+When  `just keeler-spawn <spec> T3` runs
+Then  it refuses before creating anything, naming tmux and how to install it
 ```
 
 ### Scenario: Spawning a blocked task is refused
@@ -105,11 +125,13 @@ And   no worktree or branch is created
 ### Scenario: Branch gates are diff-based only
 
 ```
-Given a task branch with changes
-When  `just dev` runs on that branch
-Then  crap-delta and mutants-diff run against the branch's merge base
-And   neither crap-baseline.json nor the coverage threshold is modified
-      on the branch
+Given a task branch with changes, and the bytes of crap-baseline.json
+      and the Justfile's cov recipe as they were on main
+When  `just keeler-branch` runs on that branch
+Then  the full local gate runs, then crap-delta, then mutants-diff
+And   afterwards crap-baseline.json and the cov recipe are byte-identical
+      to what they were — a branch measures against the baseline and
+      never moves it
 ```
 
 ### Scenario: Baseline updates happen at fan-in, on main
@@ -117,9 +139,19 @@ And   neither crap-baseline.json nor the coverage threshold is modified
 ```
 Given a task branch that passed its gates and was merged
 When  `just keeler-land` runs on main
-Then  the full gate suite runs on main
-And   crap-baseline.json is regenerated and the change, if any, is committed
-And   a branch that regenerated the baseline itself fails the CI check
+Then  `just dev` runs on main
+And   crap-baseline.json is regenerated and staged, not committed, and the
+      run says to review the diff and commit
+And   the working tree holds exactly that staged change and nothing else
+```
+
+### Scenario: A branch that moved the baseline is refused by CI
+
+```
+Given a keeler/* branch whose diff against main touches crap-baseline.json
+      or the Justfile's cov recipe
+When  the shipped CI workflow runs on its pull request
+Then  it fails naming the file — baselines move only at land time, on main
 ```
 
 ### Scenario: A branch that was green alone can still redden main
@@ -127,10 +159,31 @@ And   a branch that regenerated the baseline itself fails the CI check
 ```
 Given two task branches that each passed their gates
 When  the second is merged and `just keeler-land` runs on main
-Then  the full gate suite runs on main before anything else
-And   if it fails, the baseline is left exactly as it was and the run
-      exits non-zero, saying main is red after fan-in
-And   the baseline is only ever regenerated over a green main
+Then  `just dev` runs on main before anything else
+And   if it fails, the baseline is left exactly as it was, nothing is
+      staged, and the run exits non-zero saying main is red after fan-in
+```
+
+### Scenario: A branch ticks its task and nothing else
+
+```
+Given a task branch keeler/06-graph-mode/t2 whose pipeline reached
+      /keeler:mutants with zero survivors
+When  the stage finishes
+Then  T2's checkbox is ticked in the spec on that branch
+And   the spec's Status: line is unchanged
+And   `just keeler-graph` on main still reports T2 as not done, because
+      readiness is read from main, not from an unlanded branch
+```
+
+### Scenario: Landing the last task marks the spec implemented
+
+```
+Given a spec on main whose every task is ticked
+When  `just keeler-land` runs and the gates are green
+Then  the spec's Status: is set to Implemented and staged, alongside the
+      baseline, for the same human commit
+And   a spec with any task unticked is left as it was
 ```
 
 ### Scenario: Review leaves evidence
@@ -148,10 +201,11 @@ And   the keeler CI workflow fails a keeler/* branch PR that lacks it
 ```
 Given a fresh Rust project
 When  Keeler is installed into it
-Then  the graph command, spawn and land recipes, and the review-evidence
-      check land alongside the existing pipeline
-And   the linear road — /keeler:feature straight through — still works
-      unchanged with no graph annotations required
+Then  the graph command, the spawn, status, branch and land recipes, and
+      the review-evidence check land alongside the existing pipeline
+And   a spec written in the old format — no Needs: on any task — is read
+      by `just keeler-graph` with every task reported ready
+And   `just dev` is the recipe it was, and /keeler:feature routes as it did
 ```
 
 ---
@@ -165,23 +219,42 @@ installer wiring lands last, when there is something real to ship. T3, T4
 and T5 need only T1's format — they are the fan-out of this very spec.
 
 - [ ] **T1 — Task lines grow ids and needs.** Scenarios: _The tasks stage
-      emits a dependency graph_. Tests: unit + property — parser accepts
-      the extended task line, property test that parse ∘ render is
-      identity, acyclicity check on generated graphs. Deliverable: the
-      Tasks format in `TEMPLATE.md`, the `/keeler:tasks` command emitting
-      it, and the parser both commands share.
+      emits a dependency graph_. Tests: acceptance — the harness drives
+      `scripts/keeler-graph.sh` as a subprocess against fixture specs (the
+      pattern `tests/installer.rs` uses for `install.sh`): the extended
+      task line is read, a malformed one is refused naming the line, and
+      `TEMPLATE.md` and `tasks.md` carry the format. Property — over
+      generated acyclic graphs, every task is reported exactly once as
+      ready, blocked or done. Deliverable: the Tasks format in
+      `TEMPLATE.md`, the `/keeler:tasks` command emitting it, and
+      `scripts/keeler-graph.sh`, which `just keeler-graph` and
+      `keeler-spawn` both call.
 - [ ] **T2 — /keeler:graph reads readiness.** Needs: T1. Scenarios:
       _Graph status names what is unblocked_, _A cycle is refused loudly_.
-      Tests: unit + acceptance against fixture specs.
+      Tests: acceptance — `just keeler-graph` against fixture specs, and
+      the command file instructs running it rather than reading the spec
+      itself. Cycle detection is the script's, so the refusal is machine
+      checkable and not an agent's opinion.
 - [ ] **T3 — just keeler-spawn.** Needs: T1. Scenarios: _Spawning a task
-      creates an isolated agent_, _Spawning a blocked task is refused_.
-      Tests: acceptance — harness drives the recipe against a generated
-      project with a stub `claude` on PATH, offline.
+      creates an isolated agent_, _A finished agent leaves its verdict where
+      the shell can read it_, _Spawning without tmux is refused, and says
+      how to get it_, _Spawning a blocked task is refused_. Tests:
+      acceptance — harness drives the recipe against a generated project
+      with stub `claude` and `tmux` on PATH, offline; the stubs record what
+      they were asked to run, so the prompt, the permission flags and the
+      session name are all asserted. Deliverable: `keeler-spawn`,
+      `keeler-status`, and the tmux check in `install.sh`.
 - [ ] **T4 — Gates split into branch-side and land-side.** Needs: T1.
       Scenarios: _Branch gates are diff-based only_, _Baseline updates
       happen at fan-in, on main_, _A branch that was green alone can still
-      redden main_. Tests: acceptance — the harness runs both recipes and
-      inspects what changed; a fixture where the merged tree fails `just
+      redden main_, _A branch that moved the baseline is refused by CI_,
+      _A branch ticks its task and nothing else_, _Landing the last task
+      marks the spec implemented_. Deliverable: `just
+      keeler-branch`, `just keeler-land`, and the one-line change to
+      `mutants.md`: on a keeler/* branch it ticks the task and leaves
+      `Status:` to `keeler-land`.
+      Tests: acceptance — the harness runs both recipes and inspects what
+      changed; a fixture where the merged tree fails `just
       dev` proves the baseline is untouched and the exit is non-zero; CI
       check unit-tested.
 - [ ] **T5 — Review writes a file and CI wants it.** Needs: T1. Scenarios:
@@ -199,8 +272,13 @@ and T5 need only T1's format — they are the fan-out of this very spec.
       starting point.
 - [ ] **T6 — Installer ships graph mode.** Needs: T2, T3, T4, T5.
       Scenarios: _Adopters opt in, not out_. Tests: acceptance — the
-      install harness verifies the new file set and that the linear road
-      is byte-for-byte unaffected.
+      install harness verifies the new file set lands, that a spec with no
+      `Needs:` anywhere goes through `just keeler-graph` with every task
+      ready, and that the `dev` recipe is byte-identical to before. Not
+      "the linear road is byte-for-byte unaffected": T1 rewrites
+      `TEMPLATE.md` and `tasks.md`, T5 rewrites `review.md` and the
+      shipped workflow, and all of them are on the linear road. What is
+      unaffected is its behaviour, and that is what the test asserts.
 
 ---
 
@@ -214,48 +292,105 @@ The task line format extends the existing one minimally:
 
 `Needs:` is optional and empty means root.
 
-**There is no shared parser, and that is a decision, not a gap.**
-`/keeler:graph` is an instruction to Claude Code, not a program: it reads
-the spec the way it reads everything else, and asking it to shell out to a
-parser for a line it can read is ceremony. The one place a machine has to
-read the format is `just keeler-spawn`, which must refuse a blocked task
-without an agent in the loop — and there the format is simple enough that
-twenty lines of `awk` in the recipe cover it. The two alternatives both
-hand adopters a new runtime: a `keeler-graph` binary is the Rust installer
-this project parked (`HANDOVER.md` on `feat/installer-in-rust`), and an
-xtask subcommand never reaches adopters at all. Two places knowing the
-format is the cost; a new artifact to ship, version and verify would have
-been the larger one.
+**The parser is forty lines of shell, and where it lives is a decision.**
+`scripts/keeler-graph.sh` reads a spec's Tasks section and prints each
+task as ready, blocked (with unmet needs) or done; `just keeler-graph`
+shows that, `keeler-spawn` refuses on it, and `/keeler:graph` is a thin
+command that runs the recipe rather than reading the spec itself — so a
+cycle is refused by a program, not judged by an agent. The harness tests
+it as a subprocess, the way it tests `install.sh`.
+
+Two alternatives were weighed. A `cargo xtask` subcommand would be Rust
+under the mutation gate — but xtask is this repository's machinery and
+never reaches an adopter, and the parser is needed *in the adopter's
+project*, where the specs live and `keeler-spawn` runs. Shipping xtask to
+adopters is a new runtime and most of the parked Rust installer over
+again (`HANDOVER.md` on `feat/installer-in-rust`); keeping xtask here and
+shell there is two parsers of one format, drifting. So: shell, beside the
+two shell files already there and gated the same way. If the format ever
+outgrows sixty lines of shell, that is the signal to ship a binary — and
+that is its own spec about delivering one, not a side effect of this.
 
 Branch naming `keeler/<spec-slug>/<task-id>` is the invariant everything
 else hangs on: the CI review check triggers on it, `keeler-land` cleans it
 up, humans can read it in `git branch`. Property test worth having:
 slugging is stable and collision-free across the spec titles in `specs/`.
 
-Worktrees land as siblings of the repository root (`../<repo>-t3`), never
-inside it — inside would be visible to every other agent's globbing.
-`keeler-spawn` passes the headless session a prompt built from three
-things only: the spec path, the task id, and the stage to run. Anything
-more is context the spec should have contained.
+Worktrees land as siblings of the repository root
+(`../<repo>-<spec-slug>-<task-id>`), never inside it — inside would be
+visible to every other agent's globbing, and the spec slug in the path is
+what stops two in-flight specs' T3s from colliding.
 
-`keeler-land` runs in one order and refuses to run in any other: the full
-gate suite on main first, the baseline second, and only if the first was
-green. A red main after fan-in means two branches that were each right
+**The spawned agent runs the whole per-task pipeline**, not one stage:
+tdd, then qa, review and mutants, with `just keeler-branch` as its gate.
+The point of a spawn is a branch that finishes unattended, and a branch
+that stops after tdd never produces the review file, never earns its
+tick, and breaks the pipeline law by construction. The prompt is built
+from three things only — the spec path, the task id, and that
+instruction; anything more is context the spec should have contained.
+
+**Permissions are the spec's decision, not T3's.** The session runs with
+`--permission-mode acceptEdits` and an explicit `--allowedTools` covering
+`cargo`, `just` and `git` — enough to edit, test and commit inside its
+worktree, and no more. Not `bypassPermissions`: a headless agent with
+unrestricted shell is a decision nobody should make by default in a
+recipe.
+
+**The session lives in tmux, and that is what makes it both parallel and
+visible.** `keeler-spawn` creates a detached session named
+`keeler-<spec-slug>-<task-id>` and returns at once; three spawns are three
+sessions and the human is back at their prompt. `tmux ls` is the status
+board, `tmux attach` is the log — live, and one you can type into. When
+the session exits it writes its code to `.keeler/runs/<slug>/<task>.exit`,
+which is what `keeler-status` reads. Nothing here decides *what* to spawn:
+every session is one the human named, so the no-scheduler line holds. The
+alternatives — plain background processes with log files and PID
+tracking, or N terminals by hand — are respectively half a scheduler and
+no parallelism; tmux is the thing that is neither. It becomes a
+requirement, checked by `install.sh` the way `just` is.
+
+Readiness is read from the spec **on main**. A tick on an unlanded branch
+unblocks nothing, which is what keeps five parallel branches from racing
+each other's dependencies. The tick still happens on the branch — it is
+how anyone can see the task was finished — and `keeler-land` sets
+`Status: Implemented` only when every box on main is ticked. `Status:` is
+therefore the one line no branch may write.
+
+`keeler-land` runs in one order and refuses to run in any other:
+`just dev` on main first, the baseline second, and only if the first was
+green. Not `dev-full` — hours of mutants on every fan-in is a cost nobody
+would pay, and `mutants-diff` on a freshly merged main has nothing to
+diff. A red main after fan-in means two branches that were each right
 alone are wrong together, and the human decides whether to fix or revert;
 what `keeler-land` guarantees is that the baseline never records a broken
 main as the new normal.
 
-The land-side/branch-side gate split is configuration, not new tooling:
-`just dev` on a branch already runs the diff gates; the change is that the
-baseline-touching recipes refuse to run off main, and CI diffs
-`crap-baseline.json` and the `cov` threshold on keeler/* PRs and fails if
-a branch touched them.
+**`keeler-land` stages; it never commits.** The rules say no commit
+without the human's word, and that a moved baseline is a decision worth a
+diff someone reads. So the recipe regenerates `crap-baseline.json`, sets
+`Status: Implemented` when every box is ticked, stages both, and prints
+"review the diff and commit". A `just` recipe that authored a commit
+would have an agent committing without asking the moment it ran one.
+
+The branch-side gate is one new recipe, `just keeler-branch`: `dev`, then
+`crap-delta`, then `mutants-diff`. `just dev` is untouched — an adopter on
+the linear road never sees a change — and the branch gate is what a
+spawned agent is told to run. The rest of the split is configuration:
+`crap-baseline` refuses to run off main, and CI diffs `crap-baseline.json`
+and the `cov` recipe on keeler/* PRs and fails if a branch touched them.
 
 ### Non-goals
 
-- No scheduler: nothing spawns a task the human did not name.
+- No scheduler *in this spec*: nothing spawns a task the human did not
+  name. A `keeler-fan-out` that spawns everything `keeler-graph` reports
+  ready is a natural next step and a spec of its own — one that builds on
+  tmux sessions that already work, rather than inventing its own
+  background story.
 - No merge automation: `keeler-land` verifies and updates baselines; it
-  does not decide merge order or resolve conflicts.
+  does not decide merge order or resolve conflicts. That includes the spec
+  file itself: five branches each ticking one box edit adjacent lines of
+  one file, and the human resolves that at merge — a one-line conflict,
+  and the price of a tick that is visible on the branch that earned it.
 - No cross-spec graphs: a DAG spans one spec. Two features are two graphs.
 - No Windows story beyond what the installer already claims.
 - No portability to other agents in this spec; the spawn recipe assumes
