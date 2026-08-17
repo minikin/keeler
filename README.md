@@ -9,8 +9,10 @@ you approved, no bugfix without a failing test first, and no change is done
 until it passes a set of gates that check each other. It doesn't ask the
 agent to be careful — it makes carelessness fail the build.
 
-It is named after [Leonarde Keeler](https://en.wikipedia.org/wiki/Leonarde_Keeler),
-builder of the first practical polygraph. **[KEELER.md](KEELER.md)** explains
+>It is named after [Leonarde Keeler](https://en.wikipedia.org/wiki/Leonarde_Keeler),
+builder of the first practical polygraph. 
+
+**[KEELER.md](KEELER.md)** explains
 why the workflow is shaped the way it is; this file gets you installed.
 
 ## Install
