@@ -304,7 +304,7 @@ draft and is two here: gates-then-baseline is one red-green cycle, and
 finishing a spec and removing worktrees is another, so `/keeler:tasks`
 split it rather than ship a task eight scenarios wide.
 
-- [ ] **T1 — Task lines grow ids and needs.** Scenarios: _The tasks stage
+- [x] **T1 — Task lines grow ids and needs.** Scenarios: _The tasks stage
       emits a dependency graph_, _A malformed Tasks section is refused
       naming the line_. Tests: acceptance — the harness drives
       `scripts/keeler-graph.sh` as a subprocess against fixture specs (the
