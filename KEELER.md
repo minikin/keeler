@@ -11,8 +11,10 @@ will not find them. Every gate is a Rust tool — `cargo nextest`,
 `cargo llvm-cov`, `cargo mutants`, `cargo crap`, `proptest`.
 
 The method carries over to any agent and any language with an equivalent
-toolchain. This implementation does not, and saying otherwise would be the
-kind of comfortable overclaim the gates below exist to catch.
+toolchain — porting it means swapping the `Justfile` recipes and tool
+names, and the pipeline and its rules stay the same. This implementation
+does not carry over, and saying otherwise would be the kind of comfortable
+overclaim the gates below exist to catch.
 
 It is named after **[Leonarde Keeler](https://en.wikipedia.org/wiki/Leonarde_Keeler)**, who built the first practical
 polygraph (it's in the Smithsonian). A polygraph doesn't detect lies — it
@@ -88,88 +90,113 @@ suite catches every injected bug.
 
 ## Why each stage exists
 
-| Stage                     | What it does                                                               | The AI failure mode it defends against                                               |
-| ------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| Stage                            | What it does                                                               | The AI failure mode it defends against                                               |
+| -------------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
 | **/keeler:spec** + approval      | Problem analysis → Gherkin scenarios → human sign-off                      | AI confidently building the wrong thing; requirements drifting mid-implementation    |
 | **/keeler:tasks**                | Spec broken into small ordered steps, each mapped to scenarios             | "Big bang" generation that's impossible to review; scenarios silently dropped        |
 | **/keeler:tdd**                  | Red → green → refactor; the failing test is shown *before* the code exists | AI writing tests after the fact that merely describe what the code already does      |
 | **/keeler:qa** (coverage + CRAP) | Every line of new code exercised; no function both complex and untested    | Plausible-looking generated code that nothing actually executes                      |
 | **/keeler:review**               | Spec-conformance check + independent generic review                        | Scope creep; code that satisfies the letter of tests but not the spec                |
 | **/keeler:mutants**              | Injects bugs; every one must be caught by a test                           | Assertion-free or tautological tests — the classic weakness of generated test suites |
-| **CRAP delta**            | Compares scores before/after the feature                                   | Slow erosion: each change "fine", the codebase quietly getting worse                 |
+| **CRAP delta**                   | Compares scores before/after the feature                                   | Slow erosion: each change "fine", the codebase quietly getting worse                 |
 | **/keeler:fix** (bugfix road)    | Failing regression test before any fix; minimal change after               | "Fixing" what was never reproduced; drive-by rewrites hiding inside a bugfix         |
 
+Behind the stages sit the gates themselves, and each catches what the
+others miss:
+
+| Gate       | What it catches                                               |
+| ---------- | ------------------------------------------------------------- |
+| Format     | style drift (`rustfmt`)                                       |
+| Lints      | warnings and footguns (`clippy`, pedantic, zero tolerance)    |
+| Tests      | broken behavior (`nextest` + doc tests)                       |
+| Coverage   | untested lines in changed code                                |
+| CRAP       | complex code hiding behind missing tests                      |
+| Review     | scope creep, spec mismatches — and what no other gate can see |
+| Mutation   | weak tests — bugs planted on purpose must be caught           |
+| CRAP delta | any function getting worse than the committed baseline        |
+
+One rule is absolute: **a surviving mutant means the test is weak.
+Strengthen the test — never bend the code to satisfy the tool.**
+
 The through-line: **at no point does "the AI said so" count as evidence.**
-Specs are approved by a human; everything else is verified by a machine.
+Specs are approved by a human; everything else is verified by a machine —
+except review, which is the one stage a machine cannot do for you and the
+one it cannot notice you skipping.
 
 ## The polygraph, literally
 
 The metaphor is not decoration — every part of the workflow has an exact
 counterpart in real polygraph practice:
 
-| Keeler | Polygraph practice |
-|---|---|
-| Spec written, then **approved before any code** | Question review: the examinee sees and agrees the questions *before* the session — surprises invalidate the test |
-| fmt / clippy | Instrument calibration |
-| Unit & acceptance tests | Relevant questions |
-| Coverage ("did anything exercise this line?") | A channel with no sensor attached records nothing — uncovered code is an unmonitored channel |
-| CRAP score | Stress indicator: complex *and* untested is where deception hides |
-| **Mutation testing** | **Control questions**: a known lie is planted and the sensors *must* react — if they don't, the instrument itself is broken and nothing it said can be trusted |
-| `crap-baseline` / `crap-delta` | Baseline: examiners measure *deviation from baseline*, never absolutes |
-| Final report with a PASS / FAIL / FLAKY status | The examiner's report |
+| Keeler                                          | Polygraph practice                                                                                                                                             |
+| ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Spec written, then **approved before any code** | Question review: the examinee sees and agrees the questions *before* the session — surprises invalidate the test                                               |
+| fmt / clippy                                    | Instrument calibration                                                                                                                                         |
+| Unit & acceptance tests                         | Relevant questions                                                                                                                                             |
+| Coverage ("did anything exercise this line?")   | A channel with no sensor attached records nothing — uncovered code is an unmonitored channel                                                                   |
+| CRAP score                                      | Stress indicator: complex *and* untested is where deception hides                                                                                              |
+| **Mutation testing**                            | **Control questions**: a known lie is planted and the sensors *must* react — if they don't, the instrument itself is broken and nothing it said can be trusted |
+| `crap-baseline` / `crap-delta`                  | Baseline: examiners measure *deviation from baseline*, never absolutes                                                                                         |
+| Final report with a PASS / FAIL / FLAKY status  | The examiner's report                                                                                                                                          |
 
 The control-question row is the deepest part of the mapping: mutation
 testing doesn't test the code, it tests the *tests* — exactly as control
 questions don't probe the examinee, they probe the instrument.
 
-## The moving parts
+And every channel is blind to something. Tests measure the code you
+wrote; mutants measure the tests; CRAP measures the shape of both. None
+of them reads the spec, and none asks whether what the code produces is
+valid by some authority outside the test. Review is the channel that can —
+and the one that leaves no trace when skipped. The channels together catch
+what one alone cannot, but only when all of them run.
 
-- `specs/` — one Markdown file per feature: context, Given/When/Then
-  scenarios (these ARE the acceptance criteria), task checklist,
-  implementation notes. Specs are law: the AI may not edit one without
-  permission (only `Status:` and task checkboxes move as bookkeeping).
-- `.claude/commands/` — one slash command per stage (`/keeler:spec`, `/keeler:tasks`,
-  `/keeler:tdd`, `/keeler:qa`, `/keeler:review`, `/keeler:mutants`), plus `/keeler:feature` which runs the whole
-  pipeline with a hard stop at spec approval, and `/keeler:fix` for the bugfix road.
-- `.claude/keeler.md` — the standing rules the AI works under (imported by
-  `CLAUDE.md`): the pipeline, change classes, quality bars, "never commit without confirmation", "every task
-  ends with an English summary that re-surfaces discovered problems".
-- `.claude/skills/` — knowledge that loads itself when relevant:
-  **property-testing** (invariant catalog for the TDD and mutation stages)
-  and **gherkin-specs** (scenario-writing rules for the spec stage). Global
-  companions worth installing: rust-best-practices, clean-code,
-  rust-async-patterns.
-- `Justfile` — every gate as one short command (`just dev`, `just
-  mutants-diff`, `just crap-delta`), so the human can re-run anything the AI
-  claims.
-- `.github/workflows/ci.yml` — the same gates in CI (installed as
-  `keeler.yml` in your project): lints, tests,
-  coverage ≥ 90%, CRAP ≤ 15, and mutation tests on the changed lines of every
-  PR. Locally the law is discipline; in CI it's physics.
+## Two rules that make the rest hold
 
-## Tests, three ways
+- **Specs are law.** The Given/When/Then scenarios in `specs/` *are* the
+  acceptance criteria — every one maps to a test named after it, so `grep`
+  answers "is this scenario enforced?" The agent may not edit a spec
+  without permission; only the `Status:` line and task checkboxes move, as
+  bookkeeping, and only at the end of the pipeline.
+- **Every claim is re-runnable.** Every gate is one `just` recipe, so a
+  human can rerun anything the agent says it did. Locally the law is
+  discipline; in CI it's physics.
+
+## Tests, three ways — and the test of the tests
 
 1. **Unit tests** pin individual behaviors, next to the code.
 2. **Property tests** (proptest) pin *invariants* — "display then parse always
    returns the same set", "output is always sorted and non-overlapping" —
    letting randomness hunt for the edge cases nobody thought to write down.
-   When proptest finds a counterexample, its seed file under
-   `proptest-regressions/` is committed: the found case is pinned forever.
+   When proptest finds a counterexample it writes a seed file, and that
+   file is committed: the found case is pinned forever. (Where it lands
+   depends on the crate — beside `lib.rs` when there is one, beside the test
+   file otherwise; the rules file says how to configure the second.)
 3. **Acceptance tests** — one per spec scenario, named after it, so
    `grep` answers "is this scenario actually enforced?"
 
-## What this looked like in practice
+**Mutation testing** is not a fourth kind. It is what checks the other
+three. `cargo mutants` edits the code — flips a `<` to `<=`, replaces a
+return value, deletes a branch — and runs the suite against each edit. A
+test that still passes with the bug in place was never testing that line;
+it was describing whatever the code happened to do. Every surviving mutant
+is a claim the suite makes and cannot back, and the response is always a
+stronger test, never a weaker mutant. `just mutants-diff` runs it on the
+lines you changed; the whole crate is for a rainy afternoon.
 
-In the first real run of this pipeline (a port-range parser: `"80,443,8000-8100,22"` → canonical port set), the gates caught, mechanically, everything a tired reviewer
-would miss:
+What it can and cannot see is worth being exact about. It proves the tests
+are sensitive to *the code you wrote*. It cannot tell whether they assert
+the right thing — a test that counts substrings in a manifest instead of
+parsing it will kill every mutant and still miss a manifest cargo refuses
+to read. That is the gap review exists for.
 
-- The CRAP gate flagged user-facing **error messages with 0% test coverage**.
-- Mutation testing found `is_empty` was **unreachable through the public
-  API** — dead branch, now pinned by a test.
-- Mutation testing exposed a **redundant branch** in the merge logic
-  (an equivalent mutant) — the code got *simpler* as a result.
-- The pipeline itself had a hole: new untracked files escaped
-  `mutants-diff`. Found, fixed.
-
-None of those were noticed by reading the code. All of them were caught by
-gates.
+Two skills load themselves when the work calls for them: **property-testing**
+carries the invariant catalog (round-trips, idempotence, ordering, bounds)
+for the TDD and mutation stages, and **gherkin-specs** the scenario-writing
+rules for the spec stage. Recommended companions, installed on your machine
+rather than in the repo:
+**[rust-best-practices](https://github.com/apollographql/rust-best-practices)**
+for idiomatic Rust,
+**[clean-code](https://github.com/jackjin1997/ClawForge)** for the
+refactor step, and
+**[rust-async-patterns](https://github.com/search?q=rust-async-patterns+SKILL.md&type=code)**
+once the project grows async code.

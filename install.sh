@@ -12,7 +12,7 @@
 #   ./install.sh . --no-tools            # skip installing CLI tools
 #
 # KEELER_REF pins the version to install — a tag or a branch:
-#   KEELER_REF=v0.1.0 curl -fsSL .../install.sh | bash -s .
+#   KEELER_REF=v0.3.0 curl -fsSL .../install.sh | bash -s .
 set -euo pipefail
 
 # codeload takes tags and branches in the same short form.

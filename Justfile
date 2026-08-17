@@ -149,6 +149,6 @@ mutants-diff:
 # Full validation including mutation tests (slow)
 dev-full: dev mutants-all
 
-# Upgrade Keeler itself (KEELER_REF=v0.1.0 just keeler-upgrade to pin a tag)
+# Upgrade Keeler itself (KEELER_REF=v0.3.0 just keeler-upgrade to pin a tag)
 keeler-upgrade:
     curl -fsSL https://raw.githubusercontent.com/minikin/keeler/main/install.sh | bash -s .
