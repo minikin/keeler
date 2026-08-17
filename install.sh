@@ -170,6 +170,7 @@ for f in .claude/commands/keeler/spec.md .claude/commands/keeler/tasks.md \
          .claude/commands/keeler/tdd.md .claude/commands/keeler/qa.md \
          .claude/commands/keeler/review.md .claude/commands/keeler/mutants.md \
          .claude/commands/keeler/feature.md .claude/commands/keeler/fix.md \
+         .claude/commands/keeler/graph.md \
          .claude/skills/property-testing/SKILL.md \
          .claude/skills/gherkin-specs/SKILL.md \
          specs/TEMPLATE.md KEELER.md Justfile \
