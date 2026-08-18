@@ -857,11 +857,24 @@ fn assert_the_linear_road_is_unchanged(project: &TempProject, justfile: &str) {
             .unwrap_or_else(|| panic!("/keeler:feature no longer routes through {stage} in order"));
         at += found + stage.len();
     }
-    for detour in ["keeler-spawn", "keeler-branch", "keeler-graph"] {
-        assert!(
-            !feature.contains(detour),
-            "/keeler:feature now routes through {detour} — the linear road changed",
-        );
+    // The routing is the numbered stage list, so that is where a detour
+    // would have to appear. Prose elsewhere may say graph mode exists —
+    // what may not change is which stages `/keeler:feature` runs.
+    for step in feature
+        .lines()
+        .filter(|line| line.starts_with(|c: char| c.is_ascii_digit()))
+    {
+        for detour in [
+            "keeler-spawn",
+            "keeler-branch",
+            "keeler-graph",
+            "keeler:graph",
+        ] {
+            assert!(
+                !step.contains(detour),
+                "/keeler:feature now routes through {detour}: {step:?}",
+            );
+        }
     }
 }
 
