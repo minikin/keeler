@@ -392,12 +392,22 @@ keeler-spawn SPEC TASK:
     $prompt
     KEELER_PROMPT
     )
-    # Everything the session prints is teed to the log, so the run can be
-    # read after the tmux window is gone.
+    # Everything the session prints is teed to the log as it goes —
+    # `--verbose`, because without it claude -p prints nothing until its
+    # final answer, and four minutes of honest work looks exactly like a
+    # hang to anyone watching.
     {
-        claude -p "\$prompt" --permission-mode acceptEdits --allowedTools '$tools' --disallowedTools '$blocked'
-        # The verdict is the gate's, not the agent's: claude -p exits zero
-        # for any finished turn, including one that ended in FAIL.
+        claude -p "\$prompt" --verbose --permission-mode acceptEdits --allowedTools '$tools' --disallowedTools '$blocked'
+        agent=\$?
+        # The gate runs only after a finished turn. claude -p exits zero
+        # for any turn it finished, including one that ended in FAIL — so
+        # a non-zero exit is a turn that never ended, and gating on top of
+        # it would make the agent's death the gate's verdict on a worktree
+        # nobody touched.
+        if [ "\$agent" != 0 ]; then
+            echo "keeler: the agent ended without finishing its turn (exit \$agent) — the gate did not run" >&2
+            exit "\$agent"
+        fi
         just keeler-branch
         echo \$? > "$exit_file"
     } 2>&1 | tee "$log_file"
@@ -483,7 +493,47 @@ keeler-status SPEC:
             continue
         fi
         printf '%-6s %-16s log %s  worktree %s\n' "$id" "$state" "$log_file" "$worktree"
+        # A death is ordinary rather than exceptional — five of this
+        # project's first six spawns ended that way — so the board offers
+        # the way back rather than leaving it to be remembered.
+        [ "$state" = died ] && printf '       resume with: just keeler-resume %s %s\n' "$rel" "$id"
     done <<< "$report"
+
+# A spawned session that ended before its pipeline finished left its
+# worktree, its branch and its commits exactly where they were — the
+# runner it was started from is re-runnable, and this gives that a name.
+# Nothing new is created: the task picks up in the tree it already has,
+# and the commits already on the branch are how far it got.
+#
+# Graph mode: re-run a task whose session died — `just keeler-resume specs/01-foo.md T3`.
+keeler-resume SPEC TASK:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    spec="{{SPEC}}"
+    task="{{TASK}}"
+    [ -f "$spec" ] || { echo "keeler-resume: $spec is not a file" >&2; exit 1; }
+    root="$(git rev-parse --show-toplevel)"
+    spec_abs="$(cd "$(dirname "$spec")" && pwd)/$(basename "$spec")"
+    slug="$(basename "$spec_abs" .md)"
+    tid="$(printf '%s' "$task" | tr '[:upper:]' '[:lower:]')"
+    runner="$root/.keeler/runs/$slug/$tid.sh"
+    session="keeler-$slug-$tid"
+    if [ ! -f "$runner" ]; then
+        echo "keeler-resume: $task was never spawned — there is no run to resume; use just keeler-spawn $spec $task" >&2
+        exit 1
+    fi
+    if command -v tmux >/dev/null 2>&1 && tmux has-session -t "=$session" 2>/dev/null; then
+        echo "keeler-resume: $task is still running — attach with tmux attach -t '=$session', or let it finish" >&2
+        exit 1
+    fi
+    if [ -f "$root/.keeler/runs/$slug/$tid.exit" ]; then
+        echo "keeler-resume: $task already reached its gate — its verdict stands; resume is for a session that ended before it" >&2
+        exit 1
+    fi
+    echo "keeler-resume: re-running $task in the worktree and branch it already has"
+    tmux new-session -d -s "$session" -c "$(dirname "$runner")" "bash $runner"
+    echo "  session:  tmux attach -t '=$session'"
+    echo "  board:    just keeler-status $spec"
 
 # Upgrade Keeler itself (KEELER_REF=v0.3.0 just keeler-upgrade to pin a tag)
 keeler-upgrade:
