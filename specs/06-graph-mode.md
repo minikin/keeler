@@ -339,7 +339,7 @@ split it rather than ship a task eight scenarios wide.
       the command file instructs running it rather than reading the spec
       itself. Cycle detection is the script's, so the refusal is machine
       checkable and not an agent's opinion.
-- [ ] **T3 — just keeler-spawn.** Needs: T1. Scenarios: _Spawning a task
+- [x] **T3 — just keeler-spawn.** Needs: T1. Scenarios: _Spawning a task
       creates an isolated agent_, _A spawned agent commits on its branch,
       and nowhere else_, _A finished agent leaves a verdict the gate
       decided, and a log_, _A dead session is resumable, and says so_,

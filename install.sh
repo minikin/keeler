@@ -95,6 +95,15 @@ if [ "$WITH_TOOLS" = 1 ]; then
     done
     command -v just >/dev/null 2>&1 && ok "just" || missing+=("just")
 
+    # tmux is graph mode's requirement, not a cargo tool: every agent
+    # `just keeler-spawn` starts lives in a detached session, and binstall
+    # has nothing to install it with — so this one is reported, not fixed.
+    if command -v tmux >/dev/null 2>&1; then
+        ok "tmux"
+    else
+        note "tmux not found — graph mode (just keeler-spawn) needs it: brew install tmux, or sudo apt-get install tmux"
+    fi
+
     if [ "${#missing[@]}" -gt 0 ]; then
         note "installing: ${missing[*]}"
         if ! command -v cargo-binstall >/dev/null 2>&1; then
@@ -345,7 +354,7 @@ added=0
 # Slash placement doesn't change what these patterns cover here, so a
 # project's `target/` already covers our `/target` — equivalent forms must
 # not pile up as duplicates.
-for entry in '/target' 'lcov.info' 'crap-report.json' 'mutants.out*/'; do
+for entry in '/target' 'lcov.info' 'crap-report.json' 'mutants.out*/' '.keeler/'; do
     core="${entry#/}"; core="${core%/}"
     grep -qxF -e "$core" -e "/$core" -e "$core/" -e "/$core/" "$gitignore" \
         || { printf '%s\n' "$entry" >> "$gitignore"; added=$((added + 1)); }
