@@ -618,6 +618,15 @@ fn landing_cleans_up_only_what_is_clean() {
         "the run does not name the dirty worktree it left:\n{}",
         both(&output)
     );
+    // And it says why it left it. Without the check, `git worktree remove`
+    // refuses a dirty worktree by itself — the same three facts hold and
+    // the human is told only that git said no, which is not "look at this
+    // before anything removes it".
+    assert!(
+        both(&output).contains("uncommitted changes"),
+        "the run does not say why the worktree was left:\n{}",
+        both(&output)
+    );
 }
 
 #[test]
@@ -686,6 +695,15 @@ fn only_an_approved_graph_can_be_finished() {
     assert!(output.status.success(), "{}", both(&output));
     assert_eq!(draft.spec(), before, "a Draft spec was marked Implemented");
     assert_eq!(draft.staged(), vec!["crap-baseline.json".to_string()]);
+    // And it does not say it marked one either: a run whose only mark is
+    // that the substitution found no `Approved` to replace still announces
+    // a spec it finished, and would rewrite one whose Status: line merely
+    // mentions the word.
+    assert!(
+        !both(&output).contains("is now Implemented"),
+        "the run claims to have finished a Draft spec:\n{}",
+        both(&output)
+    );
 
     // And a spec with no tasks at all is left as it was too — nothing was
     // finished, because nothing was ever asked for
@@ -698,6 +716,11 @@ fn only_an_approved_graph_can_be_finished() {
     assert!(output.status.success(), "{}", both(&output));
     assert_eq!(empty.spec(), before, "a spec with no tasks was Implemented");
     assert_eq!(empty.staged(), vec!["crap-baseline.json".to_string()]);
+    assert!(
+        !both(&output).contains("is now Implemented"),
+        "the run claims to have finished a spec with no tasks:\n{}",
+        both(&output)
+    );
 }
 
 #[test]
