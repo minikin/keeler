@@ -457,11 +457,14 @@ keeler-upgrade:
 # nothing to diff.
 #
 # Then it finishes what the fan-in finished: a spec whose every box is
-# ticked gets `Status: Implemented`, staged beside the baseline for the
-# same human commit, and each landed task's worktree and branch are
-# removed — but only when the worktree is clean. Uncommitted work is named
-# and left where it is; nothing here is committed, and nothing a human has
-# not seen is thrown away.
+# ticked — as committed, never as the working tree happens to read — gets
+# `Status: Implemented`, staged beside the baseline for the same human
+# commit, and each landed task's worktree and branch are removed. Only
+# when there is nothing to lose, though: a worktree with uncommitted
+# changes, one that has moved to another branch, and a branch holding
+# commits main does not have are each named and left where they are.
+# Nothing here is committed, and nothing a human has not seen is thrown
+# away.
 keeler-land:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -499,6 +502,16 @@ keeler-land:
     for spec in "$root"/specs/*.md; do
         [ -f "$spec" ] || continue
         rel="${spec#"$root"/}"
+        # Ticks that are not committed are not landed. `keeler-spawn`
+        # refuses the mirror of this and for the same reason: readiness is
+        # what the repository records, not what a file happens to say right
+        # now. It is also what keeps the staged diff honest — a spec with
+        # unrelated edits would have them swept into the commit the human
+        # is asked to review as the baseline and the Status: line.
+        if [ -n "$(git status --porcelain -- "$spec")" ]; then
+            echo "keeler-land: $rel differs from HEAD — nothing here reads uncommitted ticks; commit it and land again." >&2
+            continue
+        fi
         # A spec the parser refuses is one nothing here may act on: not
         # marked, not cleaned up after. Say so and leave it alone.
         if ! report="$(bash "$root/scripts/keeler-graph.sh" "$spec" 2>&1)"; then
@@ -512,23 +525,27 @@ keeler-land:
         all_done="$(printf '%s\n' "$report" | awk '
             NF { n++; if ($2 == "done") d++ }
             END { print (n > 0 && n == d) ? "yes" : "no" }')"
-        status_line="$(grep -m1 -E '^[*_[:space:]]*Status:' "$spec" || true)"
+        # The Status: line's value, not the line: `TEMPLATE.md` carries the
+        # menu `Draft | Approved | Implemented`, and a substring test reads
+        # that as an approval and rewrites the menu.
+        status="$(grep -m1 -E '^[*_[:space:]]*Status:' "$spec" \
+            | sed -E 's/^[*_[:space:]]*Status:[*_[:space:]]*//; s/[[:space:]]*$//' || true)"
         # Implemented follows Approved: a Draft nobody approved is not a
         # contract that can have been fulfilled, however many boxes are
         # ticked — and a spec already Implemented needs no second write.
-        case "$all_done:$status_line" in
-            yes:*Approved*)
-                marked="$(mktemp)"
-                awk '!written && /^[*_[:space:]]*Status:/ { sub(/Approved/, "Implemented"); written = 1 } { print }' \
-                    "$spec" > "$marked"
-                # Copied, not moved: `mv` would give the spec the temporary
-                # file's private permissions.
-                cat "$marked" > "$spec"
-                rm -f "$marked"
-                git add -- "$spec"
-                echo "keeler-land: every task in $rel is ticked — its Status: is now Implemented, staged alongside the baseline for the same commit."
-                ;;
-        esac
+        if [ "$all_done" = yes ] && [ "$status" = Approved ]; then
+            # Onto a copy and then a move, never a truncate-and-write: a
+            # land stopped mid-write would otherwise leave the spec empty.
+            # `cp -p` first, so the copy carries the spec's own permissions
+            # rather than a temporary file's.
+            marked="$spec.keeler-land"
+            cp -p "$spec" "$marked"
+            awk '!written && /^[*_[:space:]]*Status:/ { sub(/Approved/, "Implemented"); written = 1 } { print }' \
+                "$spec" > "$marked"
+            mv -f "$marked" "$spec"
+            git add -- "$spec"
+            echo "keeler-land: every task in $rel is ticked — its Status: is now Implemented, staged alongside the baseline for the same commit."
+        fi
         # A landed task's worktree and branch have done their job — but
         # only when the worktree is clean. Uncommitted work is the human's
         # to look at before anything removes it.
@@ -545,8 +562,27 @@ keeler-land:
             # registered. Draining grep's input costs nothing.
             registered="$(git worktree list --porcelain)"
             printf '%s\n' "$registered" | grep -xF "worktree $worktree" > /dev/null || continue
+            # And it must still be the task's worktree: a human who
+            # switched it to a branch of their own left the task's branch
+            # standing somewhere else, and deleting it here would be
+            # deleting something this recipe never looked at.
+            on="$(git -C "$worktree" symbolic-ref --quiet --short HEAD || echo 'a detached HEAD')"
+            if [ "$on" != "$branch" ]; then
+                echo "keeler-land: $worktree is on $on, not $branch — left in place; it is not the task's worktree any more."
+                continue
+            fi
             if [ -n "$(git -C "$worktree" status --porcelain)" ]; then
                 echo "keeler-land: $worktree has uncommitted changes — left in place, with $branch; look at it before removing them."
+                continue
+            fi
+            # Committed is not merged. A branch holding commits main does
+            # not have is work nobody has looked at, and deleting the
+            # branch would leave it reachable only through the reflog. A
+            # squash merge looks exactly like this from here, so the
+            # refusal comes with the command that finishes the job.
+            if ! git merge-base --is-ancestor "$branch" HEAD; then
+                echo "keeler-land: $branch has commits that are not on $main_branch — left in place, with $worktree. If they landed as a squash merge, finish it yourself:"
+                echo "    git worktree remove $worktree && git branch -D $branch"
                 continue
             fi
             # Tidying up is the last thing this recipe does and the least
@@ -558,10 +594,19 @@ keeler-land:
                 echo "keeler-land: $worktree could not be removed — left in place, with $branch." >&2
                 continue
             fi
-            if git branch -D "$branch" >/dev/null 2>&1; then
+            # `-d`, not `-D`: the branch is contained in HEAD by the check
+            # above, so the safe delete is the one that can succeed — and
+            # nothing here can quietly destroy a commit.
+            if git branch -d "$branch" >/dev/null 2>&1; then
                 echo "keeler-land: removed the landed worktree $worktree and its branch $branch"
             else
                 echo "keeler-land: removed the landed worktree $worktree; its branch $branch is still here, delete it yourself"
             fi
+            # The verdict and the runner belong to the run that has now
+            # landed: `keeler-status` reads the verdict before the graph,
+            # so a stale one has the board reporting "passed" beside the
+            # path of a worktree this very land removed. The log stays —
+            # it is the only record of what the run said.
+            rm -f "$root/.keeler/runs/$slug/$tid.exit" "$root/.keeler/runs/$slug/$tid.sh"
         done <<< "$report"
     done

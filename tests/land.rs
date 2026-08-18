@@ -275,6 +275,39 @@ impl Project {
         path
     }
 
+    /// Runs git inside one of this project's worktrees.
+    fn git_in(worktree: &Path, args: &[&str]) -> String {
+        let output = Command::new("git")
+            .args(["-c", "user.email=probe@keeler", "-c", "user.name=probe"])
+            .args(args)
+            .current_dir(worktree)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .output()
+            .expect("failed to run git");
+        assert!(
+            output.status.success(),
+            "git {args:?} in {} failed:\n{}",
+            worktree.display(),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
+    /// The run record `keeler-spawn` leaves for a task: the verdict, the
+    /// log and the runner script.
+    fn runs_dir(&self) -> PathBuf {
+        self.dir.join(".keeler").join("runs").join(SLUG)
+    }
+
+    fn write_run_record(&self, tid: &str) {
+        let runs = self.runs_dir();
+        std::fs::create_dir_all(&runs).unwrap();
+        std::fs::write(runs.join(format!("{tid}.exit")), "0\n").unwrap();
+        std::fs::write(runs.join(format!("{tid}.log")), "the run said things\n").unwrap();
+        std::fs::write(runs.join(format!("{tid}.sh")), "#!/usr/bin/env bash\n").unwrap();
+    }
+
     /// Every branch this repository has, by name.
     fn branches(&self) -> Vec<String> {
         self.git(&["branch", "--format=%(refname:short)"])
@@ -521,6 +554,7 @@ fn landing_the_last_task_marks_the_spec_implemented() {
     // Given a spec on main whose every task is ticked
     let project = Project::with_spec("last-task", &spec_with(&[true, true], "Approved"));
     let head = project.git(&["rev-parse", "HEAD"]);
+    std::fs::set_permissions(project.spec_path(), std::fs::Permissions::from_mode(0o640)).unwrap();
 
     // When `just keeler-land` runs and the gates are green
     let output = project.land();
@@ -547,6 +581,26 @@ fn landing_the_last_task_marks_the_spec_implemented() {
         both(&output).contains(&format!("specs/{SLUG}.md")),
         "the run does not name the spec it finished:\n{}",
         both(&output)
+    );
+
+    // And the spec is still the file it was — same permissions, no
+    // half-written copy left beside it: the mark is a move onto the spec,
+    // not a truncate-then-write a stopped run could leave empty
+    let mode = std::fs::metadata(project.spec_path())
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(mode, 0o640, "marking the spec changed its permissions");
+    let left_behind: Vec<PathBuf> = std::fs::read_dir(project.path().join("specs"))
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path != &project.spec_path())
+        .collect();
+    assert!(
+        left_behind.is_empty(),
+        "the mark left a temporary file behind: {left_behind:?}"
     );
 
     // And landing again changes nothing: the spec is already Implemented,
@@ -583,6 +637,7 @@ fn landing_cleans_up_only_what_is_clean() {
     let project = Project::with_spec("cleanup", &spec_with(&[true, true], "Approved"));
     let clean = project.add_worktree("t1");
     let dirty = project.add_worktree("t2");
+    project.write_run_record("t1");
     std::fs::write(
         dirty.join("crap-baseline.json"),
         "{\"still\":\"working\"}\n",
@@ -618,6 +673,25 @@ fn landing_cleans_up_only_what_is_clean() {
         "the run does not name the dirty worktree it left:\n{}",
         both(&output)
     );
+    // And the verdict and runner of the run that finished go with the
+    // worktree, while its log stays: `keeler-status` reads the verdict
+    // before the graph, so a stale one has the board naming a worktree
+    // this very run deleted
+    let runs = project.runs_dir();
+    assert!(!runs.join("t1.exit").exists(), "a stale verdict was kept");
+    assert!(!runs.join("t1.sh").exists(), "a runner for a gone worktree");
+    assert!(
+        runs.join("t1.log").exists(),
+        "the run's log was thrown away"
+    );
+    let board = project.just(&["keeler-status", &format!("specs/{SLUG}.md")]);
+    assert!(board.status.success(), "{}", both(&board));
+    assert!(
+        !stdout(&board).contains(clean.to_str().unwrap()),
+        "the board still names the worktree the land removed:\n{}",
+        stdout(&board)
+    );
+
     // And it says why it left it. Without the check, `git worktree remove`
     // refuses a dirty worktree by itself — the same three facts hold and
     // the human is told only that git said no, which is not "look at this
@@ -658,6 +732,102 @@ fn a_worktree_that_will_not_go_is_named_rather_than_fatal() {
     // And the next task's worktree is still cleaned up — one that would
     // not go does not stop the rest
     assert!(!clean.exists(), "the cleanup stopped at the first refusal");
+}
+
+#[test]
+fn landing_reads_the_ticks_that_are_committed() {
+    // Given a spec whose last box is ticked only in the working tree —
+    // /keeler:mutants ticks and, by the commit law, does not commit — and
+    // a clean worktree for that task
+    let project = Project::with_spec("uncommitted-tick", &spec_with(&[true, false], "Approved"));
+    let in_flight = project.add_worktree("t2");
+    std::fs::write(project.spec_path(), spec_with(&[true, true], "Approved")).unwrap();
+    let before = project.spec();
+
+    // When `just keeler-land` runs on main
+    let output = project.land();
+
+    // Then nothing acts on that tick: the spec is not marked, the
+    // worktree is not removed, and the run says why — readiness is what
+    // the repository records, not what a file happens to say right now,
+    // which is the rule keeler-spawn already puts on the spec it reads
+    assert!(output.status.success(), "{}", both(&output));
+    assert_eq!(project.spec(), before, "an uncommitted tick was acted on");
+    assert!(in_flight.exists(), "an uncommitted tick removed a worktree");
+    assert!(
+        both(&output).contains(&format!("specs/{SLUG}.md")),
+        "the run does not name the spec it passed over:\n{}",
+        both(&output)
+    );
+
+    // And only the baseline is staged: a spec with uncommitted edits would
+    // otherwise sweep them into the commit the human is asked to review as
+    // the baseline and the Status: line
+    assert_eq!(project.staged(), vec!["crap-baseline.json".to_string()]);
+}
+
+#[test]
+fn a_branch_whose_commits_are_not_on_main_keeps_its_worktree() {
+    // Given two landed tasks with clean worktrees, one of whose branches
+    // carries a commit that never reached main
+    let project = Project::with_spec("unmerged", &spec_with(&[true, true], "Approved"));
+    let unmerged = project.add_worktree("t1");
+    let merged = project.add_worktree("t2");
+    std::fs::write(unmerged.join("notes.txt"), "work nobody merged\n").unwrap();
+    Project::git_in(&unmerged, &["add", "notes.txt"]);
+    Project::git_in(&unmerged, &["commit", "-qm", "work nobody merged"]);
+
+    // When `just keeler-land` runs on main
+    let output = project.land();
+    assert!(output.status.success(), "{}", both(&output));
+
+    // Then that worktree and its branch are left in place and named:
+    // deleting the branch would take the commit with it, and a land is
+    // not a place to lose work no one has looked at
+    assert!(
+        unmerged.exists(),
+        "an unmerged branch's worktree was removed"
+    );
+    assert!(
+        project.branches().contains(&format!("keeler/{SLUG}/t1")),
+        "a branch with unmerged commits was deleted: {:?}",
+        project.branches()
+    );
+    assert!(
+        both(&output).contains(unmerged.to_str().unwrap()),
+        "the run does not name the worktree it kept:\n{}",
+        both(&output)
+    );
+
+    // And the one whose commits are on main is still cleaned up
+    assert!(!merged.exists(), "the merged worktree survived");
+}
+
+#[test]
+fn a_worktree_that_moved_to_another_branch_is_left_alone() {
+    // Given a landed task whose worktree a human switched to a branch of
+    // their own — the task's branch now stands somewhere else entirely
+    let project = Project::with_spec("moved", &spec_with(&[true, true], "Approved"));
+    let moved = project.add_worktree("t1");
+    Project::git_in(&moved, &["switch", "-q", "-c", "fixup"]);
+
+    // When `just keeler-land` runs on main
+    let output = project.land();
+    assert!(output.status.success(), "{}", both(&output));
+
+    // Then neither is touched: this is not the task's worktree any more,
+    // and the branch is one this recipe never looked at
+    assert!(moved.exists(), "someone else's worktree was removed");
+    assert!(
+        project.branches().contains(&format!("keeler/{SLUG}/t1")),
+        "a branch no worktree held was deleted: {:?}",
+        project.branches()
+    );
+    assert!(
+        both(&output).contains("fixup"),
+        "the run does not say what the worktree is on now:\n{}",
+        both(&output)
+    );
 }
 
 #[test]
@@ -721,6 +891,23 @@ fn only_an_approved_graph_can_be_finished() {
         "the run claims to have finished a spec with no tasks:\n{}",
         both(&output)
     );
+
+    // And a Status: line that merely mentions the word — the template's
+    // own `Draft | Approved | Implemented` menu — is not an approval: the
+    // line must *be* Approved, or the substitution rewrites the menu
+    let template = Project::with_spec(
+        "template-menu",
+        &spec_with(&[true, true], "Draft | Approved | Implemented"),
+    );
+    let before = template.spec();
+    let output = template.land();
+    assert!(output.status.success(), "{}", both(&output));
+    assert_eq!(
+        template.spec(),
+        before,
+        "a Status: line that only mentions Approved was rewritten"
+    );
+    assert_eq!(template.staged(), vec!["crap-baseline.json".to_string()]);
 }
 
 #[test]
