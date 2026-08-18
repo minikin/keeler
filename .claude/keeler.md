@@ -48,9 +48,33 @@ Not every change is a feature. Pick the lightest class that honestly fits — an
 
 Rule of thumb: if you're debating whether it changes behavior, it's not trivial. If a "trivial" change makes any test fail, it wasn't trivial — reclassify.
 
+## Graph mode: the same pipeline, in parallel
+
+The road above is one agent, one branch, stages in sequence. **Graph mode is that same pipeline run by several agents at once** — one per task, each on its own branch in its own worktree, each running `tdd → qa → review → mutants` for the one task it was given. It is opt-in and adds nothing to the linear road: `/keeler:feature` routes exactly as it always did, and a project that never runs the recipes below never notices they are there.
+
+The approved spec is what every spawned agent reads, so the graph lives in the spec and nowhere else. `/keeler:tasks` writes each task's dependencies into the Tasks section as `Needs: T1, T2.` — approving the spec is approving the graph. A task with no `Needs:` is a root, so a spec written before graph mode existed reads as a graph whose every task is ready.
+
+| Command                                       | What it does                                                                                                                                                                                                          |
+| --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/keeler:graph` — `just keeler-graph <spec>`  | Reads the graph: which tasks are ready, blocked (naming what they wait on) or done. A cycle or a `Needs:` naming no task is refused by the parser, naming the line. Readiness is read from the spec **on main** — a tick on an unlanded branch unblocks nothing. |
+| `just keeler-spawn <spec> <task>`             | Cuts the worktree and branch `keeler/<spec-slug>/<task-id>` and hands the task to a headless agent in a detached tmux session, returning at once. Refuses a blocked or already-spawned task, a spec that differs from HEAD or is not `Approved`, and a machine without tmux. |
+| `just keeler-status <spec>`                   | The board: running, passed, failed, died mid-pipeline, or never spawned — with each run's log and worktree, which are what a resume reads.                                                                             |
+| `just keeler-branch`                          | The gate a task branch runs in place of `just dev`: `dev`, then `crap-delta`, then `mutants-diff` — diff-based by construction.                                                                                        |
+| `just keeler-land`                            | Fan-in, on main: `just dev` first, and only if it is green the baseline is regenerated and **staged, never committed**; a spec whose every box is ticked gets `Status: Implemented` staged beside it, and each landed task's clean worktree and branch are removed. |
+
+Three rules keep parallel branches from lying to each other:
+
+- **A branch measures the shared reference; it never moves it.** `crap-baseline.json` and the coverage bar in the `cov` recipe settle at fan-in, on main. CI refuses a `keeler/*` pull request whose diff touched either.
+- **A branch ticks its own task and leaves `Status:` alone.** `Status:` is the one line no branch may write; `just keeler-land` sets it on main once every box there is ticked.
+- **Review leaves a record.** /keeler:review writes `reviews/<spec-slug>/<task-id>.md`, and CI on a `keeler/*` pull request fails when it is missing or names a commit the branch did not make.
+
+`<spec-slug>` is the spec's file name without `.md`, and the task id is lowercased on the way into every path: `specs/01-login.md` T3 gives the branch `keeler/01-login/t3`, the worktree `../<repo>-01-login-t3`, the tmux session `keeler-01-login-t3` and the record `reviews/01-login/t3.md`. tmux is graph mode's one extra requirement; `just` and the cargo tools are the same ones the linear road uses.
+
 ## Commits
 
 **Never commit without explicit user confirmation.** Finish the work, run the gates, then ask — the user decides when a commit happens and may want to review the diff first. This applies to every stage, including "obvious" checkpoints like a finished task or a green pipeline.
+
+**The one place an agent commits without asking is a branch the human spawned.** `just keeler-spawn <spec> <task>` cuts a worktree, creates `keeler/<spec-slug>/<task-id>` in it, and hands it to a headless session that cannot stop to ask. So the word is given in advance and narrowly: on that branch, in that worktree, the agent commits as each stage finishes — which is what gives the review record a `Commit:` to name and leaves the worktree clean for `just keeler-land` to remove. The human named the task and ran the spawn: **that was the asking**, given before rather than after. Nowhere else, and never on main. And never pushed — the branch reaches the remote, and a pull request, only by the human's hand.
 
 ## Reporting
 
@@ -110,6 +134,13 @@ just dev        # fmt, lint, test, crap — the full fast gate
 just mutants src/lib.rs   # mutation tests for one file
 just mutants-diff         # mutation tests on files changed vs HEAD
 just dev-full   # dev + all mutants (slow)
+
+# Graph mode (opt-in; see the section above)
+just keeler-graph specs/01-foo.md      # ready / blocked / done
+just keeler-spawn specs/01-foo.md T3   # hand a ready task to an agent on its own branch
+just keeler-status specs/01-foo.md     # what each task is doing right now
+just keeler-branch                     # the gate a task branch runs
+just keeler-land                       # fan-in, on main: gates, then the baseline
 ```
 
 ## Skills

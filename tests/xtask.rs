@@ -151,7 +151,18 @@ fn no_workflow_calls_a_script_that_is_not_there() {
                 .chars()
                 .take_while(|c| !c.is_whitespace() && *c != '"' && *c != '\'')
                 .collect();
-            if !repo_root().join("scripts").join(&script).exists() {
+            // A glob is a set, not a name: it names whatever it matches at
+            // run time, and is dangling only if it matches nothing.
+            let exists = if script.contains('*') {
+                let suffix = script.trim_start_matches('*');
+                std::fs::read_dir(repo_root().join("scripts")).is_ok_and(|dir| {
+                    dir.filter_map(Result::ok)
+                        .any(|e| e.file_name().to_string_lossy().ends_with(suffix))
+                })
+            } else {
+                repo_root().join("scripts").join(&script).exists()
+            };
+            if !exists {
                 dangling.push(format!(
                     "{}: line {}: scripts/{script}",
                     entry.file_name().to_string_lossy(),
@@ -188,14 +199,18 @@ fn the_shell_gate_covers_exactly_the_shell_that_remains() {
     }
     scripts.sort();
 
-    // Then install.sh and the spec 03 contract checker are the only ones
+    // Then the shell that remains is exactly the shell a spec put there:
+    // install.sh, spec 03's contract checker, and spec 06's graph reader —
+    // each a decision recorded where it was taken, none of them release
+    // logic. A file joining this list needs a spec that says why.
     assert_eq!(
         scripts,
         vec![
             "install.sh".to_string(),
             "scripts/integration-check.sh".to_string(),
+            "scripts/keeler-graph.sh".to_string(),
         ],
-        "the shell that remains is not what the spec says it should be",
+        "the shell that remains is not what the specs say it should be",
     );
 
     // And no release logic remains in shell
@@ -206,7 +221,7 @@ fn the_shell_gate_covers_exactly_the_shell_that_remains() {
         );
     }
 
-    // And the lint gate covers exactly those two — by covering everything
+    // And the lint gate covers all of them — by covering everything
     // under scripts/, which is the same set while the inventory above
     // holds. Naming them instead would leave tomorrow's script ungated,
     // which spec 02 forbids.
