@@ -12,11 +12,14 @@
 mod common;
 
 use std::os::unix::fs::PermissionsExt as _;
-use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::OnceLock;
 
 use common::{Repo, job_block, repo_root, run_script, said, shipped_workflow};
+
+/// The task branch every fixture here runs on — the shape `keeler-spawn`
+/// creates and the shape CI keys on.
+const BRANCH: &str = "keeler/99-fixture/t4";
 
 // ---------------------------------------------------------------------------
 // Scenario: Branch gates are diff-based only
@@ -53,33 +56,40 @@ exec "$KEELER_REAL_JUST" "$@"
 /// A recorded CRAP baseline, as a project commits one.
 const BASELINE: &str = "{\"functions\":[]}\n";
 
-/// A throwaway project holding the shipped `Justfile` and the stub `just`.
-struct Project(PathBuf);
+/// A throwaway project holding the shipped `Justfile` and the stub `just`,
+/// checked out on a task branch with a change on it — which is the only
+/// place `keeler-branch` is ever run.
+struct Project(Repo);
 
 impl Project {
     fn new(name: &str, baseline: Option<&str>) -> Self {
-        let dir = std::env::temp_dir().join(format!("keeler-branch-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(dir.join("bin")).unwrap();
-        std::fs::copy(repo_root().join("Justfile"), dir.join("Justfile")).unwrap();
+        let repo = Repo::new("branch-gate", name);
+        std::fs::create_dir_all(repo.path().join("bin")).unwrap();
+        std::fs::copy(repo_root().join("Justfile"), repo.path().join("Justfile")).unwrap();
         if let Some(body) = baseline {
-            std::fs::write(dir.join("crap-baseline.json"), body).unwrap();
+            repo.write("crap-baseline.json", body);
         }
-        let stub = dir.join("bin/just");
+        let stub = repo.path().join("bin/just");
         std::fs::write(&stub, JUST_STUB).unwrap();
         std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
-        Self(dir)
+        repo.write(".gitignore", "/bin/\n/just-calls\n");
+        repo.git(&["add", "-A"]);
+        repo.git(&["commit", "-qm", "main"]);
+        repo.git(&["checkout", "-qb", BRANCH]);
+        repo.commit("src/lib.rs", "pub fn t4() {}\n", "feat: t4");
+        Self(repo)
     }
 
     /// Runs `just keeler-branch`, optionally with one of the three gates
     /// failing.
     fn keeler_branch(&self, fail: Option<&str>) -> Output {
+        let dir = self.0.path();
         let path = std::env::var("PATH").unwrap();
         Command::new(real_just())
             .arg("keeler-branch")
-            .current_dir(&self.0)
-            .env("PATH", format!("{}:{path}", self.0.join("bin").display()))
-            .env("KEELER_STUB_JUST_LOG", self.0.join("just-calls"))
+            .current_dir(dir)
+            .env("PATH", format!("{}:{path}", dir.join("bin").display()))
+            .env("KEELER_STUB_JUST_LOG", dir.join("just-calls"))
             .env("KEELER_STUB_JUST_FAIL", fail.unwrap_or_default())
             .env("KEELER_REAL_JUST", real_just())
             .output()
@@ -88,7 +98,7 @@ impl Project {
 
     /// The gates that ran, in the order they ran.
     fn gates(&self) -> Vec<String> {
-        std::fs::read_to_string(self.0.join("just-calls"))
+        std::fs::read_to_string(self.0.path().join("just-calls"))
             .unwrap_or_default()
             .lines()
             .map(str::to_string)
@@ -96,13 +106,7 @@ impl Project {
     }
 
     fn read(&self, file: &str) -> Option<Vec<u8>> {
-        std::fs::read(self.0.join(file)).ok()
-    }
-}
-
-impl Drop for Project {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        std::fs::read(self.0.path().join(file)).ok()
     }
 }
 
@@ -234,8 +238,6 @@ fn the_branch_gate_stops_at_the_first_gate_that_fails() {
 /// the workflow gives it.
 const BASELINE_JOB: &str = "branch-baseline";
 
-const BRANCH: &str = "keeler/99-fixture/t4";
-
 /// A `Justfile` whose `cov` recipe is the shipped one, plus a marker the
 /// tests can move without touching it.
 fn justfile(cov_bar: &str, extra: &str) -> String {
@@ -344,26 +346,30 @@ fn a_branch_that_moved_the_baseline_is_refused_by_ci() {
 // Scenario: A branch ticks its task and nothing else
 // ---------------------------------------------------------------------------
 
-/// Runs the shipped parser on a spec file, the way `just keeler-graph` does.
-fn graph(spec: &Path) -> Output {
-    Command::new("bash")
-        .arg(repo_root().join("scripts/keeler-graph.sh"))
-        .arg(spec)
+/// Runs `just keeler-graph` in a fixture project, which is the road the
+/// scenario names — the recipe, not the parser it wraps.
+fn keeler_graph(repo: &Repo, spec: &str) -> Output {
+    Command::new(real_just())
+        .args(["keeler-graph", spec])
+        .current_dir(repo.path())
         .output()
-        .expect("failed to run keeler-graph.sh")
+        .expect("failed to run just keeler-graph")
 }
 
-/// The state the parser reports for one task.
+/// The state the recipe reports for one task.
 fn state_of(output: &Output, id: &str) -> String {
     String::from_utf8_lossy(&output.stdout)
         .lines()
         .find(|line| line.split_whitespace().next() == Some(id))
-        .unwrap_or_else(|| panic!("the parser reported no {id}"))
+        .unwrap_or_else(|| panic!("the recipe reported no {id}:\n{}", said(output)))
         .split_whitespace()
         .nth(1)
         .unwrap()
         .to_string()
 }
+
+const SPEC: &str = "specs/99-fixture.md";
+const TICK_BRANCH: &str = "keeler/99-fixture/t2";
 
 fn fixture_spec(t2_done: bool) -> String {
     let t2 = if t2_done { 'x' } else { ' ' };
@@ -376,21 +382,24 @@ fn fixture_spec(t2_done: bool) -> String {
     )
 }
 
+/// The Status: line of a spec, whichever revision it is read from.
+fn status_line(body: &str) -> &str {
+    body.lines()
+        .find(|line| line.contains("Status:"))
+        .expect("the fixture spec has no Status: line")
+}
+
 #[test]
 fn a_branch_ticks_its_task_and_nothing_else() {
-    // Given a task branch keeler/06-graph-mode/t2 whose pipeline reached
-    // /keeler:mutants with zero survivors
+    // Given a task branch keeler/<spec-slug>/t2 whose pipeline reached
+    // /keeler:mutants with zero survivors — which is the stage that ticks,
+    // and the stage the branch condition had to reach
     let mutants =
         std::fs::read_to_string(repo_root().join(".claude/commands/keeler/mutants.md")).unwrap();
-
-    // When the stage finishes
-    // Then T2's checkbox is ticked in the spec on that branch ...
     assert!(
         mutants.contains("Tick the task's checkbox"),
         "mutants.md no longer ticks the task's checkbox"
     );
-    // ... and the spec's Status: line is unchanged: on a keeler/* branch
-    // the stage leaves Status: to keeler-land, on main, at fan-in
     let branch_rule = mutants
         .lines()
         .find(|line| line.contains("keeler/*"))
@@ -400,59 +409,76 @@ fn a_branch_ticks_its_task_and_nothing_else() {
         "mutants.md does not leave Status: to keeler-land on a branch: {branch_rule}"
     );
 
-    // And the mechanical half: a branch's tick is a tick and nothing more
-    let dir = std::env::temp_dir().join(format!("keeler-branch-tick-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let on_main = dir.join("main.md");
-    let on_branch = dir.join("branch.md");
-    std::fs::write(&on_main, fixture_spec(false)).unwrap();
-    std::fs::write(&on_branch, fixture_spec(true)).unwrap();
+    // ... in a project holding the spec on main
+    let repo = Repo::new("branch-tick", "spec");
+    std::fs::create_dir_all(repo.path().join("scripts")).unwrap();
+    std::fs::copy(repo_root().join("Justfile"), repo.path().join("Justfile")).unwrap();
+    std::fs::copy(
+        repo_root().join("scripts/keeler-graph.sh"),
+        repo.path().join("scripts/keeler-graph.sh"),
+    )
+    .unwrap();
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-qm", "keeler"]);
+    repo.commit(SPEC, &fixture_spec(false), "spec");
 
-    let main_body = std::fs::read_to_string(&on_main).unwrap();
-    let branch_body = std::fs::read_to_string(&on_branch).unwrap();
-    let differing: Vec<(&str, &str)> = main_body
+    // When the stage finishes
+    repo.git(&["checkout", "-qb", TICK_BRANCH]);
+    repo.commit(SPEC, &fixture_spec(true), "docs: T2 done");
+
+    // Then T2's checkbox is ticked in the spec on that branch, and the
+    // branch touched the spec and nothing else in it
+    assert_eq!(
+        repo.git(&["diff", "--name-only", "main", "HEAD"]),
+        SPEC,
+        "the tick reached beyond the spec"
+    );
+    let changed: Vec<String> = repo
+        .git(&["diff", "-U0", "main", "HEAD", "--", SPEC])
         .lines()
-        .zip(branch_body.lines())
-        .filter(|(a, b)| a != b)
+        .filter(|line| {
+            (line.starts_with('+') || line.starts_with('-'))
+                && !line.starts_with("+++")
+                && !line.starts_with("---")
+        })
+        .map(str::to_string)
         .collect();
     assert_eq!(
-        differing.len(),
-        1,
-        "the branch changed more than one line: {differing:?}"
+        changed,
+        [
+            "-- [ ] **T2 — the one on the branch.** Needs: T1. Scenarios: _two_.",
+            "+- [x] **T2 — the one on the branch.** Needs: T1. Scenarios: _two_.",
+        ],
+        "the branch changed more of the spec than T2's checkbox"
     );
-    assert!(
-        differing[0].1.starts_with("- [x] **T2"),
-        "the one changed line is not T2's checkbox: {:?}",
-        differing[0]
-    );
-    let status = |body: &str| {
-        body.lines()
-            .find(|line| line.contains("Status:"))
-            .unwrap()
-            .to_string()
-    };
+
+    // And the spec's Status: line is unchanged
+    let on_main = repo.git(&["show", &format!("main:{SPEC}")]);
+    let on_branch = repo.git(&["show", &format!("HEAD:{SPEC}")]);
     assert_eq!(
-        status(&main_body),
-        status(&branch_body),
+        status_line(&on_main),
+        status_line(&on_branch),
         "the branch rewrote the spec's Status: line"
     );
 
     // And `just keeler-graph` on main still reports T2 as not done,
     // because readiness is read from main, not from an unlanded branch
-    assert_eq!(state_of(&graph(&on_branch), "T2"), "done");
+    let on_branch = keeler_graph(&repo, SPEC);
+    assert_eq!(state_of(&on_branch, "T2"), "done", "{}", said(&on_branch));
+    repo.git(&["checkout", "-q", "main"]);
+    let on_main = keeler_graph(&repo, SPEC);
     assert_eq!(
-        state_of(&graph(&on_main), "T2"),
+        state_of(&on_main, "T2"),
         "ready",
-        "a tick on an unlanded branch was read as done on main"
+        "a tick on an unlanded branch was read as done on main:\n{}",
+        said(&on_main)
     );
     assert_eq!(
-        state_of(&graph(&on_main), "T3"),
+        state_of(&on_main, "T3"),
         "blocked",
-        "a tick on an unlanded branch unblocked the task after it"
+        "a tick on an unlanded branch unblocked the task after it:\n{}",
+        said(&on_main)
     );
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // ---------------------------------------------------------------------------
