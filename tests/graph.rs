@@ -310,6 +310,26 @@ fn a_needs_list_is_validated_not_guessed_at() {
 }
 
 #[test]
+fn any_heading_ends_the_section_not_only_a_level_two_one() {
+    // Given a checkbox under a later heading of any level — an appendix,
+    // a backlog, a note someone kept
+    let fixture = Spec::new(
+        "appendix",
+        &spec("- [ ] **T1 — a.**\n\n# Appendix\n\n- [ ] **T9 — not a task.**\n"),
+    );
+    let output = fixture.graph();
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    // Then it is not a task: the section ended at the heading
+    let ids: Vec<String> = report(&output).into_iter().map(|(id, _, _)| id).collect();
+    assert_eq!(
+        ids,
+        vec!["T1".to_string()],
+        "a checkbox under a later heading was read as a task"
+    );
+}
+
+#[test]
 fn a_fenced_example_inside_the_section_is_not_a_task() {
     // Given an example task line quoted in a code fence in the intro
     // prose of the Tasks section — where the next example will be pasted

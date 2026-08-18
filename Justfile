@@ -292,7 +292,15 @@ keeler-spawn SPEC TASK:
         echo "keeler-spawn: $rel defines no task $task" >&2
         exit 1
     fi
-    if [ "$(printf '%s\n' "$entry" | awk '{ print $2 }')" = blocked ]; then
+    state="$(printf '%s\n' "$entry" | awk '{ print $2 }')"
+    # A done task has landed. Spawning it cuts a branch to redo work the
+    # graph already counts — and the guard that refused only `blocked`
+    # let exactly that through.
+    if [ "$state" = done ]; then
+        echo "keeler-spawn: $task is already done — nothing to spawn" >&2
+        exit 1
+    fi
+    if [ "$state" = blocked ]; then
         unmet=""
         for need in $(printf '%s\n' "$entry" | cut -d' ' -f3-); do
             if [ "$(printf '%s\n' "$report" | awk -v n="$need" '$1 == n { print $2 }')" != done ]; then
@@ -348,7 +356,11 @@ keeler-spawn SPEC TASK:
     # a decision a recipe should make by default.
     tools='Bash(cargo:*),Bash(just:*),Bash(git:*)'
     # Bash(git:*) grants push. "Nothing is pushed" has to be a permission,
-    # not a sentence in a prompt: take it back explicitly.
+    # not a sentence in a prompt: take it back explicitly. The match is on
+    # the command prefix, so this stops the ordinary `git push` and not a
+    # determined `git -C … push` or a recipe that pushes — it is a guard
+    # against the accident, and the guarantee that nothing reaches the
+    # remote remains the human owning the push.
     blocked='Bash(git push:*)'
     cat > "$runner" <<RUNNER
     #!/usr/bin/env bash
@@ -370,7 +382,16 @@ keeler-spawn SPEC TASK:
     } 2>&1 | tee "$log_file"
     RUNNER
     printf -v run_cmd 'bash %q' "$runner"
-    tmux new-session -d -s "$session" -c "$worktree" "$run_cmd"
+    # If the session will not start, the branch and worktree must not
+    # survive it: every retry would then refuse with "already spawned" for
+    # a run that never began, and the task would be wedged.
+    if ! tmux new-session -d -s "$session" -c "$worktree" "$run_cmd"; then
+        echo "keeler-spawn: tmux would not start $session — undoing" >&2
+        git worktree remove --force "$worktree" 2>/dev/null || true
+        git branch -D "$branch" >/dev/null 2>&1 || true
+        rm -f "$runner"
+        exit 1
+    fi
     echo "spawned $task on $branch"
     echo "  worktree: $worktree"
     echo "  session:  tmux attach -t $session   (a view, not a seat: claude -p is not interactive)"
@@ -407,13 +428,15 @@ keeler-status SPEC:
         elif [ -f "$exit_file" ]; then
             code="$(tr -d '[:space:]' < "$exit_file")"
             if [ "$code" = 0 ]; then state=passed; else state="failed (exit $code)"; fi
-        elif [ -e "$worktree" ] || [ -f "$log_file" ]; then
-            state=died
         elif [ "$graph_state" = done ]; then
-            # The graph already answered this one; the board does not
-            # invent a second answer for a task that has landed.
+            # The graph already answered this one, and it answers first: a
+            # landed task whose worktree was never removed is done, not
+            # dead, and asking about the leftovers before the graph made it
+            # read as the latter.
             printf '%-6s %s\n' "$id" "done"
             continue
+        elif [ -e "$worktree" ] || [ -f "$log_file" ]; then
+            state=died
         else
             printf '%-6s %s\n' "$id" "not spawned"
             continue

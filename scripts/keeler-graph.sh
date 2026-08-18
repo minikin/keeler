@@ -13,7 +13,7 @@
 # id defined twice, two Needs: in one item, a cycle — and print nothing as
 # ready.
 #
-# The grammar is spec 06's, and it is deliberately small:
+# The grammar is deliberately small:
 #   - the Tasks section runs from `## Tasks` to the next `## ` heading;
 #     nothing outside it is a task;
 #   - an item runs from a line beginning `- [ ]` or `- [x]` to the next
@@ -107,7 +107,9 @@ function visit(id,    k, j, m, cycle) {
 { sub(/\r$/, "") }
 
 /^## Tasks[ \t]*$/ { in_tasks = 1; found_section = 1; next }
-in_tasks && /^## /  { close_item(); in_tasks = 0 }
+# Any heading ends the section, not only a `## ` one: a `# Appendix` with
+# a checkbox under it would otherwise read as more tasks.
+in_tasks && /^#+ /  { close_item(); in_tasks = 0 }
 !in_tasks           { next }
 
 # A fenced code block inside the section is prose, not tasks — the

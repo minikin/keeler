@@ -86,6 +86,10 @@ has-session)
     exit 1
     ;;
 new-session)
+    if [ "${KEELER_STUB_TMUX_FAIL:-0}" = 1 ]; then
+        echo "tmux stub: no server running on /tmp/tmux-501/default" >&2
+        exit 1
+    fi
     dir=""; cmd=""; prev=""
     for a in "$@"; do [ "$prev" = -c ] && dir="$a"; prev="$a"; cmd="$a"; done
     if [ "${KEELER_STUB_TMUX_RUN:-0}" = 1 ]; then ( cd "${dir:-.}" && eval "$cmd" ) || true; fi
@@ -233,6 +237,14 @@ impl Project {
                 if self.run_sessions { "1" } else { "0" },
             )
             .env("KEELER_STUB_BRANCH_EXIT", self.branch_exit.to_string())
+            .env(
+                "KEELER_STUB_TMUX_FAIL",
+                if self.dir.join(".stub-tmux-fail").exists() {
+                    "1"
+                } else {
+                    "0"
+                },
+            )
             .env("KEELER_REAL_JUST", real_just())
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_SYSTEM", "/dev/null")
@@ -262,6 +274,12 @@ impl Project {
                     .collect()
             })
             .collect()
+    }
+
+    /// Makes the stub tmux refuse to start a session, as a tmux with no
+    /// server, or one rejecting the name, would.
+    fn break_tmux_new_session(&self) {
+        std::fs::write(self.dir.join(".stub-tmux-fail"), "1").unwrap();
     }
 
     fn new_sessions(&self) -> Vec<Vec<String>> {
@@ -786,6 +804,53 @@ fn spawning_a_task_that_is_already_spawned_is_refused() {
     assert!(
         !verdict.exists(),
         "a verdict from the previous run survived into this one"
+    );
+}
+
+#[test]
+fn spawning_a_task_that_is_already_done_is_refused() {
+    // Given a spec whose T1 is ticked
+    let project = Project::new("already-done");
+
+    // When it is spawned anyway
+    let output = project.spawn(SLUG, "T1");
+
+    // Then it refuses. A done task has landed; spawning it would cut a
+    // branch to redo work the graph already counts, and the guard that
+    // only refuses `blocked` lets exactly that through.
+    let said = both(&output);
+    assert!(!output.status.success(), "a done task spawned:\n{said}");
+    assert!(said.contains("T1") && said.contains("done"), "{said}");
+    assert!(
+        !project.worktree(SLUG, "T1").exists(),
+        "a worktree was created for a landed task"
+    );
+    assert!(project.new_sessions().is_empty(), "a session was started");
+}
+
+#[test]
+fn a_session_that_fails_to_start_leaves_nothing_behind() {
+    // Given tmux that fails when asked for a new session — a server that
+    // will not start, a name the server rejects
+    let project = Project::new("tmux-fails");
+    project.break_tmux_new_session();
+
+    // When a ready task is spawned
+    let output = project.spawn(SLUG, "T3");
+
+    // Then it fails, and nothing survives: a branch and worktree left
+    // behind would wedge the task, since every retry then refuses with
+    // "already spawned" for a run that never started
+    let said = both(&output);
+    assert!(!output.status.success(), "a failed launch reported success");
+    assert!(
+        !project.worktree(SLUG, "T3").exists(),
+        "the worktree outlived the failed launch:\n{said}"
+    );
+    assert_eq!(
+        project.git(&["branch", "--list", &format!("keeler/{SLUG}/t3")]),
+        "",
+        "the branch outlived the failed launch:\n{said}"
     );
 }
 

@@ -590,6 +590,27 @@ fn a_shipped_file_that_talks_about_us_fails_the_gate() {
 }
 
 #[test]
+fn a_command_that_needs_a_script_ships_with_it() {
+    // Given the installer's file list
+    let installer =
+        std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("install.sh"))
+            .unwrap();
+
+    // Then a command that shells out to a script does not arrive without
+    // it: /keeler:graph runs `just keeler-graph`, which runs
+    // scripts/keeler-graph.sh, and an adopter who got the first two and
+    // not the third has a slash command that exits 127.
+    assert!(
+        installer.contains(".claude/commands/keeler/graph.md"),
+        "the graph command is not installed"
+    );
+    assert!(
+        installer.contains("scripts/keeler-graph.sh"),
+        "the graph command is installed but the script it runs is not"
+    );
+}
+
+#[test]
 fn what_adopters_receive_describes_their_project_not_ours() {
     // Given a freshly installed project
     let project = TempProject::new("no-talk-about-us", MANIFEST_WITH_PROPTEST);

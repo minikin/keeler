@@ -182,6 +182,7 @@ for f in .claude/commands/keeler/spec.md .claude/commands/keeler/tasks.md \
          .claude/commands/keeler/graph.md \
          .claude/skills/property-testing/SKILL.md \
          .claude/skills/gherkin-specs/SKILL.md \
+         scripts/keeler-graph.sh \
          specs/TEMPLATE.md KEELER.md Justfile \
          .cargo-mutants.toml clippy.toml rustfmt.toml; do
     install_file "$f"

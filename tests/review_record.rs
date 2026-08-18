@@ -92,6 +92,53 @@ fn review_leaves_evidence() {
 }
 
 #[test]
+fn a_fork_pr_is_judged_by_what_was_checked_out_not_by_a_name_collision() {
+    // Given a fork's pull request whose branch name also exists in the
+    // base repository — an abandoned branch of the same task, say — and a
+    // record naming a commit the fork's branch made and the base's has not
+    let script = run_script(&job_block(&shipped_workflow(), REVIEW_JOB));
+    let base = Repo::new("review-record", "fork-base");
+    base.commit("README.md", "base\n", "base");
+    base.git(&["checkout", "-qb", BRANCH]);
+    base.commit("stale.txt", "an abandoned attempt\n", "stale work");
+    base.git(&["checkout", "-q", "main"]);
+
+    let fork = Repo::new("review-record", "fork-head");
+    let _ = std::fs::remove_dir_all(fork.path());
+    let cloned = std::process::Command::new("git")
+        .args(["clone", "-q", "--no-single-branch"])
+        .arg(base.path())
+        .arg(fork.path())
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .status()
+        .expect("failed to run git clone");
+    assert!(cloned.success(), "git clone of the fixture failed");
+    // The fork's own branch, cut from main and unknown to origin, is what
+    // CI checks out: a detached HEAD with no ref of its own
+    fork.git(&["checkout", "-q", "--detach", "origin/main"]);
+    let head = fork.commit(
+        "mine2.txt",
+        "the sha under review\n",
+        "the work under review",
+    );
+    record(&fork, SLUG, TASK, &record_body(SLUG, TASK, &head));
+
+    // When the check runs
+    let out = check(&fork, &script, BRANCH, "main");
+
+    // Then it judges the commit that was checked out, not the base
+    // repository's branch of the same name. Resolving origin/<branch>
+    // first would validate the record against someone else's history —
+    // and pass or fail for reasons that have nothing to do with this PR.
+    assert!(
+        out.status.success(),
+        "an honest fork record was judged against the base repo's branch of the same name:\n{}",
+        said(&out)
+    );
+}
+
+#[test]
 fn a_review_record_must_name_a_commit_on_its_own_branch() {
     // Given a keeler/* branch pull request, and the shipped workflow
     let workflow = shipped_workflow();
