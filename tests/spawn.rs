@@ -371,6 +371,10 @@ fn spawning_a_task_creates_an_isolated_agent() {
         "Bash(cargo:",
         "Bash(just:",
         "Bash(git:",
+        // "nothing is pushed" is a permission, not a request: Bash(git:*)
+        // grants push, so the promise holds only if push is taken back.
+        "--disallowedTools",
+        "Bash(git push:",
     ] {
         assert!(
             ran.contains(token),

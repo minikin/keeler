@@ -285,6 +285,9 @@ keeler-spawn SPEC TASK:
     # bypassPermissions: a headless agent with an unrestricted shell is not
     # a decision a recipe should make by default.
     tools='Bash(cargo:*),Bash(just:*),Bash(git:*)'
+    # Bash(git:*) grants push. "Nothing is pushed" has to be a permission,
+    # not a sentence in a prompt: take it back explicitly.
+    blocked='Bash(git push:*)'
     cat > "$runner" <<RUNNER
     #!/usr/bin/env bash
     # Written by 'just keeler-spawn' for $branch. Re-runnable by hand:
@@ -297,7 +300,7 @@ keeler-spawn SPEC TASK:
     # Everything the session prints is teed to the log, so the run can be
     # read after the tmux window is gone.
     {
-        claude -p "\$prompt" --permission-mode acceptEdits --allowedTools '$tools'
+        claude -p "\$prompt" --permission-mode acceptEdits --allowedTools '$tools' --disallowedTools '$blocked'
         # The verdict is the gate's, not the agent's: claude -p exits zero
         # for any finished turn, including one that ended in FAIL.
         just keeler-branch

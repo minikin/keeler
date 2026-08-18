@@ -534,8 +534,11 @@ the remote, and a pull request, only when the human decides.
 **Permissions are the spec's decision, not T3's.** The session runs with
 `--permission-mode acceptEdits` and an explicit `--allowedTools` covering
 `cargo`, `just` and `git` — enough to edit, test and commit inside its
-worktree, and no more. Not `bypassPermissions`: a headless agent with
-unrestricted shell is a decision nobody should make by default in a
+worktree — with `git push` explicitly disallowed, because "nothing is
+pushed" must be a permission and not a sentence in a prompt: an agent
+that can push is one push away from breaking the promise, however
+carefully it is asked not to. Not `bypassPermissions`: a headless agent
+with unrestricted shell is a decision nobody should make by default in a
 recipe.
 
 **The session lives in tmux, and that is what makes it both parallel and
