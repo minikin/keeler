@@ -374,7 +374,7 @@ split it rather than ship a task eight scenarios wide.
       recipe on a fixture main and inspects the index; a fixture whose
       merged tree fails `just dev` proves the baseline untouched and the
       exit non-zero; run on a fixture branch it refuses naming it.
-- [ ] **T6 — keeler-land finishes a spec and cleans up after it.**
+- [x] **T6 — keeler-land finishes a spec and cleans up after it.**
       Needs: T5. Scenarios: _Landing the last task marks the spec
       implemented_, _Landing cleans up only what is clean_. Deliverable:
       the `Status:` write and the worktree/branch removal in
