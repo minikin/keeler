@@ -199,6 +199,13 @@ keeler-spawn SPEC TASK:
     [ -f "$spec" ] || { echo "keeler-spawn: $spec is not a file" >&2; exit 1; }
     root="$(git rev-parse --show-toplevel)"
     spec_abs="$(cd "$(dirname "$spec")" && pwd)/$(basename "$spec")"
+    case "$spec_abs" in
+        "$root"/*) ;;
+        *)
+            echo "keeler-spawn: $spec_abs is not inside $root — the worktree is cut from this repository's HEAD and would never see it." >&2
+            exit 1
+            ;;
+    esac
     rel="${spec_abs#"$root"/}"
     # The spec as committed, because that is what the new worktree will see:
     # /keeler:tasks leaves the graph uncommitted, and a spawn straight after

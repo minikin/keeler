@@ -289,6 +289,7 @@ fn remove_with_siblings(dir: &Path) {
     for entry in entries.flatten() {
         if entry.file_name().to_string_lossy().starts_with(&prefix) {
             let _ = std::fs::remove_dir_all(entry.path());
+            let _ = std::fs::remove_file(entry.path());
         }
     }
 }
@@ -392,8 +393,12 @@ fn spawning_a_task_creates_an_isolated_agent() {
 /// runner script was asked to run everything in it.
 fn session_script(project: &Project, call: &[String]) -> String {
     let command = call.last().expect("tmux was given no command").clone();
-    let path = command.split_whitespace().last().unwrap_or_default();
-    let path = PathBuf::from(path.replace("\\ ", " "));
+    let path = PathBuf::from(
+        command
+            .strip_prefix("bash ")
+            .unwrap_or(&command)
+            .replace("\\ ", " "),
+    );
     let body = if path.is_absolute() {
         std::fs::read_to_string(&path).unwrap_or_default()
     } else {
@@ -659,6 +664,26 @@ fn spawning_from_an_uncommitted_or_unapproved_spec_is_refused() {
             ""
         );
     }
+
+    // And (d) a spec in no repository at all is the extreme of the same
+    // thing: HEAD cannot hold what the repository does not contain
+    let outside = fresh.path().with_extension("outside.md");
+    std::fs::write(&outside, &approved).unwrap();
+    let output = fresh.just(&["keeler-spawn", &outside.display().to_string(), "T3"]);
+    let said = both(&output);
+    let _ = std::fs::remove_file(&outside);
+    assert!(
+        !output.status.success(),
+        "a spec outside the repository spawned:\n{said}"
+    );
+    assert!(
+        said.contains("HEAD"),
+        "the refusal does not say why:\n{said}"
+    );
+    assert!(
+        fresh.new_sessions().is_empty(),
+        "a session was started:\n{said}"
+    );
 }
 
 #[test]
