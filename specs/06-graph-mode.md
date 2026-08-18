@@ -136,6 +136,20 @@ And   `just keeler-status <spec>` lists each task as running, passed or
       a file
 ```
 
+### Scenario: A dead session is resumable, and says so
+
+```
+Given a spawned session that died before its pipeline finished — a usage
+      limit, a killed terminal, a reboot
+When  `just keeler-status <spec>` runs
+Then  it distinguishes a task that died mid-pipeline from one that failed
+      its gate: the first has no .exit at all, the second has a non-zero
+      one
+And   it names the log and the worktree, which together are what a resume
+      reads — the commits already on the branch say how far the pipeline
+      got
+```
+
 ### Scenario: Spawning without tmux is refused, and says how to get it
 
 ```
@@ -328,7 +342,8 @@ split it rather than ship a task eight scenarios wide.
 - [ ] **T3 — just keeler-spawn.** Needs: T1. Scenarios: _Spawning a task
       creates an isolated agent_, _A spawned agent commits on its branch,
       and nowhere else_, _A finished agent leaves a verdict the gate
-      decided, and a log_, _Spawning without tmux is refused, and says
+      decided, and a log_, _A dead session is resumable, and says so_,
+      _Spawning without tmux is refused, and says
       how to get it_, _Spawning from an uncommitted or unapproved spec is
       refused_, _Spawning a task that is already spawned is refused_,
       _Spawning a blocked task is refused_. Tests:
@@ -535,7 +550,12 @@ exits zero for any finished turn, including one that ended in FAIL. The
 verdict is the machine's, as everywhere else in this pipeline. Everything
 printed is teed to `<task>.log` beside it, so a run can be read after its
 window is gone; `keeler-status` reads both, and asks `tmux has-session`
-for "running" rather than inferring it from a missing file. The paths are
+for "running" rather than inferring it from a missing file. The three
+states are not two: a session that is gone with no `.exit` died before
+its gate ever ran, which is a different thing from a gate that failed,
+and a resume starts from the commits already on the branch — this was
+learned the hard way when both agents of the manual dry run died on a
+usage limit and had to be restored by reading their commits by hand. The paths are
 absolute and under the main checkout, and `.keeler/` is added to the
 ignore list the installer already writes. Nothing here decides *what* to spawn:
 every session is one the human named, so the no-scheduler line holds. The
@@ -618,10 +638,12 @@ branch touched them.
   Nothing leaves the machine — no push, no pull request — without the
   human's hand.
 - No merge automation: `keeler-land` verifies and updates baselines; it
-  does not decide merge order or resolve conflicts. That includes the spec
-  file itself: five branches each ticking one box edit adjacent lines of
-  one file, and the human resolves that at merge — a one-line conflict,
-  and the price of a tick that is visible on the branch that earned it.
+  does not decide merge order or resolve conflicts. The spec file turned
+  out not to need it: a task item spans several lines, so two branches
+  ticking two boxes never edit within git's context window and merge
+  cleanly — measured on T2 and T7, and on a deliberate probe of adjacent
+  T3 and T4. The file is hot only when two branches edit the *same* item,
+  which the same-region rule already forbids.
 - No cross-spec graphs: a DAG spans one spec. Two features are two graphs.
 - No Windows story beyond what the installer already claims.
 - No portability to other agents in this spec; the spawn recipe assumes
