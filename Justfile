@@ -171,7 +171,10 @@ keeler-branch:
     # The delta gate needs a committed baseline to measure against — the
     # same condition /keeler:qa and the shipped workflow already check.
     # Without one, `dev`'s absolute CRAP threshold is the whole gate.
-    if [ -f crap-baseline.json ]; then
+    # `git cat-file` and not `-f`: a baseline generated locally and left
+    # uncommitted would have crap-delta measure this branch against itself,
+    # a zero delta by construction and a gate that checked nothing.
+    if git cat-file -e HEAD:crap-baseline.json 2>/dev/null; then
         just crap-delta
     else
         echo "no crap-baseline.json committed — threshold only, no delta gate"

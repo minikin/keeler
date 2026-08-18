@@ -37,14 +37,24 @@ pub fn job_block(workflow: &str, job: &str) -> String {
         panic!("the shipped workflow has no `{job}` job");
     };
     let mut block = vec![first];
+    // A job ends where the next one begins — and the next one begins at
+    // its documentation, not at its header line. Comments at job
+    // indentation are held back until we know whether a header follows
+    // them; if the block ends first, they were never ours.
+    let mut pending: Vec<&str> = Vec::new();
     for line in lines {
-        let next_job = line.starts_with("  ")
-            && !line.starts_with("   ")
-            && !line.trim().is_empty()
-            && !line.trim_start().starts_with('#');
-        if next_job || (!line.trim().is_empty() && !line.starts_with(' ')) {
+        if !line.trim().is_empty() && !line.starts_with(' ') {
             break;
         }
+        let at_job_indent = line.starts_with("  ") && !line.starts_with("   ");
+        if at_job_indent && line.trim_start().starts_with('#') {
+            pending.push(line);
+            continue;
+        }
+        if at_job_indent && !line.trim().is_empty() {
+            break;
+        }
+        block.append(&mut pending);
         block.push(line);
     }
     block.join("\n")

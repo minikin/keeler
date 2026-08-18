@@ -304,6 +304,69 @@ fn check(repo: &Repo, script: &str) -> Output {
 }
 
 #[test]
+fn a_jobs_block_stops_before_the_next_jobs_documentation() {
+    // The comment block above a job documents *that* job, and it sits at
+    // the same indent as the job keys. A reader that only stops at keys
+    // hands back the next job's rationale as if it were this job's body —
+    // benign until the day an assertion says a job does *not* mention
+    // something, and the thing it does not mention is next door.
+    let workflow = shipped_workflow();
+    for job in [BASELINE_JOB, "mutants", "quality"] {
+        let block = job_block(&workflow, job);
+        let strays: Vec<&str> = block
+            .lines()
+            .skip(1)
+            .filter(|line| line.starts_with("  ") && !line.starts_with("   "))
+            .collect();
+        assert!(
+            strays.is_empty(),
+            "the `{job}` block reaches into what follows it: {strays:?}"
+        );
+    }
+}
+
+#[test]
+fn a_check_that_finds_no_cov_recipe_refuses_rather_than_passes() {
+    // Given a branch that renamed the cov recipe and lowered the bar with
+    // it — the awk finds nothing at either ref, and "" != "" is false
+    let workflow = shipped_workflow();
+    let script = run_script(&job_block(&workflow, BASELINE_JOB));
+    // The base already calls it something else — an adopter's Justfile,
+    // not ours — so neither ref yields a block, and the branch then
+    // lowers the bar from 90 to 10 in that recipe
+    let repo = Repo::new("branch-baseline", "renamed-cov");
+    repo.commit("crap-baseline.json", BASELINE, "baseline");
+    repo.commit(
+        "Justfile",
+        "coverage:\n    cargo llvm-cov --fail-under-lines 90\n",
+        "justfile whose recipe is not spelled cov",
+    );
+    repo.git(&["checkout", "-qb", BRANCH]);
+    repo.commit(
+        "Justfile",
+        "coverage:\n    cargo llvm-cov --fail-under-lines 10\n",
+        "lower the bar where the check cannot see",
+    );
+
+    // When the check runs
+    let out = check(&repo, &script);
+
+    // Then it refuses. A comparison of two empty strings is not a check
+    // that passed — it is a check that never looked, and a gate that
+    // announces success having looked at nothing is worse than no gate.
+    assert!(
+        !out.status.success(),
+        "the check passed a branch whose cov recipe it could not find:\n{}",
+        said(&out)
+    );
+    assert!(
+        said(&out).contains("cov"),
+        "the refusal does not say what it could not find:\n{}",
+        said(&out)
+    );
+}
+
+#[test]
 fn a_branch_that_moved_the_baseline_is_refused_by_ci() {
     // Given a keeler/* branch, and the shipped CI workflow
     let workflow = shipped_workflow();
@@ -333,7 +396,7 @@ fn a_branch_that_moved_the_baseline_is_refused_by_ci() {
     let out = check(&repo, &script);
     assert!(!out.status.success(), "a moved baseline passed");
     assert!(
-        said(&out).contains("crap-baseline.json") && said(&out).contains("main"),
+        said(&out).contains("crap-baseline.json") && said(&out).contains("keeler-land"),
         "the refusal names neither the file nor where baselines move:\n{}",
         said(&out)
     );

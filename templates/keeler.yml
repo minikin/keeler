@@ -150,7 +150,13 @@ jobs:
               inside { print }
             '
           }
-          if [ "$(cov_recipe "$merge_base")" != "$(cov_recipe HEAD)" ]; then
+          base_cov=$(cov_recipe "$merge_base") || fail "cannot read the Justfile at $base_ref"
+          # Finding nothing is not the same as finding no change. If the
+          # recipe is absent or spelled otherwise at the base, this check
+          # cannot tell whether the coverage bar moved — and a gate that
+          # reports success having looked at nothing is worse than no gate.
+          [ -n "$base_cov" ] || fail "no \`cov:\` recipe in the Justfile at $base_ref — this check cannot tell whether the coverage bar moved"
+          if [ "$base_cov" != "$(cov_recipe HEAD)" ]; then
             fail "the Justfile's cov recipe changed on this branch — $moved"
           fi
           echo "crap-baseline.json and the cov recipe are as $base_ref left them"
