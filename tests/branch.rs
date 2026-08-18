@@ -344,7 +344,7 @@ fn a_branch_that_moved_the_baseline_is_refused_by_ci() {
     let out = check(&repo, &script);
     assert!(!out.status.success(), "a moved cov recipe passed");
     assert!(
-        said(&out).contains("cov") && said(&out).contains("main"),
+        said(&out).contains("cov recipe") && said(&out).contains("main"),
         "the refusal names neither the recipe nor where baselines move:\n{}",
         said(&out)
     );

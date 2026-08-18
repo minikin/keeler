@@ -142,9 +142,11 @@ jobs:
           # its own recipe and git merges those cleanly. What may not move
           # is the coverage bar the whole repository is measured against.
           cov_recipe() {
+            # `[^ \t]` rather than `[^[:space:]]`: Ubuntu's default awk is
+            # mawk, which only learned POSIX character classes in 1.3.4.
             git show "$1:Justfile" 2>/dev/null | awk '
               /^cov:/ { inside = 1 }
-              inside && NF && /^[^[:space:]]/ && $0 !~ /^cov:/ { inside = 0 }
+              inside && NF && /^[^ \t]/ && $0 !~ /^cov:/ { inside = 0 }
               inside { print }
             '
           }
