@@ -549,6 +549,17 @@ fn landing_the_last_task_marks_the_spec_implemented() {
         both(&output)
     );
 
+    // And landing again changes nothing: the spec is already Implemented,
+    // so there is no second write and no second `Approved` to replace
+    let once = project.spec();
+    let output = project.land();
+    assert!(output.status.success(), "{}", both(&output));
+    assert_eq!(
+        project.spec(),
+        once,
+        "a second land rewrote a spec it had already finished"
+    );
+
     // And a spec with any task unticked is left as it was
     let unfinished = Project::with_spec(
         "last-task-unfinished",
@@ -607,6 +618,37 @@ fn landing_cleans_up_only_what_is_clean() {
         "the run does not name the dirty worktree it left:\n{}",
         both(&output)
     );
+}
+
+#[test]
+fn a_worktree_that_will_not_go_is_named_rather_than_fatal() {
+    // Given a landed task whose worktree is clean but cannot be removed —
+    // git holds it locked, as it does for a removable disk
+    let project = Project::with_spec("locked", &spec_with(&[true, true], "Approved"));
+    let locked = project.add_worktree("t1");
+    let clean = project.add_worktree("t2");
+    project.git(&["worktree", "lock", locked.to_str().unwrap()]);
+
+    // When `just keeler-land` runs on main
+    let output = project.land();
+
+    // Then the land still succeeds and says so: the baseline and the spec
+    // are already staged by this point, and a tidy-up that could not tidy
+    // must not end the run with a raw git error over work already done
+    assert!(
+        output.status.success(),
+        "a worktree that would not go failed the land:\n{}",
+        both(&output)
+    );
+    assert!(
+        both(&output).contains(locked.to_str().unwrap()),
+        "the run does not name the worktree it could not remove:\n{}",
+        both(&output)
+    );
+
+    // And the next task's worktree is still cleaned up — one that would
+    // not go does not stop the rest
+    assert!(!clean.exists(), "the cleanup stopped at the first refusal");
 }
 
 #[test]

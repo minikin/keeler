@@ -538,14 +538,30 @@ keeler-land:
             branch="keeler/$slug/$tid"
             worktree="$(dirname "$root")/$(basename "$root")-$slug-$tid"
             # Only a worktree this repository registered: a directory that
-            # merely has the name is not ours to delete.
-            git worktree list --porcelain | grep -qxF "worktree $worktree" || continue
+            # merely has the name is not ours to delete. No `grep -q`: it
+            # closes the pipe on its first match, and under `pipefail` a
+            # producer killed by that SIGPIPE makes the whole pipeline
+            # non-zero — which here would silently skip a worktree that is
+            # registered. Draining grep's input costs nothing.
+            registered="$(git worktree list --porcelain)"
+            printf '%s\n' "$registered" | grep -xF "worktree $worktree" > /dev/null || continue
             if [ -n "$(git -C "$worktree" status --porcelain)" ]; then
                 echo "keeler-land: $worktree has uncommitted changes — left in place, with $branch; look at it before removing them."
                 continue
             fi
-            git worktree remove "$worktree"
-            git branch -D "$branch" >/dev/null 2>&1 || true
-            echo "keeler-land: removed the landed worktree $worktree and its branch $branch"
+            # Tidying up is the last thing this recipe does and the least
+            # of it: the baseline and the spec are already staged, so a
+            # worktree that will not go — locked, on an unmounted disk —
+            # is named and stepped over, not a raw git error that ends the
+            # run over work already done.
+            if ! git worktree remove "$worktree"; then
+                echo "keeler-land: $worktree could not be removed — left in place, with $branch." >&2
+                continue
+            fi
+            if git branch -D "$branch" >/dev/null 2>&1; then
+                echo "keeler-land: removed the landed worktree $worktree and its branch $branch"
+            else
+                echo "keeler-land: removed the landed worktree $worktree; its branch $branch is still here, delete it yourself"
+            fi
         done <<< "$report"
     done
