@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 0ba2d6a7bb9396d99581cba4d48a5e0f1b9f33e7711aab353b7643e6628f5c52 # shrinks to branch = "keeler/-/t1"
+cc 8a2ac4edd0cd749294b8b945e2b135d9e611349bcbbc07e7f5a01ce47d9e0214 # shrinks to ticks = [true]

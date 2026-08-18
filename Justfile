@@ -455,6 +455,13 @@ keeler-upgrade:
 # wrong together. Not `dev-full` — hours of mutants at every fan-in is a
 # cost nobody would pay, and `mutants-diff` on a freshly merged main has
 # nothing to diff.
+#
+# Then it finishes what the fan-in finished: a spec whose every box is
+# ticked gets `Status: Implemented`, staged beside the baseline for the
+# same human commit, and each landed task's worktree and branch are
+# removed — but only when the worktree is clean. Uncommitted work is named
+# and left where it is; nothing here is committed, and nothing a human has
+# not seen is thrown away.
 keeler-land:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -483,3 +490,62 @@ keeler-land:
     else
         echo "keeler-land: no baseline was produced — nothing in this project to measure yet, so nothing is staged."
     fi
+    # Fan-in, part two: a spec whose every box is ticked is finished, and a
+    # landed task's worktree is litter. Readiness is the graph script's
+    # answer here as it is everywhere else — one parser reads the format,
+    # so this recipe and `just keeler-graph` cannot disagree about which
+    # tasks are done.
+    root="$(git rev-parse --show-toplevel)"
+    for spec in "$root"/specs/*.md; do
+        [ -f "$spec" ] || continue
+        rel="${spec#"$root"/}"
+        # A spec the parser refuses is one nothing here may act on: not
+        # marked, not cleaned up after. Say so and leave it alone.
+        if ! report="$(bash "$root/scripts/keeler-graph.sh" "$spec" 2>&1)"; then
+            echo "keeler-land: $rel does not parse as a graph, so it is left exactly as it is:" >&2
+            printf '%s\n' "$report" >&2
+            continue
+        fi
+        slug="$(basename "$spec" .md)"
+        # Every box ticked, and only that, is a finished spec — a spec with
+        # no tasks at all has finished nothing.
+        all_done="$(printf '%s\n' "$report" | awk '
+            NF { n++; if ($2 == "done") d++ }
+            END { print (n > 0 && n == d) ? "yes" : "no" }')"
+        status_line="$(grep -m1 -E '^[*_[:space:]]*Status:' "$spec" || true)"
+        # Implemented follows Approved: a Draft nobody approved is not a
+        # contract that can have been fulfilled, however many boxes are
+        # ticked — and a spec already Implemented needs no second write.
+        case "$all_done:$status_line" in
+            yes:*Approved*)
+                marked="$(mktemp)"
+                awk '!written && /^[*_[:space:]]*Status:/ { sub(/Approved/, "Implemented"); written = 1 } { print }' \
+                    "$spec" > "$marked"
+                # Copied, not moved: `mv` would give the spec the temporary
+                # file's private permissions.
+                cat "$marked" > "$spec"
+                rm -f "$marked"
+                git add -- "$spec"
+                echo "keeler-land: every task in $rel is ticked — its Status: is now Implemented, staged alongside the baseline for the same commit."
+                ;;
+        esac
+        # A landed task's worktree and branch have done their job — but
+        # only when the worktree is clean. Uncommitted work is the human's
+        # to look at before anything removes it.
+        while read -r id state _rest; do
+            [ "$state" = done ] || continue
+            tid="$(printf '%s' "$id" | tr '[:upper:]' '[:lower:]')"
+            branch="keeler/$slug/$tid"
+            worktree="$(dirname "$root")/$(basename "$root")-$slug-$tid"
+            # Only a worktree this repository registered: a directory that
+            # merely has the name is not ours to delete.
+            git worktree list --porcelain | grep -qxF "worktree $worktree" || continue
+            if [ -n "$(git -C "$worktree" status --porcelain)" ]; then
+                echo "keeler-land: $worktree has uncommitted changes — left in place, with $branch; look at it before removing them."
+                continue
+            fi
+            git worktree remove "$worktree"
+            git branch -D "$branch" >/dev/null 2>&1 || true
+            echo "keeler-land: removed the landed worktree $worktree and its branch $branch"
+        done <<< "$report"
+    done

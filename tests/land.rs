@@ -28,10 +28,26 @@ const OLD_BASELINE: &str = "{\"baseline\":\"as it was on main\"}\n";
 const NEW_BASELINE: &str = "{\"baseline\":\"regenerated at fan-in\"}\n";
 
 fn spec_body() -> String {
+    spec_with(&[true, false], "Approved")
+}
+
+/// A fixture spec of two tasks — T1 a root, T2 needing it — with the boxes
+/// ticked as given and the `Status:` asked for. The graph is the same
+/// shape whatever the ticks are, so what a test varies is one thing.
+fn spec_with(ticks: &[bool], status: &str) -> String {
+    let tasks: Vec<String> = ticks
+        .iter()
+        .enumerate()
+        .map(|(index, ticked)| {
+            let id = index + 1;
+            let box_ = if *ticked { "x" } else { " " };
+            let needs = if index == 0 { "" } else { " Needs: T1." };
+            format!("- [{box_}] **T{id} — fixture task {id}.**{needs} Scenarios: _one_.")
+        })
+        .collect();
+    let tasks = tasks.join("\n");
     format!(
-        "# Spec 42 — fixture\n\n**Status:** Approved\n\n## Tasks\n\n\
-         - [x] **T1 — the root, and it is done.** Scenarios: _one_.\n\
-         - [ ] **T2 — the other one.** Needs: T1. Scenarios: _two_.\n\n---\n\n\
+        "# Spec 42 — fixture\n\n**Status:** {status}\n\n## Tasks\n\n{tasks}\n\n---\n\n\
          ## Implementation Notes\n\nnone — {SLUG} is a fixture.\n"
     )
 }
@@ -101,19 +117,38 @@ struct Project {
 
 impl Project {
     fn new(name: &str) -> Self {
-        Self::on_branch(name, "main")
+        Self::build(name, "main", &spec_body())
     }
 
     /// A project whose only branch is `branch` — the fixture for "main is
     /// whatever this repository calls main".
     fn on_branch(name: &str, branch: &str) -> Self {
+        Self::build(name, branch, &spec_body())
+    }
+
+    /// A project whose one spec is the given text — the fixture for what a
+    /// land does, or does not do, to a spec.
+    fn with_spec(name: &str, spec: &str) -> Self {
+        Self::build(name, "main", spec)
+    }
+
+    fn build(name: &str, branch: &str, spec: &str) -> Self {
         let dir = std::env::temp_dir().join(format!("keeler-land-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("bin")).unwrap();
         std::fs::create_dir_all(dir.join("specs")).unwrap();
+        std::fs::create_dir_all(dir.join("scripts")).unwrap();
         std::fs::copy(repo_root().join("Justfile"), dir.join("Justfile")).unwrap();
+        // The graph script ships beside the Justfile and the recipe reads
+        // readiness through it — a fixture without it is not the project
+        // Keeler installs.
+        std::fs::copy(
+            repo_root().join("scripts/keeler-graph.sh"),
+            dir.join("scripts/keeler-graph.sh"),
+        )
+        .unwrap();
         std::fs::write(dir.join("crap-baseline.json"), OLD_BASELINE).unwrap();
-        std::fs::write(dir.join("specs").join(format!("{SLUG}.md")), spec_body()).unwrap();
+        std::fs::write(dir.join("specs").join(format!("{SLUG}.md")), spec).unwrap();
         std::fs::write(dir.join(".gitignore"), "/bin/\n/just-calls\n").unwrap();
         write_stub(&dir.join("bin/just"), JUST_STUB);
         // Resolved, because `git rev-parse --show-toplevel` resolves too —
@@ -206,6 +241,48 @@ impl Project {
         std::fs::read_to_string(self.dir.join("crap-baseline.json")).unwrap()
     }
 
+    fn spec_path(&self) -> PathBuf {
+        self.dir.join("specs").join(format!("{SLUG}.md"))
+    }
+
+    fn spec(&self) -> String {
+        std::fs::read_to_string(self.spec_path()).unwrap()
+    }
+
+    /// Where a task's worktree lands: a sibling of the repository root,
+    /// named `<repo>-<spec-slug>-<task-id>`, as `keeler-spawn` puts it.
+    fn worktree_path(&self, tid: &str) -> PathBuf {
+        let name = self.dir.file_name().unwrap().to_string_lossy().into_owned();
+        self.dir
+            .parent()
+            .unwrap()
+            .join(format!("{name}-{SLUG}-{tid}"))
+    }
+
+    /// A worktree on `keeler/<slug>/<tid>`, the way a spawn leaves one.
+    fn add_worktree(&self, tid: &str) -> PathBuf {
+        let path = self.worktree_path(tid);
+        let _ = std::fs::remove_dir_all(&path);
+        self.git(&[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            &format!("keeler/{SLUG}/{tid}"),
+            path.to_str().unwrap(),
+            "HEAD",
+        ]);
+        path
+    }
+
+    /// Every branch this repository has, by name.
+    fn branches(&self) -> Vec<String> {
+        self.git(&["branch", "--format=%(refname:short)"])
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
+
     fn staged(&self) -> Vec<String> {
         let listed = self.git(&["diff", "--cached", "--name-only"]);
         listed
@@ -218,6 +295,20 @@ impl Project {
 
 impl Drop for Project {
     fn drop(&mut self) {
+        // The worktrees are siblings of the root, so removing the root
+        // alone would leave them behind in the temp directory.
+        let name = self.dir.file_name().unwrap().to_string_lossy().into_owned();
+        if let Ok(entries) = std::fs::read_dir(self.dir.parent().unwrap()) {
+            for entry in entries.flatten() {
+                if entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(&format!("{name}-"))
+                {
+                    let _ = std::fs::remove_dir_all(entry.path());
+                }
+            }
+        }
         let _ = std::fs::remove_dir_all(&self.dir);
     }
 }
@@ -426,6 +517,181 @@ fn a_baseline_that_could_not_be_regenerated_is_not_staged() {
 }
 
 #[test]
+fn landing_the_last_task_marks_the_spec_implemented() {
+    // Given a spec on main whose every task is ticked
+    let project = Project::with_spec("last-task", &spec_with(&[true, true], "Approved"));
+    let head = project.git(&["rev-parse", "HEAD"]);
+
+    // When `just keeler-land` runs and the gates are green
+    let output = project.land();
+    assert!(output.status.success(), "{}", both(&output));
+
+    // Then the spec's Status: is set to Implemented and staged, alongside
+    // the baseline, for the same human commit
+    assert!(
+        project.spec().contains("**Status:** Implemented"),
+        "the finished spec was not marked Implemented:\n{}",
+        project.spec()
+    );
+    assert_eq!(
+        project.staged(),
+        vec!["crap-baseline.json".to_string(), format!("specs/{SLUG}.md"),],
+        "the spec and the baseline are not staged together for one commit"
+    );
+    assert_eq!(
+        project.git(&["rev-parse", "HEAD"]),
+        head,
+        "keeler-land committed; the human commits"
+    );
+    assert!(
+        both(&output).contains(&format!("specs/{SLUG}.md")),
+        "the run does not name the spec it finished:\n{}",
+        both(&output)
+    );
+
+    // And a spec with any task unticked is left as it was
+    let unfinished = Project::with_spec(
+        "last-task-unfinished",
+        &spec_with(&[true, false], "Approved"),
+    );
+    let before = unfinished.spec();
+    let output = unfinished.land();
+    assert!(output.status.success(), "{}", both(&output));
+    assert_eq!(
+        unfinished.spec(),
+        before,
+        "a spec with an unticked task was rewritten"
+    );
+    assert_eq!(unfinished.staged(), vec!["crap-baseline.json".to_string()]);
+}
+
+#[test]
+fn landing_cleans_up_only_what_is_clean() {
+    // Given a landed task whose worktree has no uncommitted changes, and
+    // another landed task whose worktree has some
+    let project = Project::with_spec("cleanup", &spec_with(&[true, true], "Approved"));
+    let clean = project.add_worktree("t1");
+    let dirty = project.add_worktree("t2");
+    std::fs::write(
+        dirty.join("crap-baseline.json"),
+        "{\"still\":\"working\"}\n",
+    )
+    .unwrap();
+
+    // When `just keeler-land` finishes
+    let output = project.land();
+    assert!(output.status.success(), "{}", both(&output));
+
+    // Then the worktree and the branch are removed
+    assert!(
+        !clean.exists(),
+        "a clean landed worktree survived:\n{}",
+        both(&output)
+    );
+    assert!(
+        !project.branches().contains(&format!("keeler/{SLUG}/t1")),
+        "the branch of a removed worktree survived: {:?}",
+        project.branches()
+    );
+
+    // And a worktree with uncommitted changes is left in place and named,
+    // for the human to look at first
+    assert!(dirty.exists(), "a dirty worktree was removed");
+    assert!(
+        project.branches().contains(&format!("keeler/{SLUG}/t2")),
+        "the branch of a dirty worktree was deleted: {:?}",
+        project.branches()
+    );
+    assert!(
+        both(&output).contains(dirty.to_str().unwrap()),
+        "the run does not name the dirty worktree it left:\n{}",
+        both(&output)
+    );
+}
+
+#[test]
+fn an_unlanded_task_keeps_its_worktree() {
+    // Given a task that is not ticked — work in flight, not landed —
+    // whose worktree is clean because its agent commits as it goes
+    let project = Project::with_spec("in-flight", &spec_with(&[true, false], "Approved"));
+    let in_flight = project.add_worktree("t2");
+
+    // When `just keeler-land` runs on main
+    let output = project.land();
+    assert!(output.status.success(), "{}", both(&output));
+
+    // Then the worktree and the branch are still there: cleanup follows
+    // landing, and a task the graph does not call done has not landed
+    assert!(
+        in_flight.exists(),
+        "an unfinished task's worktree was removed:\n{}",
+        both(&output)
+    );
+    assert!(project.branches().contains(&format!("keeler/{SLUG}/t2")));
+}
+
+#[test]
+fn only_an_approved_graph_can_be_finished() {
+    // Given a spec that is still a Draft, though every box is ticked
+    let draft = Project::with_spec("draft", &spec_with(&[true, true], "Draft"));
+    let before = draft.spec();
+
+    // When `just keeler-land` runs on main
+    let output = draft.land();
+
+    // Then it is left as it was: Implemented follows Approved, and a spec
+    // nobody approved is not a contract that can have been fulfilled
+    assert!(output.status.success(), "{}", both(&output));
+    assert_eq!(draft.spec(), before, "a Draft spec was marked Implemented");
+    assert_eq!(draft.staged(), vec!["crap-baseline.json".to_string()]);
+
+    // And a spec with no tasks at all is left as it was too — nothing was
+    // finished, because nothing was ever asked for
+    let empty = Project::with_spec(
+        "no-tasks",
+        "# Spec 42 — fixture\n\n**Status:** Approved\n\n## Tasks\n\nNone yet.\n",
+    );
+    let before = empty.spec();
+    let output = empty.land();
+    assert!(output.status.success(), "{}", both(&output));
+    assert_eq!(empty.spec(), before, "a spec with no tasks was Implemented");
+    assert_eq!(empty.staged(), vec!["crap-baseline.json".to_string()]);
+}
+
+#[test]
+fn a_spec_that_does_not_parse_is_left_alone_and_named() {
+    // Given a spec whose graph the parser refuses — a cycle — with every
+    // box ticked, and a clean worktree for one of its tasks
+    let project = Project::with_spec(
+        "unparseable",
+        "# Spec 42 — fixture\n\n**Status:** Approved\n\n## Tasks\n\n\
+         - [x] **T1 — one.** Needs: T2. Scenarios: _one_.\n\
+         - [x] **T2 — two.** Needs: T1. Scenarios: _two_.\n",
+    );
+    let worktree = project.add_worktree("t1");
+    let before = project.spec();
+
+    // When `just keeler-land` runs on main
+    let output = project.land();
+
+    // Then the baseline still lands, and the spec is left exactly as it
+    // is — a graph nobody can read says nothing about what is finished —
+    // and the run names it rather than passing over it in silence
+    assert!(output.status.success(), "{}", both(&output));
+    assert_eq!(project.staged(), vec!["crap-baseline.json".to_string()]);
+    assert_eq!(project.spec(), before, "an unreadable spec was rewritten");
+    assert!(
+        worktree.exists(),
+        "an unreadable spec's worktree was removed"
+    );
+    assert!(
+        both(&output).contains(&format!("specs/{SLUG}.md")),
+        "the run does not name the spec it could not read:\n{}",
+        both(&output)
+    );
+}
+
+#[test]
 fn main_is_resolved_in_one_place() {
     // Given the shipped Justfile
     let justfile = std::fs::read_to_string(repo_root().join("Justfile")).unwrap();
@@ -523,5 +789,38 @@ proptest::proptest! {
         );
         proptest::prop_assert!(project.gates().is_empty(), "a gate ran on {}", branch);
         proptest::prop_assert_eq!(project.baseline(), OLD_BASELINE);
+    }
+
+    /// A spec is Implemented exactly when every one of its boxes is
+    /// ticked — not when most are, not when the last one happens to be,
+    /// and whatever the number of tasks. The rule is about the whole
+    /// graph, not about the pattern one example test picked.
+    #[test]
+    fn a_spec_is_implemented_exactly_when_every_box_is_ticked(
+        // Weighted towards ticked: an unticked box is the common case by
+        // accident, and the interesting half of "exactly when" is the
+        // spec that is actually finished.
+        ticks in proptest::collection::vec(proptest::bool::weighted(0.75), 1..5),
+    ) {
+        let project = Project::with_spec("every-box", &spec_with(&ticks, "Approved"));
+
+        let output = project.land();
+        proptest::prop_assert!(output.status.success(), "{}", both(&output));
+
+        let finished = ticks.iter().all(|ticked| *ticked);
+        proptest::prop_assert_eq!(
+            project.spec().contains("**Status:** Implemented"),
+            finished,
+            "ticks {:?} produced:\n{}",
+            ticks,
+            project.spec()
+        );
+        proptest::prop_assert_eq!(
+            project.staged().contains(&format!("specs/{SLUG}.md")),
+            finished,
+            "ticks {:?} staged {:?}",
+            ticks,
+            project.staged()
+        );
     }
 }
