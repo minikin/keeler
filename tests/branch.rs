@@ -184,6 +184,46 @@ fn the_branch_gate_leaves_dev_alone() {
 }
 
 #[test]
+fn the_branch_gate_is_listed_by_what_it_does() {
+    // `just --list` is the road into every recipe, and it shows the last
+    // comment line above one. A recipe whose rationale ends in an aside is
+    // listed by that aside.
+    let output = Command::new(real_just())
+        .arg("--list")
+        .current_dir(repo_root())
+        .output()
+        .expect("failed to run just --list");
+    let listed = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find(|line| line.trim_start().starts_with("keeler-branch "))
+        .unwrap_or_else(|| {
+            panic!(
+                "just --list does not show keeler-branch:\n{}",
+                said(&output)
+            )
+        })
+        .to_string();
+    let summary = listed
+        .split_once('#')
+        .expect("keeler-branch is listed without a summary")
+        .1
+        .trim();
+    for gate in ["dev", "crap-delta", "mutants-diff"] {
+        assert!(
+            summary.contains(gate),
+            "`just --list` does not say keeler-branch runs `{gate}`: {summary}"
+        );
+    }
+    // And it reads as a summary rather than the tail of a paragraph — the
+    // trap of a long rationale is that its last line is what gets listed.
+    let opens = summary.chars().next().expect("the summary is empty");
+    assert!(
+        opens.is_ascii_uppercase() || opens == '`',
+        "`just --list` shows keeler-branch as the tail of a sentence: {summary}"
+    );
+}
+
+#[test]
 fn the_branch_gate_skips_the_delta_when_no_baseline_is_committed() {
     // Given a project with no committed baseline — `crap-delta` fails
     // outright there, which would make the branch gate unrunnable in a
