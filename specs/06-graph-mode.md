@@ -229,10 +229,11 @@ And   crap-baseline.json is regenerated and staged, not committed, and the
 And   the working tree holds exactly that staged change and nothing else
 ```
 
-### Scenario: keeler-land refuses to run anywhere but main
+### Scenario: keeler-land refuses a task branch
 
 ```
-Given the current branch is keeler/06-graph-mode/t3
+Given the current branch is keeler/06-graph-mode/t3 — neither main nor
+      the feature's branch
 When  `just keeler-land` runs
 Then  it refuses before running any gate, naming the branch it is on
 And   crap-baseline.json and the spec are untouched
@@ -379,7 +380,7 @@ split it rather than ship a task eight scenarios wide.
 - [x] **T5 — keeler-land: gates first, baseline second, staged not
       committed.** Needs: T1. Scenarios: _Baseline updates happen at
       fan-in, on main_, _A branch that was green alone can still redden
-      main_, _keeler-land refuses to run anywhere but main_. Deliverable:
+      main_, _keeler-land refuses a task branch_. Deliverable:
       `just keeler-land`, and the shared main-resolution helper it and
       `mutants-diff` both call. Tests: acceptance — the harness runs the
       recipe on a fixture main and inspects the index; a fixture whose
@@ -434,8 +435,8 @@ split it rather than ship a task eight scenarios wide.
       feature branch it ticks and cleans up; on main it sets `Status:` and
       moves the baseline, and each refuses the other's work. Tests:
       acceptance — the harness runs it at both levels and inspects what
-      changed and what did not; running it on a task branch is refused as
-      before.
+      changed and what did not; a red feature branch removes nothing;
+      running it on a task branch is refused as before.
 
 ---
 
@@ -615,11 +616,15 @@ so the graph refused work that was ready on disk. The invariant survives
 at the level where it belongs.
 
 **Landing happens twice, and the two are not the same.** A task lands into
-the feature branch: its box is ticked there and its worktree goes. The
-feature lands into main: that is where `Status:` becomes `Implemented`,
-and where the baseline moves — the baseline is the whole team's reference,
-and a moved one must be visible in one place rather than in every
-feature's branch.
+the feature branch: the merge carries its tick there and its worktree
+goes. The feature lands into main: that is where `Status:` becomes
+`Implemented`, and where the baseline moves — the baseline is the whole
+team's reference, and a moved one must be visible in one place rather
+than in every feature's branch. **The gate runs first at both levels**,
+for the same reason at each: two branches green alone can be wrong
+together, and a red branch stages nothing and removes nothing — cleaning
+up on a red feature branch would throw away the only place the offending
+work can still be looked at.
 
 `keeler-land` runs in one order and refuses to run in any other:
 `just dev` on main first, the baseline second, and only if the first was
@@ -654,8 +659,8 @@ the fan-out would be gone. Under the per-region rule they stay parallel,
 and the fan-in works only if each adds where the rule says. If that fails
 in practice, the rule was wrong and the spec should say so.
 
-**"Main" is one thing, decided once.** `keeler-land` refuses to run off
-it, and finds it exactly the way `mutants-diff` already does — the first
+**"Main" is one thing, decided once.** `keeler-land` tells it from a
+feature branch by it, and finds it exactly the way `mutants-diff` already does — the first
 of `origin/main`, `origin/master`, `main`, `master` that exists — through
 one shared helper, so no two recipes can disagree about where main is.
 `crap-baseline` is *not* changed: `/keeler:feature` runs it at step 0 on

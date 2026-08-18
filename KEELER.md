@@ -120,7 +120,7 @@ every task is ready.
 | `just keeler-spawn <spec> <task>`            | Worktree + branch `keeler/<spec-slug>/<task-id>` + a headless agent in a detached tmux session                 |
 | `just keeler-status <spec>`                  | The board: running, passed, failed, died mid-pipeline, never spawned                                          |
 | `just keeler-branch`                         | The gate a task branch runs instead of `just dev`: dev, CRAP delta, mutants on the diff                       |
-| `just keeler-land`                           | Fan-in, twice: on `feat/<spec-slug>` it removes landed worktrees; on main, gates first, then the baseline and `Status: Implemented` — staged for a human to commit |
+| `just keeler-land`                           | Fan-in, twice: gates first at both levels; on `feat/<spec-slug>` it then removes landed worktrees, on main the baseline and `Status: Implemented` — staged for a human to commit |
 
 Three rules keep parallel branches honest, and two of them are enforced by CI
 on every `keeler/*` pull request: a branch **measures** the shared references

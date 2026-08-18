@@ -136,8 +136,18 @@ impl Project {
     /// shape a feature is developed in, and the one keeler-land must tell
     /// apart from main by name.
     fn on_feature_branch(name: &str, spec: &str) -> Self {
-        let project = Self::build(name, "main", spec);
+        // Main holds the spec with no box ticked; the feature branch
+        // commits the ticks. That is the real shape — the ticks arrive on
+        // the feature branch by merge — and it gives the feature branch a
+        // commit main lacks, so "unmerged into the feature branch" and
+        // "unmerged into main" are different questions the tests can tell
+        // apart.
+        let unticked = spec.replace("- [x]", "- [ ]");
+        let project = Self::build(name, "main", &unticked);
         project.git(&["checkout", "-qb", &format!("feat/{SLUG}")]);
+        std::fs::write(project.spec_path(), spec).unwrap();
+        project.git(&["add", "-A"]);
+        project.git(&["commit", "-qm", "the ticks land on the feature branch"]);
         project
     }
 
@@ -261,11 +271,15 @@ impl Project {
     /// Where a task's worktree lands: a sibling of the repository root,
     /// named `<repo>-<spec-slug>-<task-id>`, as `keeler-spawn` puts it.
     fn worktree_path(&self, tid: &str) -> PathBuf {
+        self.worktree_path_for(SLUG, tid)
+    }
+
+    fn worktree_path_for(&self, slug: &str, tid: &str) -> PathBuf {
         let name = self.dir.file_name().unwrap().to_string_lossy().into_owned();
         self.dir
             .parent()
             .unwrap()
-            .join(format!("{name}-{SLUG}-{tid}"))
+            .join(format!("{name}-{slug}-{tid}"))
     }
 
     /// A worktree on `keeler/<slug>/<tid>`, the way a spawn leaves one.
@@ -374,7 +388,7 @@ fn baseline_updates_happen_at_fan_in_on_main() {
     let project = Project::new("fan-in");
     let head = project.git(&["rev-parse", "HEAD"]);
 
-    // When `just keeler-land` runs on main
+    // When `just keeler-land` runs on the feature branch
     let output = project.land();
     assert!(output.status.success(), "{}", both(&output));
 
@@ -454,7 +468,7 @@ fn a_branch_that_was_green_alone_can_still_redden_main() {
 }
 
 #[test]
-fn keeler_land_refuses_to_run_anywhere_but_main() {
+fn keeler_land_refuses_a_task_branch() {
     // Given the current branch is a task branch
     let project = Project::new("off-main");
     let branch = format!("keeler/{SLUG}/t3");
@@ -498,7 +512,7 @@ fn a_project_with_nothing_to_measure_stages_nothing() {
     project.git(&["rm", "-q", "crap-baseline.json"]);
     project.git(&["commit", "-qm", "no baseline yet"]);
 
-    // When `just keeler-land` runs on main
+    // When `just keeler-land` runs on the feature branch
     let output = project.land();
 
     // Then it says nothing was staged, rather than failing on a file that
@@ -543,7 +557,7 @@ fn a_baseline_that_could_not_be_regenerated_is_not_staged() {
     let mut project = Project::new("baseline-broke");
     project.baseline_exit = 2;
 
-    // When `just keeler-land` runs on main
+    // When `just keeler-land` runs on the feature branch
     let output = project.land();
 
     // Then it fails, and stages nothing: only a baseline that was actually
@@ -658,8 +672,13 @@ fn landing_on_the_feature_branch_takes_the_ticks_and_the_worktrees() {
         both(&output)
     );
 
-    // Then the landed worktrees and branches go — that is the feature
-    // level's work
+    // Then the gate ran first, and the landed worktrees and branches go —
+    // that is the feature level's work
+    assert_eq!(
+        project.gates().first().map(String::as_str),
+        Some("dev"),
+        "the feature level did not gate first"
+    );
     assert!(
         !clean.exists(),
         "a landed worktree survived on the feature branch:\n{}",
@@ -704,6 +723,94 @@ fn landing_on_the_feature_branch_takes_the_ticks_and_the_worktrees() {
         "the feature level wrote Status::\n{}",
         project.spec()
     );
+    assert!(
+        both(&output).contains("finished") && both(&output).contains("main"),
+        "the feature level does not say the feature is finished and where to land it:\n{}",
+        both(&output)
+    );
+}
+
+#[test]
+fn the_feature_level_touches_only_its_own_specs_tasks() {
+    // Given feat/42-fixture, and a second spec 43-other whose task also
+    // landed here somehow, each with a clean worktree
+    let project =
+        Project::on_feature_branch("own-spec-only", &spec_with(&[true, true], "Approved"));
+    let other_spec = project.dir.join("specs/43-other.md");
+    std::fs::write(
+        &other_spec,
+        spec_with(&[true], "Approved").replace("Spec 42", "Spec 43"),
+    )
+    .unwrap();
+    project.git(&["add", "-A"]);
+    project.git(&["commit", "-qm", "another spec"]);
+    let mine = project.add_worktree("t1");
+    let theirs = project.worktree_path_for("43-other", "t1");
+    project.git(&[
+        "worktree",
+        "add",
+        "-q",
+        "-b",
+        "keeler/43-other/t1",
+        theirs.to_str().unwrap(),
+        "HEAD",
+    ]);
+
+    // When keeler-land runs on feat/42-fixture
+    let output = project.land();
+    assert!(output.status.success(), "{}", both(&output));
+
+    // Then 42's worktree goes and 43's stands. keeler-spawn binds one spec
+    // to one feature branch by name; the land side must honour the same
+    // binding, or a feature branch would clean up after tasks it never
+    // fanned out.
+    assert!(
+        !mine.exists(),
+        "the feature's own landed worktree survived:\n{}",
+        both(&output)
+    );
+    assert!(
+        theirs.exists(),
+        "feat/42-fixture removed a worktree belonging to 43-other:\n{}",
+        both(&output)
+    );
+}
+
+#[test]
+fn a_red_feature_branch_removes_nothing() {
+    // Given a feature branch that is red after fan-in — two task branches
+    // each green alone, wrong together
+    let mut project =
+        Project::on_feature_branch("red-feature", &spec_with(&[true, true], "Approved"));
+    project.dev_exit = 1;
+    let landed = project.add_worktree("t1");
+
+    // When keeler-land runs there
+    let output = project.land();
+
+    // Then the gate ran, and ran first; the run failed; and no worktree
+    // was removed. Cleaning up on a red branch would throw away the only
+    // place the offending work can still be looked at.
+    assert_eq!(
+        project.gates(),
+        vec!["dev".to_string()],
+        "the feature level did not gate"
+    );
+    assert!(
+        !output.status.success(),
+        "a red feature branch landed:\n{}",
+        both(&output)
+    );
+    assert!(
+        landed.exists(),
+        "a red feature branch removed a worktree:\n{}",
+        both(&output)
+    );
+    assert!(
+        both(&output).contains("red"),
+        "the refusal does not say the branch is red:\n{}",
+        both(&output)
+    );
 }
 
 #[test]
@@ -713,7 +820,7 @@ fn landing_on_main_takes_status_and_the_baseline_and_no_worktrees() {
     let project = Project::with_spec("main-level", &spec_with(&[true, true], "Approved"));
     let leftover = project.add_worktree("t1");
 
-    // When `just keeler-land` runs on main
+    // When `just keeler-land` runs on the feature branch
     let output = project.land();
     assert!(output.status.success(), "{}", both(&output));
 
@@ -733,6 +840,11 @@ fn landing_on_main_takes_status_and_the_baseline_and_no_worktrees() {
     assert!(
         leftover.exists(),
         "main removed a task worktree — that is the feature branch's work:\n{}",
+        both(&output)
+    );
+    assert!(
+        both(&output).contains(leftover.to_str().unwrap()),
+        "main passed a leftover task worktree in silence:\n{}",
         both(&output)
     );
 }
@@ -819,7 +931,7 @@ fn a_worktree_that_will_not_go_is_named_rather_than_fatal() {
     let clean = project.add_worktree("t2");
     project.git(&["worktree", "lock", locked.to_str().unwrap()]);
 
-    // When `just keeler-land` runs on main
+    // When `just keeler-land` runs on the feature branch
     let output = project.land();
 
     // Then the land still succeeds and says so: the baseline and the spec
@@ -851,7 +963,7 @@ fn landing_reads_the_ticks_that_are_committed() {
     std::fs::write(project.spec_path(), spec_with(&[true, true], "Approved")).unwrap();
     let before = project.spec();
 
-    // When `just keeler-land` runs on main
+    // When `just keeler-land` runs on the feature branch
     let output = project.land();
 
     // Then nothing acts on that tick: the spec is not marked, the
@@ -874,7 +986,7 @@ fn landing_reads_the_ticks_that_are_committed() {
 }
 
 #[test]
-fn a_branch_whose_commits_are_not_on_main_keeps_its_worktree() {
+fn a_branch_whose_commits_are_not_on_the_feature_branch_keeps_its_worktree() {
     // Given two landed tasks with clean worktrees, one of whose branches
     // carries a commit that never reached main
     let project = Project::on_feature_branch("unmerged", &spec_with(&[true, true], "Approved"));
@@ -884,7 +996,7 @@ fn a_branch_whose_commits_are_not_on_main_keeps_its_worktree() {
     Project::git_in(&unmerged, &["add", "notes.txt"]);
     Project::git_in(&unmerged, &["commit", "-qm", "work nobody merged"]);
 
-    // When `just keeler-land` runs on main
+    // When `just keeler-land` runs on the feature branch
     let output = project.land();
     assert!(output.status.success(), "{}", both(&output));
 
@@ -918,7 +1030,7 @@ fn a_worktree_that_moved_to_another_branch_is_left_alone() {
     let moved = project.add_worktree("t1");
     Project::git_in(&moved, &["switch", "-q", "-c", "fixup"]);
 
-    // When `just keeler-land` runs on main
+    // When `just keeler-land` runs on the feature branch
     let output = project.land();
     assert!(output.status.success(), "{}", both(&output));
 
@@ -938,13 +1050,65 @@ fn a_worktree_that_moved_to_another_branch_is_left_alone() {
 }
 
 #[test]
+fn on_the_feature_branch_an_uncommitted_tick_removes_no_worktree() {
+    // Given a tick that sits in the working tree and no commit — the
+    // feature-branch half of `landing_reads_the_ticks_that_are_committed`,
+    // whose worktree clause is vacuous on main now that main removes none
+    let project =
+        Project::on_feature_branch("uncommitted-tick", &spec_with(&[true, false], "Approved"));
+    let in_flight = project.add_worktree("t2");
+    let spec = project.spec_path();
+    let text = std::fs::read_to_string(&spec).unwrap();
+    std::fs::write(&spec, text.replace("- [ ] **T2", "- [x] **T2")).unwrap();
+
+    // When keeler-land runs there
+    let output = project.land();
+
+    // Then the worktree stands: an uncommitted tick is not a landing, and
+    // a cleanup driven by one would delete a worktree under an agent that
+    // has not finished
+    assert!(
+        in_flight.exists(),
+        "an uncommitted tick had a worktree removed:\n{}",
+        both(&output)
+    );
+}
+
+#[test]
+fn on_the_feature_branch_a_spec_that_does_not_parse_keeps_its_worktrees() {
+    // Given a spec whose Tasks section will not parse — the feature-branch
+    // half of `a_spec_that_does_not_parse_is_left_alone_and_named`
+    let project = Project::on_feature_branch(
+        "unparseable-feature",
+        &spec_with(&[true, true], "Approved").replace("- [x] **T2", "- [x] **T1"),
+    );
+    let worktree = project.add_worktree("t1");
+
+    // When keeler-land runs there
+    let output = project.land();
+
+    // Then nothing is removed on the strength of a graph nobody could
+    // read, and the run says which spec it left alone
+    assert!(
+        worktree.exists(),
+        "a worktree went on an unparseable graph:\n{}",
+        both(&output)
+    );
+    assert!(
+        both(&output).contains(&format!("{SLUG}.md")),
+        "the run does not name the spec it left alone:\n{}",
+        both(&output)
+    );
+}
+
+#[test]
 fn an_unlanded_task_keeps_its_worktree() {
     // Given a task that is not ticked — work in flight, not landed —
     // whose worktree is clean because its agent commits as it goes
-    let project = Project::with_spec("in-flight", &spec_with(&[true, false], "Approved"));
+    let project = Project::on_feature_branch("in-flight", &spec_with(&[true, false], "Approved"));
     let in_flight = project.add_worktree("t2");
 
-    // When `just keeler-land` runs on main
+    // When `just keeler-land` runs on the feature branch
     let output = project.land();
     assert!(output.status.success(), "{}", both(&output));
 
@@ -964,7 +1128,7 @@ fn only_an_approved_graph_can_be_finished() {
     let draft = Project::with_spec("draft", &spec_with(&[true, true], "Draft"));
     let before = draft.spec();
 
-    // When `just keeler-land` runs on main
+    // When `just keeler-land` runs on the feature branch
     let output = draft.land();
 
     // Then it is left as it was: Implemented follows Approved, and a spec
@@ -1030,7 +1194,7 @@ fn a_spec_that_does_not_parse_is_left_alone_and_named() {
     let worktree = project.add_worktree("t1");
     let before = project.spec();
 
-    // When `just keeler-land` runs on main
+    // When `just keeler-land` runs on the feature branch
     let output = project.land();
 
     // Then the baseline still lands, and the spec is left exactly as it

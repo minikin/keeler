@@ -109,7 +109,7 @@ mutants-all:
 
 # "Main" is one thing, decided once: the first of the four names below
 # that exists in this repository. `mutants-diff` diffs against it and
-# `keeler-land` refuses to run anywhere else — through this one helper, so
+# `keeler-land` tells it from a feature branch — through this one helper, so
 # no two recipes can disagree about where main is and be silently wrong in
 # different directions. Private (the leading `_`): it prints a ref for
 # other recipes, not a line for a human reading `just --list`.
@@ -489,24 +489,30 @@ keeler-status SPEC:
 keeler-upgrade:
     curl -fsSL https://raw.githubusercontent.com/minikin/keeler/main/install.sh | bash -s .
 
-# `just dev` runs first and the baseline moves only if it was green: a
-# baseline recorded from a red main would write "broken" down as the new
+# Landing happens twice, and the branch says which one this is. On the
+# feature branch feat/<spec-slug>: `just dev`, then each landed task's
+# clean worktree and branch are removed — that is where tasks fan out
+# from and where their leftovers belong. On main: `just dev`, then the
+# baseline is regenerated and staged, and a spec whose every box is
+# ticked — as committed, never as the working tree happens to read — gets
+# `Status: Implemented` staged beside it for the same human commit. The
+# baseline is the whole team's reference and moves in one visible place;
+# Implemented is what main says about a feature that has arrived. Anywhere
+# else it refuses by name.
+#
+# The gate runs first at both levels and nothing moves if it is red: a
+# baseline recorded from a red main writes "broken" down as the new
 # normal, and two branches that were each green alone can be wrong
 # together. Not `dev-full` — hours of mutants at every fan-in is a cost
-# nobody would pay, and `mutants-diff` on a freshly merged main has nothing
-# to diff.
+# nobody would pay.
 #
-# Then it finishes what the fan-in finished: a spec whose every box is
-# ticked — as committed, never as the working tree happens to read — gets
-# `Status: Implemented`, staged beside the baseline for the same human
-# commit, and each landed task's worktree and branch are removed. Only
-# when there is nothing to lose, though: a worktree with uncommitted
+# Cleanup only when there is nothing to lose: a worktree with uncommitted
 # changes, one that has moved to another branch, and a branch holding
-# commits main does not have are each named and left where they are.
-# Nothing here is committed, and nothing a human has not seen is thrown
-# away.
+# commits the feature branch does not have are each named and left where
+# they are. Nothing here is committed, and nothing a human has not seen is
+# thrown away.
 #
-# Graph mode: fan-in, on main — gates first, baseline second, staged and never committed.
+# Graph mode: fan-in — worktrees on the feature branch, baseline and Status: on main; staged, never committed.
 keeler-land:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -589,6 +595,9 @@ keeler-land:
         # Implemented follows Approved: a Draft nobody approved is not a
         # contract that can have been fulfilled, however many boxes are
         # ticked — and a spec already Implemented needs no second write.
+        if [ "$level" = feature ] && [ "$all_done" = yes ] && [ "$status" = Approved ] && [ "$current" = "feat/$slug" ]; then
+            echo "keeler-land: every task in $rel is ticked — the feature is finished here; land it on $main_branch to mark it Implemented and move the baseline."
+        fi
         if [ "$level" = main ] && [ "$all_done" = yes ] && [ "$status" = Approved ]; then
             # Onto a copy and then a move, never a truncate-and-write: a
             # land stopped mid-write would otherwise leave the spec empty.
@@ -607,8 +616,20 @@ keeler-land:
         # to look at before anything removes it.
         # Worktrees fan out from the feature branch, and are its to remove;
         # on main there is nothing of the kind to clean up, and a leftover
-        # is the feature branch's business.
-        [ "$level" = feature ] || continue
+        # is the feature branch's business. And only its *own* — keeler-spawn
+        # binds one spec to one feat/<slug> by name, and the land side must
+        # honour the same binding or a feature branch would clean up after
+        # tasks it never fanned out.
+        if [ "$level" = main ]; then
+            # Name what is left standing rather than pass it in silence: a
+            # task worktree still here on main is the feature branch's to
+            # remove, and the human should know it exists.
+            for wt in "$(dirname "$root")/$(basename "$root")-$slug-"*; do
+                [ -e "$wt" ] && echo "keeler-land: $wt is a task worktree — land on feat/$slug to remove it"
+            done
+            continue
+        fi
+        [ "$current" = "feat/$slug" ] || continue
         while read -r id state _rest; do
             [ "$state" = done ] || continue
             tid="$(printf '%s' "$id" | tr '[:upper:]' '[:lower:]')"
