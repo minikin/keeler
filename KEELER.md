@@ -100,8 +100,8 @@ meets them.
 ```mermaid
 flowchart LR
     S[Approved spec<br/>Tasks carry <b>Needs:</b>] --> G["/keeler:graph — which<br/>tasks are unblocked?"]
-    G --> SP1["just keeler-spawn <spec> T2"] --> B1["keeler/&lt;spec&gt;/t2<br/>tdd → qa → review → mutants<br/><b>just keeler-branch</b>"]
-    G --> SP2["just keeler-spawn <spec> T3"] --> B2["keeler/&lt;spec&gt;/t3<br/>tdd → qa → review → mutants<br/><b>just keeler-branch</b>"]
+    G --> SP1["just keeler-spawn &lt;spec&gt; T2"] --> B1["keeler/&lt;spec&gt;/t2<br/>tdd → qa → review → mutants<br/><b>just keeler-branch</b>"]
+    G --> SP2["just keeler-spawn &lt;spec&gt; T3"] --> B2["keeler/&lt;spec&gt;/t3<br/>tdd → qa → review → mutants<br/><b>just keeler-branch</b>"]
     B1 --> L["merge, then <b>just keeler-land</b> on main:<br/>just dev, then the baseline —<br/>staged, never committed"]
     B2 --> L
 ```
