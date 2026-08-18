@@ -530,6 +530,48 @@ fn this_spec_is_its_own_fixture() {
 }
 
 #[test]
+fn no_shipped_file_still_teaches_that_readiness_comes_from_main() {
+    // Every one of these is installed into an adopter's project, and each
+    // is read by an agent as instruction. A sentence left behind by an
+    // amendment does not merely go stale — it teaches the model the model
+    // the tools no longer implement, and the first thing the adopter hits
+    // is a refusal their own rules told them could not happen.
+    let shipped = [
+        ".claude/keeler.md",
+        ".claude/commands/keeler/graph.md",
+        ".claude/commands/keeler/mutants.md",
+        "KEELER.md",
+    ];
+    let mut stale = Vec::new();
+    for name in shipped {
+        let text = std::fs::read_to_string(repo_root().join(name)).unwrap();
+        for (n, line) in text.lines().enumerate() {
+            // Wherever a line says where readiness comes from, it must
+            // name the feature branch. Matching "main" anywhere would
+            // catch lines that mention main for other true reasons — the
+            // baseline, `Status:` — and a gate that fires on correct text
+            // gets edited until it stops firing.
+            let lower = line.to_lowercase();
+            if lower.contains("readiness is read from") && !line.contains("feat/") {
+                stale.push(format!("{name}:{}: {}", n + 1, line.trim()));
+            }
+        }
+    }
+    assert!(
+        stale.is_empty(),
+        "these shipped files still say readiness is read from main:\n{}",
+        stale.join("\n")
+    );
+
+    // And the rules must name the refusal an adopter meets first
+    let rules = std::fs::read_to_string(repo_root().join(".claude/keeler.md")).unwrap();
+    assert!(
+        rules.contains("feat/<spec-slug>"),
+        ".claude/keeler.md does not say which branch the graph is read from"
+    );
+}
+
+#[test]
 fn the_template_and_the_tasks_command_carry_the_format() {
     // Given what /keeler:tasks reads to learn the format
     let template = std::fs::read_to_string(repo_root().join("specs/TEMPLATE.md")).unwrap();

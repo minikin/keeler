@@ -766,6 +766,11 @@ fn spawning_from_anywhere_but_the_features_branch_is_refused() {
             !project.dir.join(".keeler").join("runs").exists(),
             "a run directory was created from {branch}"
         );
+        assert_eq!(
+            project.git(&["branch", "--list", &format!("keeler/{SLUG}/t3")]),
+            "",
+            "a branch was created from {branch}"
+        );
     }
 }
 

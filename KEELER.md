@@ -116,7 +116,7 @@ every task is ready.
 
 | Command                                      | What it does                                                                                                  |
 | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `/keeler:graph` — `just keeler-graph <spec>` | Ready / blocked / done, read from the spec **on main**; a cycle or a dangling `Needs:` is refused by the parser |
+| `/keeler:graph` — `just keeler-graph <spec>` | Ready / blocked / done, read from the spec on the feature's branch **`feat/<spec-slug>`**; a cycle or a dangling `Needs:` is refused by the parser |
 | `just keeler-spawn <spec> <task>`            | Worktree + branch `keeler/<spec-slug>/<task-id>` + a headless agent in a detached tmux session                 |
 | `just keeler-status <spec>`                  | The board: running, passed, failed, died mid-pipeline, never spawned                                          |
 | `just keeler-branch`                         | The gate a task branch runs instead of `just dev`: dev, CRAP delta, mutants on the diff                       |

@@ -292,14 +292,18 @@ keeler-spawn SPEC TASK:
     # branch does, because arriving there is the landing. Which branch that
     # is, is a name a machine checks rather than one someone remembers.
     feature="feat/$(basename "$spec_abs" .md)"
-    here="$(git branch --show-current)"
+    if ! git check-ref-format --branch "$feature" >/dev/null 2>&1; then
+        echo "keeler-spawn: $rel would need the branch $feature, which git will not accept — rename the spec file." >&2
+        exit 1
+    fi
+    here="$(git symbolic-ref --quiet --short HEAD || true)"
     if [ "$here" != "$feature" ]; then
         echo "keeler-spawn: on ${here:-a detached HEAD}, but this spec's tasks fan out from $feature — check it out, or create it, and spawn from there." >&2
         exit 1
     fi
     feature_copy="$(mktemp -d)"
     trap 'rm -rf "$feature_copy"' EXIT
-    if ! git show "HEAD:$rel" > "$feature_copy/$(basename "$spec_abs")" 2>/dev/null; then
+    if ! git show "$feature:$rel" > "$feature_copy/$(basename "$spec_abs")" 2>/dev/null; then
         echo "keeler-spawn: $rel is not committed on $feature — the worktree is cut from it, so an uncommitted graph is one the agent would never see." >&2
         exit 1
     fi
@@ -436,8 +440,12 @@ keeler-status SPEC:
     # counts, and it would report a task done that spawn does not believe.
     rel="${spec_abs#"$root/"}"
     feature="feat/$slug"
+    # After a feature lands, its branch is gone and the board must still
+    # answer — so HEAD stands in, and the run says which ref it read
+    # rather than leaving the reader to assume.
     graph_ref="$feature"
     git rev-parse --verify -q "$feature^{commit}" >/dev/null || graph_ref=HEAD
+    echo "graph: $rel on $graph_ref"
     graph_copy="$(mktemp -d)"
     trap 'rm -rf "$graph_copy"' EXIT
     if ! git show "$graph_ref:$rel" > "$graph_copy/$(basename "$spec_abs")" 2>/dev/null; then
