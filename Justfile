@@ -179,8 +179,10 @@ dev-full: dev mutants-all
 # the order is the contract: dependencies all run before the body, and the
 # sequence would stop being observable.
 #
-# The line below is the one `just --list` shows; the rationale above it is
-# for whoever opens this file.
+# The line below is the one `just --list` shows — `just` carries the last
+# comment line above a recipe and no other, which is why each graph-mode
+# recipe here ends its documentation with the one an adopter should read
+# there. The rationale above it is for whoever opens this file.
 #
 # Graph mode: the gate a task branch runs — dev, then crap-delta, then mutants-diff.
 keeler-branch:
@@ -206,10 +208,6 @@ keeler-branch:
 # waiting on — the needs whose own line is not done — rather than every
 # edge it declares. A refusal (a cycle, a need naming no task) is the
 # script's: it exits non-zero naming the line, and nothing here is printed.
-#
-# `just` carries the *last* comment line into `just --list`, so every
-# recipe here ends its documentation with the line an adopter should read
-# there. The rationale above it is for whoever opens this file.
 #
 # Graph mode: what a spec's Tasks section says is ready, blocked or done — `just keeler-graph specs/01-foo.md`.
 keeler-graph SPEC:

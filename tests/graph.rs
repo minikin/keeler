@@ -393,6 +393,109 @@ fn a_fenced_example_inside_the_section_is_not_a_task() {
 }
 
 #[test]
+fn a_fenced_example_before_the_section_does_not_open_it() {
+    // Given a spec whose Context quotes the format — a fenced block
+    // holding a `## Tasks` heading and an example item — ahead of the
+    // real Tasks section
+    let fixture = Spec::new(
+        "fenced-before",
+        "# Spec 99 — fixture\n\n**Status:** Approved\n\n## Context\n\n\
+         The Tasks section looks like this:\n\n\
+         ```markdown\n## Tasks\n\n- [x] **T1 — example done.** Scenarios: _none_.\n```\n\n\
+         ## Tasks\n\n\
+         - [ ] **T1 — the real first task.** Scenarios: _one_.\n\
+         - [ ] **T2 — the real second task.** Needs: T1. Scenarios: _two_.\n",
+    );
+
+    // When the graph is read
+    let output = fixture.graph();
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    // Then the quoted heading opened nothing: the graph is the real
+    // section's. Reading the example instead reports one ticked task
+    // where two unstarted ones live, and `keeler-land` marks a spec
+    // Implemented on exactly that.
+    assert_eq!(
+        report(&output),
+        vec![
+            ("T1".to_string(), "ready".to_string(), vec![]),
+            (
+                "T2".to_string(),
+                "blocked".to_string(),
+                vec!["T1".to_string()]
+            ),
+        ],
+        "a fenced example ahead of the section was read as the graph"
+    );
+}
+
+#[test]
+fn a_fence_left_open_is_refused_rather_than_swallowing_the_rest() {
+    // Given a Tasks section with a fence someone never closed
+    let fixture = Spec::new(
+        "fence-unclosed",
+        &spec(
+            "- [x] **T1 — done.** Scenarios: _one_.\n\n\
+             ```\nan example nobody closed\n\n\
+             - [ ] **T2 — never seen.** Scenarios: _two_.\n\
+             - [ ] **T3 — never seen either.** Scenarios: _three_.\n",
+        ),
+    );
+
+    // When the graph is read
+    let output = fixture.graph();
+
+    // Then it is refused naming the fence, and nothing is reported —
+    // ending at the fence in silence reports one done task and no
+    // others, which is a finished spec to everything downstream
+    assert!(
+        !output.status.success(),
+        "an unclosed fence was accepted:\n{}",
+        stdout(&output)
+    );
+    let said = stderr(&output);
+    assert!(
+        said.contains("fence") && said.contains("line 9"),
+        "the refusal did not name the fence and its line: {said}"
+    );
+    assert!(
+        stdout(&output).is_empty(),
+        "a refusal printed a report:\n{}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn a_link_bullet_is_not_a_malformed_checkbox() {
+    // Given an ordinary markdown link bullet in the Tasks section's prose
+    let fixture = Spec::new(
+        "link-bullet",
+        &spec(
+            "- [the design note](notes/design.md) explains the shape.\n\n\
+             - [ ] **T1 — a task.** Scenarios: _one_.\n",
+        ),
+    );
+
+    // When the graph is read
+    let output = fixture.graph();
+
+    // Then it is read as prose, not refused as a checkbox the grammar
+    // cannot parse: a refusal is total, so one link would block
+    // keeler-graph, keeler-spawn, keeler-status and keeler-land for the
+    // whole spec
+    assert!(
+        output.status.success(),
+        "a link bullet was refused as a checkbox: {}",
+        stderr(&output)
+    );
+    assert_eq!(
+        report(&output),
+        vec![("T1".to_string(), "ready".to_string(), vec![])],
+        "the link bullet disturbed the graph"
+    );
+}
+
+#[test]
 fn this_spec_is_its_own_fixture() {
     // Given specs/06-graph-mode.md, which describes the format
     let output = graph(&repo_root().join("specs/06-graph-mode.md"));

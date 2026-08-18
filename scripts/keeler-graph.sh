@@ -106,6 +106,14 @@ function visit(id,    k, j, m, cycle) {
 # the carriage return before anything else looks at the line.
 { sub(/\r$/, "") }
 
+# Fences are tracked over the whole file, before anything else reads a
+# line — a spec that quotes the format in its Context (a fenced `## Tasks`
+# with an example item under it) would otherwise *open* the section there,
+# read the example as the graph, and never reach the real section. Inside
+# a fence nothing is a heading, a task or a boundary: it is prose.
+/^[ \t]*```/ { close_item(); if (!in_fence) fence_line = NR; in_fence = !in_fence; next }
+in_fence            { next }
+
 /^## Tasks[ \t]*$/ { in_tasks = 1; found_section = 1; next }
 # A heading at the section level or above ends it — `## Notes`, or a
 # `# Appendix` whose checkboxes would otherwise read as more tasks. A
@@ -115,11 +123,6 @@ function visit(id,    k, j, m, cycle) {
 # every one of them done.
 !in_tasks           { next }
 
-# The fence is settled first, because inside one `#` is a comment and
-# ``` is not a boundary anyone meant: a fenced example is prose, the one
-# that will be pasted into the intro of the next spec.
-/^[ \t]*```/        { close_item(); in_fence = !in_fence; next }
-in_fence            { next }
 in_tasks && /^#{1,2} / { close_item(); in_tasks = 0; next }
 
 /^- \[[ xX]\] /     {
@@ -130,8 +133,13 @@ in_tasks && /^#{1,2} / { close_item(); in_tasks = 0; next }
     next
 }
 # A checkbox line the grammar does not know is a task that would vanish:
-# never spawned, never counted at land time. Refuse it, do not drop it.
-/^[-*+] \[/          { fail(NR, "a checkbox line the grammar cannot read: " substr($0, 1, 60)) }
+# never spawned, never counted at land time. Refuse it, do not drop it —
+# but a bullet whose brackets are a markdown link (`](`) is prose, and a
+# refusal is total: one link would block the graph, the spawn, the board
+# and the land for the whole spec.
+/^[-*+] \[/ && !/^[-*+] \[[^]]*\]\(/ {
+    fail(NR, "a checkbox line the grammar cannot read: " substr($0, 1, 60))
+}
 open && /^[ \t]+[^ \t]/ { sub(/^[ \t]+/, " "); text = text $0; next }
 open && /^[ \t]*$/      { blank_after = 1; next }
 # The lazy continuation markdown allows: an unindented, non-blank, non-heading
@@ -143,6 +151,11 @@ open                    { close_item() }
 
 END {
     if (refused) exit 1
+    # A fence nobody closed swallows every line after it, so the section
+    # never ends and every task below is dropped — and a graph reporting
+    # fewer tasks than exist reports every one of them done, which is a
+    # spec `keeler-land` marks Implemented. Refuse instead.
+    if (in_fence) fail(fence_line, "a code fence opened here and was never closed — every task after it would be dropped in silence")
     close_item()
     if (!found_section) fail(0, "no ## Tasks section found — nothing to read")
     # Every need must name a task in this spec.

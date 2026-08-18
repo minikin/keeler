@@ -859,11 +859,24 @@ fn assert_the_linear_road_is_unchanged(project: &TempProject, justfile: &str) {
     }
     // The routing is the numbered stage list, so that is where a detour
     // would have to appear. Prose elsewhere may say graph mode exists —
-    // what may not change is which stages `/keeler:feature` runs.
-    for step in feature
-        .lines()
-        .filter(|line| line.starts_with(|c: char| c.is_ascii_digit()))
-    {
+    // what may not change is which stages `/keeler:feature` runs. The
+    // whole list, not only the lines that open a step: a sub-bullet or a
+    // wrapped continuation reroutes it just as well, and neither begins
+    // with a digit.
+    let lines: Vec<&str> = feature.lines().collect();
+    let numbered = |line: &&str| line.starts_with(|c: char| c.is_ascii_digit());
+    let first = lines
+        .iter()
+        .position(numbered)
+        .expect("/keeler:feature has no numbered stage list at all");
+    let last = lines.iter().rposition(numbered).unwrap();
+    // The last step ends where its paragraph does, so its continuations
+    // are read and the prose after the list is not.
+    let end = lines[last..]
+        .iter()
+        .position(|line| line.trim().is_empty())
+        .map_or(lines.len(), |offset| last + offset);
+    for step in &lines[first..end] {
         for detour in [
             "keeler-spawn",
             "keeler-branch",
