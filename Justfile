@@ -237,17 +237,20 @@ keeler-graph SPEC:
             }
         }'
 
-# It refuses before creating anything when tmux is missing, when the spec
-# differs from HEAD or is not Approved (the worktree is cut from HEAD, so an
-# uncommitted graph is one the agent would never see), when the graph script
-# says the task is blocked, and when the task already has a worktree.
-# Otherwise it creates a worktree beside the repository on
-# keeler/<spec-slug>/<task-id>, writes a runner script under .keeler/runs/,
-# starts a detached tmux session on it and returns at once.
-# `just keeler-status <spec>` is the board afterwards.
+# The guards `keeler-spawn` fires on its way to a worktree, and the graph
+# it then reads: written once, here, because `keeler-fan-out` must refuse
+# on the same grounds before it prints a wave, and two copies of a check
+# are two checks that drift. Private, the way `_main-ref` is: it speaks
+# for `keeler-spawn` — its refusals carry that name, and are the same words
+# whichever recipe called it. On stdout it prints the graph as the feature
+# branch commits it, one `<id> <state> [needs...]` line per task, which is
+# what the caller reads readiness from.
 #
-# Graph mode: hand one ready task to a headless agent on its own branch — `just keeler-spawn specs/01-foo.md T3`.
-keeler-spawn SPEC TASK:
+# It refuses when tmux is missing, when the spec is not a file inside this
+# repository, when it differs from HEAD or is not Approved (the worktree is
+# cut from HEAD, so an uncommitted graph is one the agent would never see),
+# and when HEAD is not the feature's own branch feat/<spec-slug>.
+_spawn-preflight SPEC:
     #!/usr/bin/env bash
     set -euo pipefail
     if ! command -v tmux >/dev/null 2>&1; then
@@ -257,7 +260,6 @@ keeler-spawn SPEC TASK:
         exit 1
     fi
     spec="{{SPEC}}"
-    task="{{TASK}}"
     [ -f "$spec" ] || { echo "keeler-spawn: $spec is not a file" >&2; exit 1; }
     root="$(git rev-parse --show-toplevel)"
     spec_abs="$(cd "$(dirname "$spec")" && pwd)/$(basename "$spec")"
@@ -307,7 +309,32 @@ keeler-spawn SPEC TASK:
         echo "keeler-spawn: $rel is not committed on $feature — the worktree is cut from it, so an uncommitted graph is one the agent would never see." >&2
         exit 1
     fi
-    report="$(bash "$root/scripts/keeler-graph.sh" "$feature_copy/$(basename "$spec_abs")")"
+    bash "$root/scripts/keeler-graph.sh" "$feature_copy/$(basename "$spec_abs")"
+
+# It refuses before creating anything on every ground `_spawn-preflight`
+# refuses — tmux missing, the spec not a file in this repository, differing
+# from HEAD, not Approved, HEAD not the feature's branch — and then when
+# the graph script says the task is blocked or done, and when the task
+# already has a worktree or a branch. Otherwise it creates a worktree
+# beside the repository on keeler/<spec-slug>/<task-id>, writes a runner
+# script under .keeler/runs/, starts a detached tmux session on it and
+# returns at once. `just keeler-status <spec>` is the board afterwards.
+#
+# Graph mode: hand one ready task to a headless agent on its own branch — `just keeler-spawn specs/01-foo.md T3`.
+keeler-spawn SPEC TASK:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    spec="{{SPEC}}"
+    task="{{TASK}}"
+    # The just that is running this recipe runs its helper — not whichever
+    # `just` PATH holds, which on a PATH stripped to the shell is none, and
+    # would turn "tmux is required" into "just: command not found". `-q`: a
+    # refusal is the preflight's one line, not that line plus just's report
+    # that a recipe nobody named failed.
+    report="$("{{just_executable()}}" -q _spawn-preflight "$spec")"
+    root="$(git rev-parse --show-toplevel)"
+    spec_abs="$(cd "$(dirname "$spec")" && pwd)/$(basename "$spec")"
+    rel="${spec_abs#"$root"/}"
     entry="$(printf '%s\n' "$report" | awk -v id="$task" '$1 == id')"
     if [ -z "$entry" ]; then
         echo "keeler-spawn: $rel defines no task $task" >&2
@@ -484,6 +511,103 @@ keeler-status SPEC:
         fi
         printf '%-6s %-16s log %s  worktree %s\n' "$id" "$state" "$log_file" "$worktree"
     done <<< "$report"
+
+# The wave is what is ready and not yet spawned: `keeler-graph`'s ready
+# tasks minus the ones `keeler-status` already knows — running, died,
+# passed or failed but not landed — and this recipe computes neither. It
+# owns no logic those two have; it reads them and prints one line per task
+# in the spec's order: the graph's own line for a task that is done, ready
+# or blocked (with what it waits on), the board's own line for a ready task
+# already spawned. Then it names the wave and asks. `_spawn-preflight`
+# runs first, so a checkout keeler-spawn would refuse is refused here in
+# the same words, before any wave is printed.
+#
+# The yes is read from stdin — a human at a terminal is asked in the
+# ordinary way, and a test pipes its answer — and it is `yes` or `y`, case
+# aside, and nothing else. When there is nobody to ask, the recipe refuses
+# and names KEELER_FAN_OUT_YES rather than hanging or exiting in silence:
+# `read` at EOF under `set -e` would end the recipe with a bare 1, and a
+# pipe nobody closes would hang it, so a stdin that is not a terminal gets
+# a bounded read — an answer piped in advance is there at once; nothing
+# within the wait is nobody. `KEELER_FAN_OUT_YES=1` answers yes without
+# asking, for the caller who has already decided. It is the zero-yes path
+# this recipe otherwise refuses, so no command file may set it, and a
+# test says so.
+#
+# Graph mode: name every ready, unspawned task and ask for the one yes that spawns the wave — `just keeler-fan-out specs/01-foo.md`.
+keeler-fan-out SPEC:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    spec="{{SPEC}}"
+    # The same guards keeler-spawn fires, before a wave is printed — run
+    # by the just that is running this recipe, as keeler-spawn runs them.
+    # The preflight's report is discarded: once it passes, the working
+    # tree's spec is the feature branch's, and `keeler-graph` reads that
+    # same graph in the words this recipe prints — a blocked task with what
+    # it waits on.
+    just="{{just_executable()}}"
+    "$just" -q _spawn-preflight "$spec" >/dev/null
+    graph="$("$just" keeler-graph "$spec")"
+    board="$("$just" keeler-status "$spec")"
+    echo "keeler-fan-out: $spec on $(git symbolic-ref --quiet --short HEAD)"
+    wave=""
+    while read -r id state rest; do
+        [ -n "$id" ] || continue
+        if [ "$state" != ready ]; then
+            printf '  %s %s%s\n' "$id" "$state" "${rest:+ $rest}"
+            continue
+        fi
+        # A ready task the board already knows is listed in the board's
+        # words and not offered; one it calls "not spawned" is the wave.
+        known="$(printf '%s\n' "$board" | awk -v id="$id" '$1 == id')"
+        case "$known" in
+            *"not spawned"*)
+                printf '  %s ready\n' "$id"
+                wave="$wave${wave:+ }$id"
+                ;;
+            *)
+                printf '  %s\n' "${known:-$id is not on the board}"
+                ;;
+        esac
+    done <<< "$graph"
+    if [ -z "$wave" ]; then
+        echo "keeler-fan-out: nothing is ready to spawn — every task above is done, blocked, or already spawned and in the state the board gives it."
+        exit 0
+    fi
+    echo "wave: $wave"
+    if [ -n "${KEELER_FAN_OUT_YES:-}" ]; then
+        answer="$KEELER_FAN_OUT_YES"
+        echo "spawn $wave? [yes/no] $answer (from KEELER_FAN_OUT_YES)"
+        # The variable is the answer given in advance, and it is read as
+        # one: 1 is the documented yes; the words the prompt takes are too;
+        # anything else is not.
+        case "$answer" in 1) answer=yes ;; esac
+    elif [ -t 0 ]; then
+        printf 'spawn %s? [yes/no] ' "$wave"
+        IFS= read -r answer || answer=""
+    else
+        printf 'spawn %s? [yes/no] ' "$wave"
+        # Not a terminal: an answer piped in advance is read at once, and
+        # nothing within the wait — EOF, or a pipe nobody writes to — is
+        # nobody to ask.
+        if ! IFS= read -r -t 5 answer; then
+            echo
+            echo "keeler-fan-out: nobody to ask — stdin is not a terminal and KEELER_FAN_OUT_YES is unset. Ask from a terminal, or answer in advance: KEELER_FAN_OUT_YES=1 just keeler-fan-out $spec" >&2
+            exit 1
+        fi
+        echo "$answer"
+    fi
+    case "$(printf '%s' "$answer" | tr '[:upper:]' '[:lower:]')" in
+        yes|y) ;;
+        *)
+            echo "keeler-fan-out: not a yes — nothing spawned." >&2
+            exit 1
+            ;;
+    esac
+    # The yes is given. What it spawns — the loop over `keeler-spawn`, one
+    # task at a time, in this order — is the spawning half of the recipe
+    # and lands here.
+    echo "keeler-fan-out: yes to $wave"
 
 # Upgrade Keeler itself (KEELER_REF=v0.3.0 just keeler-upgrade to pin a tag)
 keeler-upgrade:
