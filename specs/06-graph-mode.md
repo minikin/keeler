@@ -366,7 +366,7 @@ split it rather than ship a task eight scenarios wide.
       `keeler-land`. Tests: acceptance — a fixture with every box ticked
       gets `Implemented` staged and one with a box unticked does not; a
       clean worktree is removed and a dirty one is left and named.
-- [ ] **T7 — Review writes a file and CI wants it.** Needs: T1. Scenarios:
+- [x] **T7 — Review writes a file and CI wants it.** Needs: T1. Scenarios:
       _Review leaves evidence_, _A review record must name a commit on its
       own branch_. Tests: acceptance — `review.md` carries the instruction
       and the header format; the shipped workflow's check, driven against
