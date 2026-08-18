@@ -101,6 +101,24 @@ mutants FILE:
 mutants-all:
     cargo mutants --workspace
 
+# "Main" is one thing, decided once: the first of the four names below
+# that exists in this repository. `mutants-diff` diffs against it and
+# `keeler-land` refuses to run anywhere else — through this one helper, so
+# no two recipes can disagree about where main is and be silently wrong in
+# different directions. Private (the leading `_`): it prints a ref for
+# other recipes, not a line for a human reading `just --list`.
+_main-ref:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for ref in origin/main origin/master main master; do
+        if git rev-parse --verify --quiet "$ref" >/dev/null 2>&1; then
+            echo "$ref"
+            exit 0
+        fi
+    done
+    echo "no main branch here: none of origin/main, origin/master, main, master exists" >&2
+    exit 1
+
 # Mutation tests on changed lines only (--in-diff vs HEAD, else the branch
 # base, else the last commit)
 mutants-diff:
@@ -125,10 +143,11 @@ mutants-diff:
     if [ ! -s "$diff_file" ]; then
         # A clean tree is not a measured tree: src changes committed earlier
         # on this branch still need mutating, so diff against the branch base.
+        # Where main is, is `_main-ref`'s answer and no one else's.
         base=""
-        for ref in origin/main origin/master main master; do
-            if candidate=$(git merge-base HEAD "$ref" 2>/dev/null); then base="$candidate"; break; fi
-        done
+        if main_ref=$(just _main-ref 2>/dev/null); then
+            base=$(git merge-base HEAD "$main_ref" 2>/dev/null || true)
+        fi
         if [ -n "$base" ] && [ "$base" != "$(git rev-parse HEAD)" ]; then
             git diff "$base" HEAD -- "${paths[@]}" > "$diff_file" || true
         fi
@@ -224,7 +243,18 @@ keeler-spawn SPEC TASK:
     esac
     # Readiness is the graph script's answer, never this recipe's: one
     # parser reads the format, so a human and the tools cannot disagree.
-    report="$(bash "$root/scripts/keeler-graph.sh" "$spec_abs")"
+    # And it is read from the spec on main — through the same `_main-ref`
+    # `keeler-land` uses — because a tick on an unlanded branch unblocks
+    # nothing: that is what keeps parallel branches from racing each
+    # other's dependencies.
+    main_ref="$(just _main-ref)"
+    main_copy="$(mktemp -d)"
+    trap 'rm -rf "$main_copy"' EXIT
+    if ! git show "$main_ref:$rel" > "$main_copy/$(basename "$spec_abs")" 2>/dev/null; then
+        echo "keeler-spawn: $rel is not on $main_ref — readiness is read from main, and a spec that has not landed there is not a graph to spawn from." >&2
+        exit 1
+    fi
+    report="$(bash "$root/scripts/keeler-graph.sh" "$main_copy/$(basename "$spec_abs")")"
     entry="$(printf '%s\n' "$report" | awk -v id="$task" '$1 == id')"
     if [ -z "$entry" ]; then
         echo "keeler-spawn: $rel defines no task $task" >&2
@@ -362,3 +392,39 @@ keeler-status SPEC:
 # Upgrade Keeler itself (KEELER_REF=v0.3.0 just keeler-upgrade to pin a tag)
 keeler-upgrade:
     curl -fsSL https://raw.githubusercontent.com/minikin/keeler/main/install.sh | bash -s .
+
+# Graph mode: fan-in, on main — gates first, baseline second, staged and
+# never committed. `just dev` runs first and the baseline moves only if it
+# was green: a baseline recorded from a red main would write "broken" down
+# as the new normal, and two branches that were each green alone can be
+# wrong together. Not `dev-full` — hours of mutants at every fan-in is a
+# cost nobody would pay, and `mutants-diff` on a freshly merged main has
+# nothing to diff.
+keeler-land:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # The gates run as nested `just` calls and not as recipe dependencies:
+    # a dependency runs before this body, and so before the refusal below —
+    # a branch would have paid for the whole gate suite to be told it was
+    # on the wrong branch.
+    main_ref="$(just _main-ref)"
+    main_branch="${main_ref##*/}"
+    current="$(git symbolic-ref --quiet --short HEAD || echo 'a detached HEAD')"
+    if [ "$current" != "$main_branch" ]; then
+        echo "keeler-land: on $current, not $main_branch — the baseline moves at fan-in, on main, and nowhere else." >&2
+        exit 1
+    fi
+    if ! just dev; then
+        echo "keeler-land: main is red after fan-in — branches that were green alone are wrong together. The baseline is untouched and nothing is staged; fix or revert, then land again." >&2
+        exit 1
+    fi
+    just crap-baseline
+    # Staged, never committed: the rules say no commit without the human's
+    # word, and a moved baseline is a decision worth a diff someone reads.
+    if [ -e crap-baseline.json ]; then
+        git add -- crap-baseline.json
+        echo "keeler-land: crap-baseline.json is staged, not committed — review the diff and commit it yourself:"
+        echo "    git diff --cached -- crap-baseline.json"
+    else
+        echo "keeler-land: no baseline was produced — nothing in this project to measure yet, so nothing is staged."
+    fi
