@@ -149,6 +149,32 @@ mutants-diff:
 # Full validation including mutation tests (slow)
 dev-full: dev mutants-all
 
+# Graph mode: the gate a task branch runs — `just dev`, then the CRAP
+# delta against the committed baseline, then mutation tests on the changed
+# lines. Diff-based by construction: all three measure this branch's
+# changes, and `crap-delta` reads the baseline without ever writing it.
+# Moving the baseline is `just keeler-land`'s job, on main, at fan-in; CI
+# refuses a keeler/* pull request whose diff touched it.
+#
+# `just dev` is untouched — an adopter on the linear road runs exactly the
+# recipe they always did, and a spawned agent runs this one instead. The
+# three go through `just` on PATH rather than recipe dependencies, because
+# the order is the contract: dependencies all run before the body, and
+# "dev, then crap-delta, then mutants-diff" would stop being observable.
+keeler-branch:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just dev
+    # The delta gate needs a committed baseline to measure against — the
+    # same condition /keeler:qa and the shipped workflow already check.
+    # Without one, `dev`'s absolute CRAP threshold is the whole gate.
+    if [ -f crap-baseline.json ]; then
+        just crap-delta
+    else
+        echo "no crap-baseline.json committed — threshold only, no delta gate"
+    fi
+    just mutants-diff
+
 # Graph mode: what a spec's Tasks section says is ready, blocked or done —
 # `just keeler-graph specs/01-foo.md`. The script's report is the
 # machine's, one `<id> <state> [needs...]` line per task, and the spawn
