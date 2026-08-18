@@ -184,6 +184,45 @@ fn the_branch_gate_leaves_dev_alone() {
 }
 
 #[test]
+fn every_recipe_is_listed_by_a_summary_not_by_the_tail_of_its_rationale() {
+    // `just --list` is the road into the whole Justfile, and it shows only
+    // the *last* comment line above a recipe. A recipe documented with a
+    // paragraph is therefore listed by whatever that paragraph happened to
+    // end on — "run. A test that is never run is not a test." — which
+    // reads as noise to someone meeting the project for the first time.
+    let output = Command::new(real_just())
+        .arg("--list")
+        .current_dir(repo_root())
+        .output()
+        .expect("failed to run just --list");
+    let listing = String::from_utf8_lossy(&output.stdout).into_owned();
+
+    let mut fragments = Vec::new();
+    for line in listing.lines() {
+        let Some((name, summary)) = line.split_once('#') else {
+            continue;
+        };
+        let name = name.trim();
+        let summary = summary.trim();
+        if name.is_empty() || summary.is_empty() {
+            continue;
+        }
+        // A summary opens the way a sentence or a code span does. A
+        // fragment opens mid-clause: lowercase prose, or a word that ended
+        // someone else's sentence.
+        let opens = summary.chars().next().expect("a non-empty summary");
+        if !(opens.is_ascii_uppercase() || opens == '`') {
+            fragments.push(format!("{name}  # {summary}"));
+        }
+    }
+    assert!(
+        fragments.is_empty(),
+        "these recipes are listed by the tail of their rationale, not by a summary:\n{}",
+        fragments.join("\n")
+    );
+}
+
+#[test]
 fn the_branch_gate_is_listed_by_what_it_does() {
     // `just --list` is the road into every recipe, and it shows the last
     // comment line above one. A recipe whose rationale ends in an aside is

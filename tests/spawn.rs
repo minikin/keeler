@@ -554,6 +554,31 @@ fn task_line<'a>(listed: &'a str, id: &str) -> &'a str {
 }
 
 #[test]
+fn the_board_reads_the_graph_that_spawn_and_land_read() {
+    // Given an uncommitted tick — someone editing the spec, or a stage
+    // that has not been committed yet
+    let project = Project::new("uncommitted-tick");
+    let spec = project.dir.join("specs").join(format!("{SLUG}.md"));
+    let text = std::fs::read_to_string(&spec).unwrap();
+    std::fs::write(&spec, text.replace("- [ ] **T3", "- [x] **T3")).unwrap();
+
+    // When the board is read
+    let listed = stdout(&project.status(SLUG));
+
+    // Then T3 is not done. keeler-spawn refuses a spec that differs from
+    // HEAD and computes readiness from main; keeler-land acts only on
+    // committed ticks. A board answering from the working tree would be
+    // the one place in graph mode where an uncommitted edit counts —
+    // reporting a task finished that neither of the other two believes,
+    // and hiding the log and worktree a resume needs.
+    let line = task_line(&listed, "T3");
+    assert!(
+        !line.contains("done"),
+        "the board counted an uncommitted tick:\n{listed}"
+    );
+}
+
+#[test]
 fn a_task_that_landed_after_a_failed_run_reads_as_done() {
     // Given a task whose gate once failed — a verdict on disk saying so —
     // and which was then fixed and landed, so the graph counts it done
@@ -566,11 +591,13 @@ fn a_task_that_landed_after_a_failed_run_reads_as_done() {
         project.runs(SLUG).join("t3.exit").exists(),
         "the fixture wrote no verdict; there is nothing to outrank"
     );
-    // The task then lands: its box is ticked on main, as keeler-land
-    // leaves it
+    // The task then lands: its box is ticked and committed on main, which
+    // is the state keeler-land leaves and the state the board reads
     let spec = project.dir.join("specs").join(format!("{SLUG}.md"));
     let text = std::fs::read_to_string(&spec).unwrap();
     std::fs::write(&spec, text.replace("- [ ] **T3", "- [x] **T3")).unwrap();
+    project.git(&["add", "-A"]);
+    project.git(&["commit", "-qm", "land T3"]);
 
     // When the board is read
     let listed = stdout(&project.status(SLUG));

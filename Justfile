@@ -6,6 +6,8 @@ default:
 # --workspace, not the default: in a project whose root manifest is itself a
 # package, cargo tests only that package and a member crate's tests never
 # run. A test that is never run is not a test.
+#
+# Run every test in the workspace, plus doc tests.
 test:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -24,6 +26,8 @@ fmt:
 # The shellcheck branch below is inert in your project — it is keyed on a
 # marker file only Keeler's own repository has. Your shell scripts are
 # yours to gate, not Keeler's.
+#
+# Check formatting and lints, the way CI does.
 lint:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -94,6 +98,8 @@ dev: fmt lint test crap
 # Mutation tests for a specific file: just mutants src/lib.rs
 # --workspace, or a member crate's file yields "Found 0 mutants" and the
 # gate passes having tested nothing.
+#
+# Mutation tests for one file — `just mutants src/lib.rs`.
 mutants FILE:
     cargo mutants --workspace --file {{FILE}}
 
@@ -121,6 +127,8 @@ _main-ref:
 
 # Mutation tests on changed lines only (--in-diff vs HEAD, else the branch
 # base, else the last commit)
+#
+# Mutation tests on the lines this branch changed.
 mutants-diff:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -416,7 +424,19 @@ keeler-status SPEC:
     spec_abs="$(cd "$(dirname "$spec")" && pwd)/$(basename "$spec")"
     slug="$(basename "$spec_abs" .md)"
     runs="$root/.keeler/runs/$slug"
-    report="$(bash "$root/scripts/keeler-graph.sh" "$spec_abs")"
+    # The graph comes from main, as it does for keeler-spawn and
+    # keeler-land: a board that answered from the working tree would be
+    # the one place in graph mode where an uncommitted tick counts, and it
+    # would report a task done that neither of the other two believes.
+    main_ref="$(just _main-ref)"
+    rel="${spec_abs#"$root/"}"
+    main_copy="$(mktemp -d)"
+    trap 'rm -rf "$main_copy"' EXIT
+    if ! git show "$main_ref:$rel" > "$main_copy/$(basename "$spec_abs")" 2>/dev/null; then
+        echo "keeler-status: $rel is not on $main_ref — there is no landed graph to report against." >&2
+        exit 1
+    fi
+    report="$(bash "$root/scripts/keeler-graph.sh" "$main_copy/$(basename "$spec_abs")")"
     while read -r id graph_state _rest; do
         [ -n "$id" ] || continue
         tid="$(printf '%s' "$id" | tr '[:upper:]' '[:lower:]')"
