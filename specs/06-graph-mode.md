@@ -429,7 +429,7 @@ split it rather than ship a task eight scenarios wide.
       the refusal names what it expected; a dependency ticked on the
       feature branch unblocks its dependent, and one ticked on a task
       branch does not.
-- [ ] **T10 — Landing happens twice.** Needs: T9. Scenarios: _Landing the
+- [x] **T10 — Landing happens twice.** Needs: T9. Scenarios: _Landing the
       last task marks the spec implemented_, _Baseline updates happen at
       fan-in, on main_. Deliverable: `keeler-land` split by level — on the
       feature branch it ticks and cleans up; on main it sets `Status:` and
