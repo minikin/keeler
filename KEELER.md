@@ -88,6 +88,51 @@ The loop at the bottom right is the heart of it: a surviving mutant sends the
 work back through QA with *stronger tests*, and the cycle repeats until the
 suite catches every injected bug.
 
+## Graph mode: the same pipeline, in parallel
+
+The pipeline above is one agent, one branch, stages in sequence. **Graph mode
+runs that same pipeline several times at once** — one agent per task, each on
+its own branch in its own worktree, each going through tdd → qa → review →
+mutants for the single task it was handed. It is entirely opt-in: the linear
+road is unchanged, and a project that never runs the recipes below never
+meets them.
+
+```mermaid
+flowchart LR
+    S[Approved spec<br/>Tasks carry <b>Needs:</b>] --> G["/keeler:graph — which<br/>tasks are unblocked?"]
+    G --> SP1["just keeler-spawn &lt;spec&gt; T2"] --> B1["keeler/&lt;spec&gt;/t2<br/>tdd → qa → review → mutants<br/><b>just keeler-branch</b>"]
+    G --> SP2["just keeler-spawn &lt;spec&gt; T3"] --> B2["keeler/&lt;spec&gt;/t3<br/>tdd → qa → review → mutants<br/><b>just keeler-branch</b>"]
+    B1 --> L["merge, then <b>just keeler-land</b> on main:<br/>just dev, then the baseline —<br/>staged, never committed"]
+    B2 --> L
+```
+
+What makes this more than "several agents at once" is that the two things
+usually missing are already here: the **approved spec is the contract** every
+spawned agent reads, and the **gates decide when a branch is done** — nobody
+has to watch it happen. The graph itself lives in the spec, as a `Needs: T1.`
+on each task, so approving the spec is approving the graph; a spec written
+before graph mode existed has no `Needs:` anywhere and reads as a graph whose
+every task is ready.
+
+| Command                                      | What it does                                                                                                  |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `/keeler:graph` — `just keeler-graph <spec>` | Ready / blocked / done, read from the spec **on main**; a cycle or a dangling `Needs:` is refused by the parser |
+| `just keeler-spawn <spec> <task>`            | Worktree + branch `keeler/<spec-slug>/<task-id>` + a headless agent in a detached tmux session                 |
+| `just keeler-status <spec>`                  | The board: running, passed, failed, died mid-pipeline, never spawned                                          |
+| `just keeler-branch`                         | The gate a task branch runs instead of `just dev`: dev, CRAP delta, mutants on the diff                       |
+| `just keeler-land`                           | Fan-in on main: gates first, then the baseline and `Status: Implemented` — staged for a human to commit        |
+
+Three rules keep parallel branches honest, and two of them are enforced by CI
+on every `keeler/*` pull request: a branch **measures** the shared references
+(`crap-baseline.json`, the coverage bar) and never moves them; a branch ticks
+its own task and leaves the spec's `Status:` alone; and review leaves a
+committed record, `reviews/<spec-slug>/<task-id>.md`, naming the commit it
+examined. At a fan-in of five branches, "nobody noticed review was skipped"
+stops being a footnote.
+
+Graph mode's one extra requirement is **tmux** — every spawned agent runs in a
+detached session, which is what makes the runs both parallel and watchable.
+
 ## Why each stage exists
 
 | Stage                            | What it does                                                               | The AI failure mode it defends against                                               |

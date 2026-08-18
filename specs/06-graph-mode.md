@@ -397,7 +397,7 @@ split it rather than ship a task eight scenarios wide.
       there, not in a spec); and a duplicated backlog line panicked the
       gate. The tests on that branch passed their own review and are the
       starting point.
-- [ ] **T8 — Installer ships graph mode.** Needs: T2, T3, T4, T6, T7.
+- [x] **T8 — Installer ships graph mode.** Needs: T2, T3, T4, T6, T7.
       Scenarios: _Adopters opt in, not out_. Tests: acceptance — the
       install harness verifies the new file set lands, that a spec in the
       old format — no dependency annotations at all — goes through `just
