@@ -1,6 +1,6 @@
 # Spec 06 — Graph mode: parallel agents over a task DAG
 
-**Status:** Approved
+**Status:** Implemented
 **Effort:** Large
 **Module:** `.claude/commands/keeler/` (`graph.md` new; `tasks.md`, `review.md`, `mutants.md`, `feature.md` amended), `.claude/keeler.md`, `templates/keeler.yml`, `Justfile`, `scripts/keeler-graph.sh`, `install.sh`, `specs/TEMPLATE.md`, `tests/graph.rs`
 
