@@ -286,18 +286,24 @@ keeler-spawn SPEC TASK:
     esac
     # Readiness is the graph script's answer, never this recipe's: one
     # parser reads the format, so a human and the tools cannot disagree.
-    # And it is read from the spec on main — through the same `_main-ref`
-    # `keeler-land` uses — because a tick on an unlanded branch unblocks
-    # nothing: that is what keeps parallel branches from racing each
-    # other's dependencies.
-    main_ref="$(just _main-ref)"
-    main_copy="$(mktemp -d)"
-    trap 'rm -rf "$main_copy"' EXIT
-    if ! git show "$main_ref:$rel" > "$main_copy/$(basename "$spec_abs")" 2>/dev/null; then
-        echo "keeler-spawn: $rel is not on $main_ref — readiness is read from main, and a spec that has not landed there is not a graph to spawn from." >&2
+    # And it is read from the spec on the feature's own branch. A tick on a
+    # *task* branch unblocks nothing — that is what keeps parallel branches
+    # from racing each other's dependencies — while a tick on the feature
+    # branch does, because arriving there is the landing. Which branch that
+    # is, is a name a machine checks rather than one someone remembers.
+    feature="feat/$(basename "$spec_abs" .md)"
+    here="$(git branch --show-current)"
+    if [ "$here" != "$feature" ]; then
+        echo "keeler-spawn: on ${here:-a detached HEAD}, but this spec's tasks fan out from $feature — check it out, or create it, and spawn from there." >&2
         exit 1
     fi
-    report="$(bash "$root/scripts/keeler-graph.sh" "$main_copy/$(basename "$spec_abs")")"
+    feature_copy="$(mktemp -d)"
+    trap 'rm -rf "$feature_copy"' EXIT
+    if ! git show "HEAD:$rel" > "$feature_copy/$(basename "$spec_abs")" 2>/dev/null; then
+        echo "keeler-spawn: $rel is not committed on $feature — the worktree is cut from it, so an uncommitted graph is one the agent would never see." >&2
+        exit 1
+    fi
+    report="$(bash "$root/scripts/keeler-graph.sh" "$feature_copy/$(basename "$spec_abs")")"
     entry="$(printf '%s\n' "$report" | awk -v id="$task" '$1 == id')"
     if [ -z "$entry" ]; then
         echo "keeler-spawn: $rel defines no task $task" >&2
@@ -424,19 +430,21 @@ keeler-status SPEC:
     spec_abs="$(cd "$(dirname "$spec")" && pwd)/$(basename "$spec")"
     slug="$(basename "$spec_abs" .md)"
     runs="$root/.keeler/runs/$slug"
-    # The graph comes from main, as it does for keeler-spawn and
-    # keeler-land: a board that answered from the working tree would be
-    # the one place in graph mode where an uncommitted tick counts, and it
-    # would report a task done that neither of the other two believes.
-    main_ref="$(just _main-ref)"
+    # The graph comes from the feature's branch, the same place
+    # keeler-spawn reads it: a board that answered from the working tree
+    # would be the one place in graph mode where an uncommitted tick
+    # counts, and it would report a task done that spawn does not believe.
     rel="${spec_abs#"$root/"}"
-    main_copy="$(mktemp -d)"
-    trap 'rm -rf "$main_copy"' EXIT
-    if ! git show "$main_ref:$rel" > "$main_copy/$(basename "$spec_abs")" 2>/dev/null; then
-        echo "keeler-status: $rel is not on $main_ref — there is no landed graph to report against." >&2
+    feature="feat/$slug"
+    graph_ref="$feature"
+    git rev-parse --verify -q "$feature^{commit}" >/dev/null || graph_ref=HEAD
+    graph_copy="$(mktemp -d)"
+    trap 'rm -rf "$graph_copy"' EXIT
+    if ! git show "$graph_ref:$rel" > "$graph_copy/$(basename "$spec_abs")" 2>/dev/null; then
+        echo "keeler-status: $rel is not committed on $graph_ref — there is no graph to report against." >&2
         exit 1
     fi
-    report="$(bash "$root/scripts/keeler-graph.sh" "$main_copy/$(basename "$spec_abs")")"
+    report="$(bash "$root/scripts/keeler-graph.sh" "$graph_copy/$(basename "$spec_abs")")"
     while read -r id graph_state _rest; do
         [ -n "$id" ] || continue
         tid="$(printf '%s' "$id" | tr '[:upper:]' '[:lower:]')"
