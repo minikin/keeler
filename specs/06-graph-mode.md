@@ -418,7 +418,7 @@ split it rather than ship a task eight scenarios wide.
       shipped workflow, and all of them are on the linear road. What is
       unaffected is its behaviour, and that is what the test asserts.
 
-- [ ] **T9 — The graph is read from the feature's branch.** Needs: T8.
+- [x] **T9 — The graph is read from the feature's branch.** Needs: T8.
       Scenarios: _Spawning from anywhere but the feature's branch is
       refused_, _A branch ticks its task and nothing else_. Deliverable:
       `keeler-spawn` and `keeler-status` read the spec from
