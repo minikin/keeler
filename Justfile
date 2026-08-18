@@ -425,16 +425,18 @@ keeler-status SPEC:
         # asked about t1.
         if command -v tmux >/dev/null 2>&1 && tmux has-session -t "=$session" 2>/dev/null; then
             state=running
+        elif [ "$graph_state" = done ]; then
+            # The graph answers before any leftover does. A landed task
+            # whose worktree was never removed is done and not dead, and a
+            # task that failed a run, was fixed and landed is done and not
+            # failed — a verdict on disk is the record of a run that has
+            # since been superseded, and the board does not invent a second
+            # answer for work the graph already counts.
+            printf '%-6s %s\n' "$id" "done"
+            continue
         elif [ -f "$exit_file" ]; then
             code="$(tr -d '[:space:]' < "$exit_file")"
             if [ "$code" = 0 ]; then state=passed; else state="failed (exit $code)"; fi
-        elif [ "$graph_state" = done ]; then
-            # The graph already answered this one, and it answers first: a
-            # landed task whose worktree was never removed is done, not
-            # dead, and asking about the leftovers before the graph made it
-            # read as the latter.
-            printf '%-6s %s\n' "$id" "done"
-            continue
         elif [ -e "$worktree" ] || [ -f "$log_file" ]; then
             state=died
         else

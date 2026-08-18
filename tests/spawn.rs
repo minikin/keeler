@@ -554,6 +554,43 @@ fn task_line<'a>(listed: &'a str, id: &str) -> &'a str {
 }
 
 #[test]
+fn a_task_that_landed_after_a_failed_run_reads_as_done() {
+    // Given a task whose gate once failed — a verdict on disk saying so —
+    // and which was then fixed and landed, so the graph counts it done
+    let mut project = Project::new("failed-then-landed");
+    project.run_sessions = true;
+    project.branch_exit = 1;
+    let output = project.spawn(SLUG, "T3");
+    assert!(output.status.success(), "{}", both(&output));
+    assert!(
+        project.runs(SLUG).join("t3.exit").exists(),
+        "the fixture wrote no verdict; there is nothing to outrank"
+    );
+    // The task then lands: its box is ticked on main, as keeler-land
+    // leaves it
+    let spec = project.dir.join("specs").join(format!("{SLUG}.md"));
+    let text = std::fs::read_to_string(&spec).unwrap();
+    std::fs::write(&spec, text.replace("- [ ] **T3", "- [x] **T3")).unwrap();
+
+    // When the board is read
+    let listed = stdout(&project.status(SLUG));
+
+    // Then it reads as done. A stale verdict is the record of a run that
+    // has since been superseded; the graph is the authority on what
+    // landed, and a board that reports `failed` forever for finished work
+    // is the second answer this ordering exists to prevent.
+    let line = task_line(&listed, "T3");
+    assert!(
+        line.contains("done"),
+        "a landed task still reads by its stale verdict:\n{listed}"
+    );
+    assert!(
+        !line.contains("failed"),
+        "a landed task reads as a failed gate:\n{listed}"
+    );
+}
+
+#[test]
 fn a_dead_session_is_resumable_and_says_so() {
     // Given a spawned session that died before its pipeline finished — so
     // the gate never ran and no verdict was ever written
