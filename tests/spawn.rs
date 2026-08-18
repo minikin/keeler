@@ -25,11 +25,14 @@ fn repo_root() -> PathBuf {
 /// only thing every name in graph mode is derived from.
 const SLUG: &str = "42-fixture";
 
-/// T1 done, T2 not; T3 ready on T1, T4 blocked on T2.
+/// T1 done, T2 not; T3 ready on T1, T4 blocked on T2, and T5 blocked on
+/// one need of two — the case that tells "waiting on what is unmet" apart
+/// from "waiting on everything it declares".
 const TASKS: &str = "- [x] **T1 — the root, and it is done.** Scenarios: _one_.\n\
      - [ ] **T2 — another root, not done.** Scenarios: _two_.\n\
      - [ ] **T3 — the one that gets spawned.** Needs: T1. Scenarios: _three_.\n\
-     - [ ] **T4 — the blocked one.** Needs: T2. Scenarios: _four_.\n";
+     - [ ] **T4 — the blocked one.** Needs: T2. Scenarios: _four_.\n\
+     - [ ] **T5 — blocked on one need of two.** Needs: T1, T2. Scenarios: _five_.\n";
 
 /// Where a spec lives in a project, which is how the recipes are called.
 fn spec_path(slug: &str) -> String {
@@ -432,6 +435,10 @@ fn a_spawned_agent_commits_on_its_branch_and_nowhere_else() {
         lower.contains("never push") || lower.contains("do not push"),
         "the prompt does not forbid pushing:\n{ran}"
     );
+    assert!(
+        lower.contains("pull request"),
+        "the prompt does not leave the pull request to the human:\n{ran}"
+    );
 
     // And the shipped rules say this is the one place an agent commits
     // without asking, and why the spawn was the asking
@@ -490,6 +497,13 @@ fn a_finished_agent_leaves_a_verdict_the_gate_decided_and_a_log() {
         assert!(
             log.contains("the gate ran"),
             "the gate's output is missing:\n{log}"
+        );
+        // Teed, not redirected: a redirect would leave `tmux attach` — the
+        // live view the spec promises — showing an empty pane.
+        let ran = session_script(&project, &project.new_sessions()[0]);
+        assert!(
+            ran.contains("| tee "),
+            "the session redirects its output instead of teeing it:\n{ran}"
         );
 
         // And status lists the task by that verdict
@@ -563,6 +577,12 @@ fn a_dead_session_is_resumable_and_says_so() {
     assert!(
         task_line(&listed, "T2").contains("not spawned"),
         "an unspawned task is reported as a run:\n{listed}"
+    );
+    // And a task the spec has ticked is done, not merely unspawned: the
+    // board reads the graph's answer rather than inventing one
+    assert!(
+        task_line(&listed, "T1").contains("done"),
+        "a task ticked in the spec reads as never spawned:\n{listed}"
     );
 
     // And tmux is asked about this session and no other: a longer name
@@ -663,6 +683,12 @@ fn spawning_from_an_uncommitted_or_unapproved_spec_is_refused() {
             project.git(&["branch", "--list", &format!("keeler/{slug}/t3")]),
             ""
         );
+        // "Before creating anything" includes the run directory: a refusal
+        // that has already made one has created something.
+        assert!(
+            !project.path().join(".keeler").exists(),
+            "a run directory was created:\n{said}"
+        );
     }
 
     // And (d) a spec in no repository at all is the extreme of the same
@@ -688,10 +714,15 @@ fn spawning_from_an_uncommitted_or_unapproved_spec_is_refused() {
 
 #[test]
 fn spawning_a_task_that_is_already_spawned_is_refused() {
-    // Given a worktree for T3 that already exists
-    let project = Project::new("already");
+    // Given a worktree for T3 that already exists, and a run that reached
+    // its gate — the state a second spawn must not destroy
+    let mut project = Project::new("already");
+    project.run_sessions = true;
     assert!(project.spawn(SLUG, "T3").status.success());
+    project.run_sessions = false;
     let worktree = project.worktree(SLUG, "T3");
+    let verdict = project.runs(SLUG).join("t3.exit");
+    assert!(verdict.is_file(), "the fixture has no verdict to protect");
     let head = project.git(&["rev-parse", "HEAD"]);
 
     // When `just keeler-spawn <spec> T3` runs again
@@ -713,6 +744,38 @@ fn spawning_a_task_that_is_already_spawned_is_refused() {
         "a second session was started"
     );
     assert_eq!(project.git(&["rev-parse", "HEAD"]), head);
+    assert!(verdict.is_file(), "the refusal destroyed the run's verdict");
+
+    // And a branch whose worktree is gone is the same task, half cleaned
+    // up: the commits are still there, so this is still already spawned
+    project.git(&[
+        "worktree",
+        "remove",
+        "--force",
+        &worktree.display().to_string(),
+    ]);
+    let output = project.spawn(SLUG, "T3");
+    let said = both(&output);
+    assert!(
+        !output.status.success(),
+        "a task whose branch still exists spawned again:\n{said}"
+    );
+    assert!(
+        said.contains(&format!("keeler/{SLUG}/t3")),
+        "the refusal does not name the branch:\n{said}"
+    );
+    assert!(verdict.is_file(), "the refusal destroyed the run's verdict");
+    assert_eq!(project.new_sessions().len(), 1, "a session was started");
+
+    // And once the branch is gone too, the task can be spawned afresh —
+    // with no verdict, because the old one is not this run's
+    project.git(&["branch", "-D", &format!("keeler/{SLUG}/t3")]);
+    let output = project.spawn(SLUG, "T3");
+    assert!(output.status.success(), "{}", both(&output));
+    assert!(
+        !verdict.exists(),
+        "a verdict from the previous run survived into this one"
+    );
 }
 
 #[test]
@@ -745,6 +808,20 @@ fn spawning_a_blocked_task_is_refused() {
         ""
     );
     assert!(project.new_sessions().is_empty(), "a session was started");
+
+    // And what it names is what is unmet, not everything the task
+    // declares: T5 needs T1 and T2, and only T2 is outstanding
+    let output = project.spawn(SLUG, "T5");
+    let said = both(&output);
+    assert!(!output.status.success(), "a blocked task spawned:\n{said}");
+    assert!(
+        said.contains("T2"),
+        "the refusal does not name the unmet need:\n{said}"
+    );
+    assert!(
+        !said.contains("T1"),
+        "the refusal names T1, which is done:\n{said}"
+    );
 
     // And a task the spec does not define cannot be spawned either — there
     // is no line to read its needs from
@@ -796,6 +873,58 @@ fn the_installer_checks_tmux_the_way_it_checks_just() {
     assert!(
         without.contains("keeler-spawn"),
         "the check does not say what needs tmux:\n{without}"
+    );
+}
+
+#[test]
+fn the_installer_ignores_the_run_directory() {
+    // Given a fresh Rust project, and an installer run that cannot reach
+    // the network: cargo is logged rather than executed, curl fails loudly
+    let project = Project::new("installer-ignore");
+    let dest = project.path().join("adopter");
+    std::fs::create_dir_all(&dest).unwrap();
+    std::fs::write(
+        dest.join("Cargo.toml"),
+        "[package]\nname = \"probe\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+         [dev-dependencies]\nproptest = \"1\"\n",
+    )
+    .unwrap();
+    let real_cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+    write_stub(
+        &project.path().join("bin/cargo"),
+        &format!(
+            "#!/usr/bin/env bash\nif [ \"$1\" = metadata ]; then exec \"{real_cargo}\" \"$@\"; fi\n"
+        ),
+    );
+    write_stub(
+        &project.path().join("bin/curl"),
+        "#!/usr/bin/env bash\necho \"harness: network refused: curl $*\" >&2\nexit 7\n",
+    );
+
+    // When Keeler is installed into it
+    let path = std::env::var("PATH").unwrap();
+    let output = Command::new("bash")
+        .arg(repo_root().join("install.sh"))
+        .arg(&dest)
+        .arg("--no-tools")
+        .env(
+            "PATH",
+            format!("{}:{path}", project.path().join("bin").display()),
+        )
+        .output()
+        .expect("failed to run install.sh");
+    assert!(
+        output.status.success(),
+        "install.sh failed:\n{}",
+        both(&output)
+    );
+
+    // Then the run directory a spawn writes is ignored, so no adopter ever
+    // commits a log, a verdict or a runner script
+    let ignored = std::fs::read_to_string(dest.join(".gitignore")).unwrap();
+    assert!(
+        ignored.lines().any(|line| line.trim() == ".keeler/"),
+        "the installer does not ignore .keeler/:\n{ignored}"
     );
 }
 

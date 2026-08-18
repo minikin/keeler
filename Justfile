@@ -251,6 +251,16 @@ keeler-spawn SPEC TASK:
         echo "keeler-spawn: $worktree already exists — $task is already spawned; land it or remove it first." >&2
         exit 1
     fi
+    # A branch whose worktree is gone is the same task, half cleaned up:
+    # the commits are still on it. Refuse here, naming it, rather than
+    # let `git worktree add` fail somewhere deeper.
+    if git show-ref --verify --quiet "refs/heads/$branch"; then
+        echo "keeler-spawn: branch $branch already exists — $task is already spawned; land it, or delete the branch to start over." >&2
+        exit 1
+    fi
+    # Nothing on disk until the branch and the worktree are real: a path
+    # that refuses must create nothing — and destroy nothing either.
+    git worktree add -b "$branch" "$worktree" HEAD
     runs="$root/.keeler/runs/$slug"
     mkdir -p "$runs"
     exit_file="$runs/$tid.exit"
@@ -258,7 +268,6 @@ keeler-spawn SPEC TASK:
     runner="$runs/$tid.sh"
     # A verdict left by an earlier run of this task is not this run's.
     rm -f "$exit_file"
-    git worktree add -b "$branch" "$worktree" HEAD
     prompt="Implement task $task of $rel, and nothing else.
 
     Read $rel in full first, then .claude/keeler.md.
@@ -279,7 +288,7 @@ keeler-spawn SPEC TASK:
     cat > "$runner" <<RUNNER
     #!/usr/bin/env bash
     # Written by 'just keeler-spawn' for $branch. Re-runnable by hand:
-    #     bash $runner
+    #     bash "$runner"
     cd "$worktree" || exit 1
     prompt=\$(cat <<'KEELER_PROMPT'
     $prompt
@@ -319,7 +328,7 @@ keeler-status SPEC:
     slug="$(basename "$spec_abs" .md)"
     runs="$root/.keeler/runs/$slug"
     report="$(bash "$root/scripts/keeler-graph.sh" "$spec_abs")"
-    while read -r id _rest; do
+    while read -r id graph_state _rest; do
         [ -n "$id" ] || continue
         tid="$(printf '%s' "$id" | tr '[:upper:]' '[:lower:]')"
         session="keeler-$slug-$tid"
@@ -335,6 +344,11 @@ keeler-status SPEC:
             if [ "$code" = 0 ]; then state=passed; else state="failed (exit $code)"; fi
         elif [ -e "$worktree" ] || [ -f "$log_file" ]; then
             state=died
+        elif [ "$graph_state" = done ]; then
+            # The graph already answered this one; the board does not
+            # invent a second answer for a task that has landed.
+            printf '%-6s %s\n' "$id" "done"
+            continue
         else
             printf '%-6s %s\n' "$id" "not spawned"
             continue
