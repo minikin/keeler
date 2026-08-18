@@ -11,7 +11,9 @@ mod common;
 
 use std::process::Output;
 
-use common::{Repo, job_block, repo_root, run_script, said, shipped_workflow};
+use common::{
+    Repo, checks_out_full_history, job_block, repo_root, run_script, said, shipped_workflow,
+};
 
 /// The job that guards the review record, by the name the workflow gives it.
 const REVIEW_JOB: &str = "review-record";
@@ -98,7 +100,7 @@ fn a_review_record_must_name_a_commit_on_its_own_branch() {
     // When the shipped CI workflow runs on it — a checkout with history,
     // triggered on keeler/* pull requests
     assert!(
-        job.contains("fetch-depth: 0"),
+        checks_out_full_history(&job),
         "the review-record job checks out shallow and cannot see ancestors:\n{job}"
     );
     assert!(

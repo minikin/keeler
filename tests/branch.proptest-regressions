@@ -5,3 +5,7 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc e7b9988b34c569b3299d2508226aa20b0160870ef7158dad0ff6683dbe373724 # shrinks to moved_baseline = false, moved_cov = false, added_recipe = false, main_moved_after = false, commits = 1
+cc 7d0cef454156795dfc9bc8d2b7e60d4a504a05b3ce2370eff6df929d9d30310f # shrinks to moved_baseline = true, moved_cov = false, added_recipe = false, main_moved_after = false, commits = 1
+cc 0856ac9ec974173df70bfd8d67c937669449f9a38bb5682264ee2e2b2b2b4b60 # shrinks to moved_baseline = false, moved_cov = true, added_recipe = false, main_moved_after = false, commits = 1
+cc 9d491c35c8b64696e2fecf70c629ee9682fc78b4cba773e7e1cd9bd9a4f1bb34 # shrinks to moved_baseline = false, moved_cov = false, added_recipe = false, main_moved_after = true, commits = 1
+cc 7cb119ee0e2128ac9bb9a5354f6eebd8f3115ec29ef93a1027d51f074f0a0893 # shrinks to moved_baseline = false, moved_cov = false, added_recipe = true, main_moved_after = false, commits = 1

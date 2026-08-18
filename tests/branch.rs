@@ -15,7 +15,9 @@ use std::os::unix::fs::PermissionsExt as _;
 use std::process::{Command, Output};
 use std::sync::OnceLock;
 
-use common::{Repo, job_block, repo_root, run_script, said, shipped_workflow};
+use common::{
+    Repo, checks_out_full_history, job_block, repo_root, run_script, said, shipped_workflow,
+};
 
 /// The task branch every fixture here runs on — the shape `keeler-spawn`
 /// creates and the shape CI keys on.
@@ -275,7 +277,7 @@ fn a_branch_that_moved_the_baseline_is_refused_by_ci() {
         "the branch-baseline job does not key on keeler/* pull requests:\n{job}"
     );
     assert!(
-        job.contains("fetch-depth: 0"),
+        checks_out_full_history(&job),
         "the branch-baseline job checks out shallow and cannot diff against the base:\n{job}"
     );
     let script = run_script(&job);

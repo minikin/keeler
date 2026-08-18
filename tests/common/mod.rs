@@ -78,6 +78,15 @@ pub fn run_script(job: &str) -> String {
     script
 }
 
+/// Whether the job's checkout asks for the whole history — the option
+/// line itself, and not the words `fetch-depth: 0` occurring inside a
+/// message *about* it. A `job.contains("fetch-depth: 0")` passes on a job
+/// checked out shallow the moment its own error text names the fix, which
+/// is an assertion that cannot fail.
+pub fn checks_out_full_history(job: &str) -> bool {
+    job.lines().any(|line| line.trim() == "fetch-depth: 0")
+}
+
 pub fn said(output: &Output) -> String {
     format!(
         "{}{}",
