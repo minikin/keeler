@@ -1,6 +1,6 @@
 # Spec 06 — Graph mode: parallel agents over a task DAG
 
-**Status:** Implemented
+**Status:** Approved
 **Effort:** Large
 **Module:** `.claude/commands/keeler/` (`graph.md` new; `tasks.md`, `review.md`, `mutants.md`, `feature.md` amended), `.claude/keeler.md`, `templates/keeler.yml`, `Justfile`, `scripts/keeler-graph.sh`, `install.sh`, `specs/TEMPLATE.md`, `tests/graph.rs`
 
@@ -169,6 +169,16 @@ Then  it refuses before creating anything, saying which — the worktree is
       unapproved spec is not a contract any agent should build from
 ```
 
+### Scenario: Spawning from anywhere but the feature's branch is refused
+
+```
+Given a checkout on any branch other than feat/<spec-slug> for the spec
+      being spawned from
+When  `just keeler-spawn <spec> T3` runs
+Then  it refuses before creating anything, naming the branch it expected
+And   no worktree, branch or run directory is created
+```
+
 ### Scenario: Spawning a task that is already spawned is refused
 
 ```
@@ -255,8 +265,9 @@ Given a task branch keeler/06-graph-mode/t2 whose pipeline reached
 When  the stage finishes
 Then  T2's checkbox is ticked in the spec on that branch
 And   the spec's Status: line is unchanged
-And   `just keeler-graph` on main still reports T2 as not done, because
-      readiness is read from main, not from an unlanded branch
+And   `just keeler-graph` on feat/06-graph-mode still reports T2 as not
+      done, because readiness is read from the feature branch and not
+      from an unlanded task branch
 ```
 
 ### Scenario: Landing the last task marks the spec implemented
@@ -567,12 +578,29 @@ tracking, or N terminals by hand — are respectively half a scheduler and
 no parallelism; tmux is the thing that is neither. It becomes a
 requirement, checked by `install.sh` the way `just` is.
 
-Readiness is read from the spec **on main**. A tick on an unlanded branch
-unblocks nothing, which is what keeps five parallel branches from racing
-each other's dependencies. The tick still happens on the branch — it is
-how anyone can see the task was finished — and `keeler-land` sets
-`Status: Implemented` only when every box on main is ticked. `Status:` is
-therefore the one line no branch may write.
+**Readiness is read from the spec on the feature's branch,
+`feat/<spec-slug>`.** A feature gets one branch and its tasks fan out from
+it; `keeler-spawn` refuses to run anywhere else, so which branch holds the
+graph is a name a machine checks rather than a convention someone
+remembers. A tick on a *task* branch unblocks nothing — that is what keeps
+parallel branches from racing each other's dependencies — while a tick on
+the feature branch does, because arriving there **is** the landing. The
+tick still happens on the task branch, which is how anyone sees the work
+was finished, and `Status:` remains the one line no task branch may write.
+
+This is the amendment the first real use of graph mode earned. Reading
+readiness from main is right only when every task lands on main directly;
+with a branch per feature it is wrong, and wrong in the silent direction —
+a task whose dependency had landed on the feature branch read as blocked,
+so the graph refused work that was ready on disk. The invariant survives
+at the level where it belongs.
+
+**Landing happens twice, and the two are not the same.** A task lands into
+the feature branch: its box is ticked there and its worktree goes. The
+feature lands into main: that is where `Status:` becomes `Implemented`,
+and where the baseline moves — the baseline is the whole team's reference,
+and a moved one must be visible in one place rather than in every
+feature's branch.
 
 `keeler-land` runs in one order and refuses to run in any other:
 `just dev` on main first, the baseline second, and only if the first was
