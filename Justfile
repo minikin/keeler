@@ -149,6 +149,38 @@ mutants-diff:
 # Full validation including mutation tests (slow)
 dev-full: dev mutants-all
 
+# Diff-based by construction: all three of these measure this branch's
+# own changes, and `crap-delta` reads the baseline without ever writing
+# it. Moving the baseline is `just keeler-land`'s job, on main, at fan-in;
+# CI refuses a keeler/* pull request whose diff touched it.
+#
+# `just dev` is untouched — an adopter on the linear road runs exactly the
+# recipe they always did, and a spawned agent runs this one instead. The
+# three go through `just` on PATH rather than recipe dependencies, because
+# the order is the contract: dependencies all run before the body, and the
+# sequence would stop being observable.
+#
+# The line below is the one `just --list` shows; the rationale above it is
+# for whoever opens this file.
+#
+# Graph mode: the gate a task branch runs — dev, then crap-delta, then mutants-diff.
+keeler-branch:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just dev
+    # The delta gate needs a committed baseline to measure against — the
+    # same condition /keeler:qa and the shipped workflow already check.
+    # Without one, `dev`'s absolute CRAP threshold is the whole gate.
+    # `git cat-file` and not `-f`: a baseline generated locally and left
+    # uncommitted would have crap-delta measure this branch against itself,
+    # a zero delta by construction and a gate that checked nothing.
+    if git cat-file -e HEAD:crap-baseline.json 2>/dev/null; then
+        just crap-delta
+    else
+        echo "no crap-baseline.json committed — threshold only, no delta gate"
+    fi
+    just mutants-diff
+
 # Graph mode: what a spec's Tasks section says is ready, blocked or done —
 # `just keeler-graph specs/01-foo.md`. The script's report is the
 # machine's, one `<id> <state> [needs...]` line per task, and the spawn

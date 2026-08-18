@@ -354,7 +354,7 @@ split it rather than ship a task eight scenarios wide.
       carve-out and the prompt carries the instruction. Deliverable:
       `keeler-spawn`, `keeler-status`, the tmux check in `install.sh`, and
       the commit carve-out in the rules.
-- [ ] **T4 — The branch gate, and the tick that stays on the branch.**
+- [x] **T4 — The branch gate, and the tick that stays on the branch.**
       Needs: T1. Scenarios: _Branch gates are diff-based only_, _A branch
       that moved the baseline is refused by CI_, _A branch ticks its task
       and nothing else_. Deliverable: `just keeler-branch`; the CI job in

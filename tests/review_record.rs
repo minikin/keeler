@@ -7,167 +7,31 @@
 //! the tests here lift that shell out of the YAML and drive it against
 //! fixture repositories, the way `install.sh` is driven as a subprocess.
 
-use std::path::{Path, PathBuf};
+mod common;
+
 use std::process::Output;
 
-fn repo_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-}
-
-fn shipped_workflow() -> String {
-    std::fs::read_to_string(repo_root().join("templates/keeler.yml")).unwrap()
-}
+use common::{
+    Repo, checks_out_full_history, job_block, repo_root, run_script, said, shipped_workflow,
+};
 
 /// The job that guards the review record, by the name the workflow gives it.
 const REVIEW_JOB: &str = "review-record";
 
-/// The lines of one top-level job under `jobs:` — from its key to the next
-/// job's key. Enough YAML for a file we also own.
-fn job_block(workflow: &str, job: &str) -> String {
-    let key = format!("  {job}:");
-    let mut lines = workflow.lines().skip_while(|line| line.trim_end() != key);
-    let Some(first) = lines.next() else {
-        panic!("the shipped workflow has no `{job}` job");
-    };
-    let mut block = vec![first];
-    for line in lines {
-        let next_job = line.starts_with("  ")
-            && !line.starts_with("   ")
-            && !line.trim().is_empty()
-            && !line.trim_start().starts_with('#');
-        if next_job || (!line.trim().is_empty() && !line.starts_with(' ')) {
-            break;
-        }
-        block.push(line);
-    }
-    block.join("\n")
-}
-
-fn indent_of(line: &str) -> usize {
-    line.len() - line.trim_start().len()
-}
-
-/// The shell of the job's `run: |` step, dedented so bash can run it as
-/// the workflow would.
-fn run_script(job: &str) -> String {
-    let mut lines = job.lines();
-    let run = lines
-        .by_ref()
-        .find(|line| line.trim() == "run: |")
-        .expect("the job has no `run: |` block");
-    let run_indent = indent_of(run);
-    let body: Vec<&str> = lines
-        .take_while(|line| line.trim().is_empty() || indent_of(line) > run_indent)
-        .collect();
-    let indent = body
-        .iter()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| indent_of(line))
-        .min()
-        .expect("the run block is empty");
-    let mut script = String::new();
-    for line in body {
-        if line.len() >= indent {
-            script.push_str(&line[indent..]);
-        }
-        script.push('\n');
-    }
-    script
-}
-
-/// A git repository built for one test, removed on drop.
-struct Repo(PathBuf);
-
-impl Repo {
-    fn new(name: &str) -> Self {
-        let dir = std::env::temp_dir().join(format!(
-            "keeler-review-record-{name}-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let repo = Self(dir);
-        repo.git(&["init", "-qb", "main"]);
-        repo
-    }
-
-    fn path(&self) -> &Path {
-        &self.0
-    }
-
-    /// Runs git with a fixed identity and no user config, so a global
-    /// `commit.gpgsign` cannot hang the suite waiting for a key.
-    fn git_output(&self, args: &[&str]) -> Output {
-        std::process::Command::new("git")
-            .args(["-c", "user.email=probe@keeler", "-c", "user.name=probe"])
-            .args(args)
-            .current_dir(&self.0)
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_SYSTEM", "/dev/null")
-            .output()
-            .expect("failed to run git")
-    }
-
-    /// `git_output`, asserting success and returning stdout trimmed.
-    fn git(&self, args: &[&str]) -> String {
-        let output = self.git_output(args);
-        assert!(
-            output.status.success(),
-            "git {args:?} failed:\n{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        String::from_utf8_lossy(&output.stdout).trim().to_string()
-    }
-
-    /// Writes a file and commits it; returns the new commit's SHA.
-    fn commit(&self, file: &str, body: &str, message: &str) -> String {
-        let path = self.0.join(file);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, body).unwrap();
-        self.git(&["add", file]);
-        self.git(&["commit", "-qm", message]);
-        self.git(&["rev-parse", "HEAD"])
-    }
-
-    /// Writes the review record for `slug`/`task` — uncommitted, which
-    /// is what the working tree of a checkout holds either way.
-    fn record(&self, slug: &str, task: &str, body: &str) {
-        let path = self.0.join("reviews").join(slug).join(format!("{task}.md"));
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, body).unwrap();
-    }
-
-    /// Runs the shipped check in this repository as the workflow would:
-    /// `HEAD_REF` and `BASE_REF` set from the pull request.
-    fn check(&self, script: &str, head_ref: &str, base_ref: &str) -> Output {
-        std::process::Command::new("bash")
-            .args(["-c", script])
-            .current_dir(&self.0)
-            .env("HEAD_REF", head_ref)
-            .env("BASE_REF", base_ref)
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_SYSTEM", "/dev/null")
-            .output()
-            .expect("failed to run the review-record check")
-    }
-}
-
-impl Drop for Repo {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
-fn said(output: &Output) -> String {
-    format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    )
-}
-
 fn record_body(slug: &str, task: &str, sha: &str) -> String {
     format!("Spec: {slug}\nTask: {task}\nCommit: {sha}\nVerdict: pass\n\nnone\n")
+}
+
+/// Writes the review record for `slug`/`task` — uncommitted, which is what
+/// the working tree of a checkout holds either way.
+fn record(repo: &Repo, slug: &str, task: &str, body: &str) {
+    repo.write(&format!("reviews/{slug}/{task}.md"), body);
+}
+
+/// Runs the shipped check in `repo` as the workflow would: `HEAD_REF` and
+/// `BASE_REF` set from the pull request.
+fn check(repo: &Repo, script: &str, head_ref: &str, base_ref: &str) -> Output {
+    repo.run(script, &[("HEAD_REF", head_ref), ("BASE_REF", base_ref)])
 }
 
 const SLUG: &str = "99-fixture";
@@ -178,7 +42,7 @@ const RECORD: &str = "reviews/99-fixture/t3.md";
 /// A fixture with `main` at one commit and a task branch one commit
 /// ahead of it, checked out. Returns `(repo, merge base, branch commit)`.
 fn task_branch(name: &str) -> (Repo, String, String) {
-    let repo = Repo::new(name);
+    let repo = Repo::new("review-record", name);
     let base = repo.commit("README.md", "hello\n", "init");
     repo.git(&["checkout", "-qb", BRANCH]);
     let head = repo.commit("src/lib.rs", "pub fn t3() {}\n", "feat: t3");
@@ -236,7 +100,7 @@ fn a_review_record_must_name_a_commit_on_its_own_branch() {
     // When the shipped CI workflow runs on it — a checkout with history,
     // triggered on keeler/* pull requests
     assert!(
-        job.contains("fetch-depth: 0"),
+        checks_out_full_history(&job),
         "the review-record job checks out shallow and cannot see ancestors:\n{job}"
     );
     assert!(
@@ -248,7 +112,7 @@ fn a_review_record_must_name_a_commit_on_its_own_branch() {
 
     // Then it fails if reviews/<spec-slug>/<task-id>.md is missing
     let (repo, base, head) = task_branch("missing");
-    let out = repo.check(&script, BRANCH, "main");
+    let out = check(&repo, &script, BRANCH, "main");
     assert!(!out.status.success(), "a missing record passed");
     assert!(
         said(&out).contains(RECORD) && said(&out).contains("missing"),
@@ -271,8 +135,8 @@ fn a_review_record_must_name_a_commit_on_its_own_branch() {
         repo.git(&["checkout", "-q", BRANCH]);
         sha
     };
-    repo.record(SLUG, TASK, &record_body(SLUG, TASK, &elsewhere));
-    let out = repo.check(&script, BRANCH, "main");
+    record(&repo, SLUG, TASK, &record_body(SLUG, TASK, &elsewhere));
+    let out = check(&repo, &script, BRANCH, "main");
     assert!(
         !out.status.success(),
         "a record naming another branch's commit passed"
@@ -285,8 +149,8 @@ fn a_review_record_must_name_a_commit_on_its_own_branch() {
 
     // And it fails if Commit: is an ancestor of main — the merge base is
     // an ancestor of every branch and names work the branch has not done
-    repo.record(SLUG, TASK, &record_body(SLUG, TASK, &base));
-    let out = repo.check(&script, BRANCH, "main");
+    record(&repo, SLUG, TASK, &record_body(SLUG, TASK, &base));
+    let out = check(&repo, &script, BRANCH, "main");
     assert!(
         !out.status.success(),
         "a record naming the merge base passed"
@@ -298,8 +162,8 @@ fn a_review_record_must_name_a_commit_on_its_own_branch() {
     );
 
     // And a record whose Commit: is a commit the branch itself made passes
-    repo.record(SLUG, TASK, &record_body(SLUG, TASK, &head));
-    let out = repo.check(&script, BRANCH, "main");
+    record(&repo, SLUG, TASK, &record_body(SLUG, TASK, &head));
+    let out = check(&repo, &script, BRANCH, "main");
     assert!(
         out.status.success(),
         "an honest record was refused:\n{}",
@@ -309,7 +173,7 @@ fn a_review_record_must_name_a_commit_on_its_own_branch() {
     // And it passes just the same in the checkout CI actually has: a clone
     // where main and the branch exist only as origin/ refs and HEAD is
     // detached — which is why the checkout must not be shallow
-    let clone = Repo::new("clone");
+    let clone = Repo::new("review-record", "clone");
     let _ = std::fs::remove_dir_all(clone.path());
     let cloned = std::process::Command::new("git")
         .args(["clone", "-q", "--no-single-branch"])
@@ -321,8 +185,8 @@ fn a_review_record_must_name_a_commit_on_its_own_branch() {
         .expect("failed to run git clone");
     assert!(cloned.success(), "git clone of the fixture failed");
     clone.git(&["checkout", "-q", "--detach", &format!("origin/{BRANCH}")]);
-    clone.record(SLUG, TASK, &record_body(SLUG, TASK, &head));
-    let out = clone.check(&script, BRANCH, "main");
+    record(&clone, SLUG, TASK, &record_body(SLUG, TASK, &head));
+    let out = check(&clone, &script, BRANCH, "main");
     assert!(
         out.status.success(),
         "an honest record was refused in a clone with only origin/ refs:\n{}",
@@ -337,7 +201,7 @@ fn a_review_record_must_name_a_commit_on_its_own_branch() {
     ] {
         let _ = clone.git_output(&["update-ref", "-d", &ref_]);
     }
-    let out = clone.check(&script, BRANCH, "main");
+    let out = check(&clone, &script, BRANCH, "main");
     assert!(
         out.status.success(),
         "an honest record was refused when the branch exists only as HEAD:\n{}",
@@ -375,8 +239,8 @@ fn a_malformed_record_or_branch_is_refused_and_does_not_crash_the_gate() {
         ),
     ];
     for (name, body, expected) in cases {
-        repo.record(SLUG, TASK, body);
-        let out = repo.check(&script, BRANCH, "main");
+        record(&repo, SLUG, TASK, body);
+        let out = check(&repo, &script, BRANCH, "main");
 
         // Then it fails naming the record and the problem — a verdict,
         // not a shell error
@@ -394,13 +258,13 @@ fn a_malformed_record_or_branch_is_refused_and_does_not_crash_the_gate() {
 
     // And a branch that is not keeler/<spec-slug>/<task-id> is refused
     // naming the shape, not read as some slug and task it never had
-    repo.record(SLUG, TASK, &record_body(SLUG, TASK, &head));
+    record(&repo, SLUG, TASK, &record_body(SLUG, TASK, &head));
     for branch in [
         "keeler/99-fixture",
         "keeler/99-fixture/t3/extra",
         "keeler//t3",
     ] {
-        let out = repo.check(&script, branch, "main");
+        let out = check(&repo, &script, branch, "main");
         assert!(!out.status.success(), "branch `{branch}` was accepted");
         assert!(
             said(&out).contains(branch) && said(&out).contains("keeler/<spec-slug>/<task-id>"),
@@ -432,7 +296,7 @@ proptest::proptest! {
         pick in 0usize..7,
     ) {
         let script = run_script(&job_block(&shipped_workflow(), REVIEW_JOB));
-        let repo = Repo::new("property");
+        let repo = Repo::new("review-record", "property");
         let mut commits = Vec::new();
         for i in 0..before {
             commits.push((repo.commit(&format!("main-{i}.md"), "m\n", "main"), false));
@@ -448,8 +312,8 @@ proptest::proptest! {
         repo.git(&["checkout", "-q", BRANCH]);
 
         let (sha, own) = &commits[pick % commits.len()];
-        repo.record(SLUG, TASK, &record_body(SLUG, TASK, sha));
-        let out = repo.check(&script, BRANCH, "main");
+        record(&repo, SLUG, TASK, &record_body(SLUG, TASK, sha));
+        let out = check(&repo, &script, BRANCH, "main");
         proptest::prop_assert_eq!(
             out.status.success(),
             *own,
