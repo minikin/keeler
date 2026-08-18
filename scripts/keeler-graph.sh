@@ -10,7 +10,8 @@
 # where state is `done` (its box is ticked), `ready` (every need is done)
 # or `blocked` (some need is not). Exit 0 with that report, or exit 1
 # naming the line and what is wrong with it — a Needs: naming no task, an
-# id defined twice, two Needs: in one item — and print nothing as ready.
+# id defined twice, two Needs: in one item, a cycle — and print nothing as
+# ready.
 #
 # The grammar is spec 06's, and it is deliberately small:
 #   - the Tasks section runs from `## Tasks` to the next `## ` heading;
@@ -19,7 +20,11 @@
 #     such line, however many physical lines it wraps across;
 #   - the item opens with `**Tn — `; Tn is the id;
 #   - `Needs: Ta, Tb.` may appear once, anywhere in the item; absent means
-#     a root; the checkbox is the only completion signal.
+#     a root; the checkbox is the only completion signal;
+#   - the graph the needs draw is acyclic. A cycle is refused naming its
+#     path — no task on it could ever be ready, and a report that called
+#     its members blocked would look like a graph waiting on work rather
+#     than one that can never finish.
 #
 # `/keeler:graph`, `just keeler-graph` and `just keeler-spawn` all call
 # this and nothing else reads the format — so a human and the tools cannot
@@ -76,6 +81,25 @@ function close_item(    id, rest, cnt, list, m, k, need) {
     }
     n++
     ids[n] = id; lines[n] = open_line; ticked[n] = tick; needs[n] = list
+    need_of[id] = list
+}
+
+# Walk the needs from one task, depth first, and refuse on the first edge
+# back into the path being walked — that path, closed, is the cycle, and
+# it is named in full so the human can see where to cut it. Colour 1 is
+# on the current path, 2 is finished; awk locals are the parameters after
+# the real ones, and `m` is local so the recursion does not share it.
+function visit(id,    k, j, m, cycle) {
+    if (colour[id] == 2) return
+    if (colour[id] == 1) {
+        cycle = ""
+        for (j = at[id]; j <= depth; j++) cycle = cycle path[j] " -> "
+        fail(seen[id], "a cycle: " cycle id " — no task on it can ever be ready")
+    }
+    colour[id] = 1; path[++depth] = id; at[id] = depth
+    k = split(need_of[id], m, " ")
+    for (j = 1; j <= k; j++) visit(m[j])
+    depth--; colour[id] = 2
 }
 
 # CRLF endings would hide every heading and every `.` terminator; strip
@@ -120,6 +144,9 @@ END {
         for (j = 1; j <= k; j++)
             if (!(m[j] in seen)) fail(lines[i], ids[i] " needs " m[j] ", which no task defines")
     }
+    # And the graph they draw must be acyclic — checked only once every
+    # need is known to name a task, so the walk never steps off the graph.
+    for (i = 1; i <= n; i++) visit(ids[i])
     for (i = 1; i <= n; i++) if (ticked[i]) done_[ids[i]] = 1
     for (i = 1; i <= n; i++) {
         state = "ready"

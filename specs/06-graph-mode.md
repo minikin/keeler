@@ -319,7 +319,7 @@ split it rather than ship a task eight scenarios wide.
       `TEMPLATE.md`, the `/keeler:tasks` command emitting it, and
       `scripts/keeler-graph.sh`, which `just keeler-graph` and
       `keeler-spawn` both call.
-- [ ] **T2 — /keeler:graph reads readiness.** Needs: T1. Scenarios:
+- [x] **T2 — /keeler:graph reads readiness.** Needs: T1. Scenarios:
       _Graph status names what is unblocked_, _A cycle is refused loudly_.
       Tests: acceptance — `just keeler-graph` against fixture specs, and
       the command file instructs running it rather than reading the spec

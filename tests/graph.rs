@@ -388,6 +388,153 @@ fn the_template_and_the_tasks_command_carry_the_format() {
     }
 }
 
+// ---- T2: /keeler:graph reads readiness ------------------------------------
+//
+// The human's road to the graph is `just keeler-graph <spec>`, and the
+// command file sends the agent down the same road rather than letting it
+// read the Tasks section itself. These tests drive the recipe.
+
+/// Runs `just keeler-graph <spec>` from the repository root, the way a
+/// human — or /keeler:graph — would.
+fn just_graph(spec: &Path) -> Output {
+    std::process::Command::new("just")
+        .arg("keeler-graph")
+        .arg(spec)
+        .current_dir(repo_root())
+        .output()
+        .expect("failed to run just")
+}
+
+/// The report line that opens with `<id> `, or a panic naming what was
+/// printed instead.
+fn line_for<'a>(out: &'a str, id: &str) -> &'a str {
+    out.lines()
+        .find(|line| line.starts_with(&format!("{id} ")))
+        .unwrap_or_else(|| panic!("no line for {id} in:\n{out}"))
+}
+
+#[test]
+fn graph_status_names_what_is_unblocked() {
+    // Given a spec with tasks T1..T4 where T2 and T3 need T1, and T1 is
+    // checked off — and T4 needs all three, so one of its needs is met
+    // and two are not
+    let fixture = Spec::new(
+        "unblocked",
+        &spec(
+            "- [x] **T1 — root.**\n\
+             - [ ] **T2 — leans on T1.** Needs: T1.\n\
+             - [ ] **T3 — also leans on T1.** Needs: T1.\n\
+             - [ ] **T4 — leans on all of them.** Needs: T1, T2, T3.\n",
+        ),
+    );
+
+    // When the graph recipe runs against the spec
+    let output = just_graph(&fixture.0);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let out = stdout(&output);
+
+    // Then it reports T2 and T3 as ready and T4 as blocked with its unmet
+    // needs — T2 and T3, not the T1 that is already done
+    assert!(line_for(&out, "T1").contains("done"), "{out}");
+    assert!(line_for(&out, "T2").contains("ready"), "{out}");
+    assert!(line_for(&out, "T3").contains("ready"), "{out}");
+    let t4 = line_for(&out, "T4");
+    assert!(t4.contains("blocked"), "{out}");
+    assert!(
+        t4.contains("T2") && t4.contains("T3"),
+        "T4's unmet needs are not named: {t4}"
+    );
+    assert!(
+        !t4.contains("T1"),
+        "T4's line names T1, which is done — a met need is not an unmet one: {t4}"
+    );
+
+    // And it reports nothing as ready when the graph is complete
+    let complete = Spec::new(
+        "complete",
+        &spec(
+            "- [x] **T1 — root.**\n\
+             - [x] **T2 — leans on T1.** Needs: T1.\n\
+             - [x] **T3 — also leans on T1.** Needs: T1.\n\
+             - [x] **T4 — leans on all of them.** Needs: T1, T2, T3.\n",
+        ),
+    );
+    let output = just_graph(&complete.0);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let out = stdout(&output);
+    assert!(
+        !out.contains("ready"),
+        "a complete graph reported something as ready:\n{out}"
+    );
+    assert_eq!(
+        out.lines().filter(|line| line.contains("done")).count(),
+        4,
+        "a complete graph does not report every task as done:\n{out}"
+    );
+}
+
+#[test]
+fn a_cycle_is_refused_loudly() {
+    // Given a spec whose Tasks section contains T1 needing T2 and T2
+    // needing T1 — and a third task that needs neither, so a report that
+    // leaked would have something to call ready
+    let fixture = Spec::new(
+        "cycle",
+        &spec(
+            "- [ ] **T1 — a.** Needs: T2.\n\
+             - [ ] **T2 — b.** Needs: T1.\n\
+             - [ ] **T3 — c.**\n",
+        ),
+    );
+
+    // When the graph recipe runs against the spec
+    let output = just_graph(&fixture.0);
+
+    // Then it fails naming the cycle
+    assert!(!output.status.success(), "a cycle was read as a graph");
+    let said = stderr(&output);
+    assert!(
+        said.contains("cycle"),
+        "the refusal does not say cycle:\n{said}"
+    );
+    assert!(
+        said.contains("T1") && said.contains("T2"),
+        "the refusal does not name the tasks in the cycle:\n{said}"
+    );
+
+    // And no task is reported as ready
+    let out = stdout(&output);
+    assert!(
+        !out.contains("ready"),
+        "a refused graph still reported something as ready:\n{out}"
+    );
+    assert!(out.is_empty(), "a refusal printed a report:\n{out}");
+}
+
+#[test]
+fn the_graph_command_runs_the_recipe_rather_than_reading_the_spec() {
+    // Given the shipped /keeler:graph command
+    let command = std::fs::read_to_string(repo_root().join(".claude/commands/keeler/graph.md"))
+        .expect("cannot read .claude/commands/keeler/graph.md");
+
+    // Then it instructs running the recipe — so a cycle is refused by a
+    // program and not judged by an agent — and reports the three states
+    assert!(
+        command.contains("just keeler-graph"),
+        "graph.md does not instruct running `just keeler-graph`"
+    );
+    for state in ["ready", "blocked", "done"] {
+        assert!(
+            command.contains(state),
+            "graph.md does not tell the agent to report what is {state}"
+        );
+    }
+    assert!(
+        command.contains("cycle"),
+        "graph.md does not say what to do when the recipe refuses a cycle"
+    );
+}
+
 proptest::proptest! {
     #![proptest_config(proptest::prelude::ProptestConfig {
         cases: 32,
@@ -446,5 +593,50 @@ proptest::proptest! {
             };
             proptest::prop_assert_eq!(state, expected, "T{} with needs {:?}", i + 1, needs[i]);
         }
+    }
+
+    /// Over any graph that contains a cycle — T1 -> T2 -> ... -> Tc -> T1
+    /// for some c ≥ 2, plus whatever other edges and ticks — the spec is
+    /// refused naming a cycle, and nothing is reported. Not only the
+    /// two-task cycle the scenario draws: a cycle of any length, buried
+    /// under any number of honest edges, and ticked or not.
+    #[test]
+    fn a_graph_with_a_cycle_anywhere_in_it_is_refused(
+        n in 2usize..7,
+        cycle_len in 2usize..7,
+        edges in proptest::collection::vec((0usize..7, 0usize..7), 0..12),
+        ticked in proptest::collection::vec(proptest::bool::ANY, 7),
+    ) {
+        let cycle_len = cycle_len.min(n);
+        let mut needs: Vec<Vec<usize>> = vec![Vec::new(); n];
+        for (i, list) in needs.iter_mut().enumerate().take(cycle_len) {
+            list.push((i + 1) % cycle_len);
+        }
+        for (a, b) in edges {
+            let (a, b) = (a % n, b % n);
+            if a != b && !needs[a].contains(&b) {
+                needs[a].push(b);
+            }
+        }
+        let mut body = String::new();
+        for i in 0..n {
+            let list: Vec<String> = needs[i].iter().map(|j| format!("T{}", j + 1)).collect();
+            let _ = write!(
+                body,
+                "- [{}] **T{} — task {}.**",
+                if ticked[i] { 'x' } else { ' ' }, i + 1, i + 1,
+            );
+            if !list.is_empty() {
+                let _ = write!(body, " Needs: {}.", list.join(", "));
+            }
+            body.push('\n');
+        }
+        let fixture = Spec::new("cyclic-property", &spec(&body));
+
+        let output = fixture.graph();
+        proptest::prop_assert!(!output.status.success(), "a cyclic graph was accepted:\n{}", stdout(&output));
+        let said = stderr(&output);
+        proptest::prop_assert!(said.contains("cycle") && said.contains("->"), "{said}");
+        proptest::prop_assert!(stdout(&output).is_empty(), "a refusal printed a report:\n{}", stdout(&output));
     }
 }

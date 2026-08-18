@@ -149,6 +149,33 @@ mutants-diff:
 # Full validation including mutation tests (slow)
 dev-full: dev mutants-all
 
+# Graph mode: what a spec's Tasks section says is ready, blocked or done —
+# `just keeler-graph specs/01-foo.md`. The script's report is the
+# machine's, one `<id> <state> [needs...]` line per task, and the spawn
+# recipe reads it as such; this is the human's view of the same lines,
+# where a blocked task shows only what it is still waiting on — the needs
+# whose own line is not done — rather than every edge it declares. A
+# refusal (a cycle, a need naming no task) is the script's: it exits
+# non-zero naming the line, and nothing here is printed.
+keeler-graph SPEC:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    report=$(bash scripts/keeler-graph.sh "{{SPEC}}")
+    printf '%s\n' "$report" | awk '
+        NF { row[++n] = $0; if ($2 == "done") done_[$1] = 1 }
+        END {
+            for (r = 1; r <= n; r++) {
+                k = split(row[r], f, " ")
+                line = f[1] " " f[2]
+                if (f[2] == "blocked") {
+                    sep = " (waiting on "
+                    for (j = 3; j <= k; j++) if (!(f[j] in done_)) { line = line sep f[j]; sep = ", " }
+                    line = line ")"
+                }
+                print line
+            }
+        }'
+
 # Upgrade Keeler itself (KEELER_REF=v0.3.0 just keeler-upgrade to pin a tag)
 keeler-upgrade:
     curl -fsSL https://raw.githubusercontent.com/minikin/keeler/main/install.sh | bash -s .
