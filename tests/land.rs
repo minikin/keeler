@@ -132,6 +132,15 @@ impl Project {
         Self::build(name, "main", spec)
     }
 
+    /// A project on its feature branch, cut from a main that exists — the
+    /// shape a feature is developed in, and the one keeler-land must tell
+    /// apart from main by name.
+    fn on_feature_branch(name: &str, spec: &str) -> Self {
+        let project = Self::build(name, "main", spec);
+        project.git(&["checkout", "-qb", &format!("feat/{SLUG}")]);
+        project
+    }
+
     fn build(name: &str, branch: &str, spec: &str) -> Self {
         let dir = std::env::temp_dir().join(format!("keeler-land-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -631,10 +640,108 @@ fn landing_the_last_task_marks_the_spec_implemented() {
 }
 
 #[test]
+fn landing_on_the_feature_branch_takes_the_ticks_and_the_worktrees() {
+    // Given a feature branch where two tasks have landed — their ticks are
+    // committed there and their worktrees are clean
+    let project =
+        Project::on_feature_branch("feature-level", &spec_with(&[true, true], "Approved"));
+    let clean = project.add_worktree("t1");
+    project.write_run_record("t1");
+    let other = project.add_worktree("t2");
+    project.write_run_record("t2");
+
+    // When `just keeler-land` runs there
+    let output = project.land();
+    assert!(
+        output.status.success(),
+        "keeler-land refused the feature branch:\n{}",
+        both(&output)
+    );
+
+    // Then the landed worktrees and branches go — that is the feature
+    // level's work
+    assert!(
+        !clean.exists(),
+        "a landed worktree survived on the feature branch:\n{}",
+        both(&output)
+    );
+    assert!(
+        !other.exists(),
+        "a landed worktree survived on the feature branch:\n{}",
+        both(&output)
+    );
+    assert!(
+        !project
+            .branches()
+            .iter()
+            .any(|b| b.starts_with(&format!("keeler/{SLUG}/"))),
+        "task branches survived: {:?}",
+        project.branches()
+    );
+
+    // And nothing that belongs to main happens here: the baseline is not
+    // regenerated, nothing is staged, and Status: is exactly as it was.
+    // The baseline is the whole team's reference and moves in one place;
+    // Implemented is what main says about a feature that has arrived.
+    assert!(
+        !project.calls().iter().any(|c| c == "crap-baseline"),
+        "the feature level regenerated the baseline:\n{}",
+        both(&output)
+    );
+    assert_eq!(
+        project.baseline(),
+        OLD_BASELINE,
+        "the baseline moved on the feature branch"
+    );
+    assert_eq!(
+        project.git(&["diff", "--cached", "--name-only"]),
+        "",
+        "the feature level staged something:\n{}",
+        both(&output)
+    );
+    assert!(
+        project.spec().contains("**Status:** Approved"),
+        "the feature level wrote Status::\n{}",
+        project.spec()
+    );
+}
+
+#[test]
+fn landing_on_main_takes_status_and_the_baseline_and_no_worktrees() {
+    // Given main, after the feature merged into it with every box ticked —
+    // and a task worktree that someone left behind
+    let project = Project::with_spec("main-level", &spec_with(&[true, true], "Approved"));
+    let leftover = project.add_worktree("t1");
+
+    // When `just keeler-land` runs on main
+    let output = project.land();
+    assert!(output.status.success(), "{}", both(&output));
+
+    // Then Status: becomes Implemented and the baseline is staged — main's
+    // work — and the worktree is left where it is, named: task worktrees
+    // fan out from the feature branch, and are its to clean up
+    assert!(
+        project.spec().contains("**Status:** Implemented"),
+        "main did not mark the finished spec Implemented:\n{}",
+        project.spec()
+    );
+    assert_eq!(
+        project.baseline(),
+        NEW_BASELINE,
+        "main did not regenerate the baseline"
+    );
+    assert!(
+        leftover.exists(),
+        "main removed a task worktree — that is the feature branch's work:\n{}",
+        both(&output)
+    );
+}
+
+#[test]
 fn landing_cleans_up_only_what_is_clean() {
     // Given a landed task whose worktree has no uncommitted changes, and
     // another landed task whose worktree has some
-    let project = Project::with_spec("cleanup", &spec_with(&[true, true], "Approved"));
+    let project = Project::on_feature_branch("cleanup", &spec_with(&[true, true], "Approved"));
     let clean = project.add_worktree("t1");
     let dirty = project.add_worktree("t2");
     project.write_run_record("t1");
@@ -707,7 +814,7 @@ fn landing_cleans_up_only_what_is_clean() {
 fn a_worktree_that_will_not_go_is_named_rather_than_fatal() {
     // Given a landed task whose worktree is clean but cannot be removed —
     // git holds it locked, as it does for a removable disk
-    let project = Project::with_spec("locked", &spec_with(&[true, true], "Approved"));
+    let project = Project::on_feature_branch("locked", &spec_with(&[true, true], "Approved"));
     let locked = project.add_worktree("t1");
     let clean = project.add_worktree("t2");
     project.git(&["worktree", "lock", locked.to_str().unwrap()]);
@@ -770,7 +877,7 @@ fn landing_reads_the_ticks_that_are_committed() {
 fn a_branch_whose_commits_are_not_on_main_keeps_its_worktree() {
     // Given two landed tasks with clean worktrees, one of whose branches
     // carries a commit that never reached main
-    let project = Project::with_spec("unmerged", &spec_with(&[true, true], "Approved"));
+    let project = Project::on_feature_branch("unmerged", &spec_with(&[true, true], "Approved"));
     let unmerged = project.add_worktree("t1");
     let merged = project.add_worktree("t2");
     std::fs::write(unmerged.join("notes.txt"), "work nobody merged\n").unwrap();
@@ -807,7 +914,7 @@ fn a_branch_whose_commits_are_not_on_main_keeps_its_worktree() {
 fn a_worktree_that_moved_to_another_branch_is_left_alone() {
     // Given a landed task whose worktree a human switched to a branch of
     // their own — the task's branch now stands somewhere else entirely
-    let project = Project::with_spec("moved", &spec_with(&[true, true], "Approved"));
+    let project = Project::on_feature_branch("moved", &spec_with(&[true, true], "Approved"));
     let moved = project.add_worktree("t1");
     Project::git_in(&moved, &["switch", "-q", "-c", "fixup"]);
 

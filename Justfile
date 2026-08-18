@@ -517,23 +517,37 @@ keeler-land:
     main_ref="$(just _main-ref)"
     main_branch="${main_ref##*/}"
     current="$(git symbolic-ref --quiet --short HEAD || echo 'a detached HEAD')"
-    if [ "$current" != "$main_branch" ]; then
-        echo "keeler-land: on $current, not $main_branch — the baseline moves at fan-in, on main, and nowhere else." >&2
-        exit 1
-    fi
+    # Landing happens twice, and the branch says which one this is. A task
+    # lands into the feature branch, feat/<spec-slug>: its box is ticked
+    # there and its worktree goes. The feature lands into main: that is
+    # where Status: becomes Implemented and where the baseline moves — the
+    # baseline is the whole team's reference and must move in one visible
+    # place, not in every feature's branch. Anywhere else is neither.
+    level=""
+    case "$current" in
+        "$main_branch") level=main ;;
+        feat/*)         level=feature ;;
+        *)
+            echo "keeler-land: on $current — a task lands on its feature branch feat/<spec-slug>, a feature lands on $main_branch, and there is nothing to land anywhere else." >&2
+            exit 1
+            ;;
+    esac
     if ! just dev; then
-        echo "keeler-land: main is red after fan-in — branches that were green alone are wrong together. The baseline is untouched and nothing is staged; fix or revert, then land again." >&2
+        echo "keeler-land: $current is red after fan-in — branches that were green alone are wrong together. Nothing is staged and nothing is removed; fix or revert, then land again." >&2
         exit 1
     fi
-    just crap-baseline
-    # Staged, never committed: the rules say no commit without the human's
-    # word, and a moved baseline is a decision worth a diff someone reads.
-    if [ -e crap-baseline.json ]; then
-        git add -- crap-baseline.json
-        echo "keeler-land: crap-baseline.json is staged, not committed — review the diff and commit it yourself:"
-        echo "    git diff --cached -- crap-baseline.json"
-    else
-        echo "keeler-land: no baseline was produced — nothing in this project to measure yet, so nothing is staged."
+    if [ "$level" = main ]; then
+        just crap-baseline
+        # Staged, never committed: the rules say no commit without the
+        # human's word, and a moved baseline is a decision worth a diff
+        # someone reads.
+        if [ -e crap-baseline.json ]; then
+            git add -- crap-baseline.json
+            echo "keeler-land: crap-baseline.json is staged, not committed — review the diff and commit it yourself:"
+            echo "    git diff --cached -- crap-baseline.json"
+        else
+            echo "keeler-land: no baseline was produced — nothing in this project to measure yet, so nothing is staged."
+        fi
     fi
     # Fan-in, part two: a spec whose every box is ticked is finished, and a
     # landed task's worktree is litter. Readiness is the graph script's
@@ -575,7 +589,7 @@ keeler-land:
         # Implemented follows Approved: a Draft nobody approved is not a
         # contract that can have been fulfilled, however many boxes are
         # ticked — and a spec already Implemented needs no second write.
-        if [ "$all_done" = yes ] && [ "$status" = Approved ]; then
+        if [ "$level" = main ] && [ "$all_done" = yes ] && [ "$status" = Approved ]; then
             # Onto a copy and then a move, never a truncate-and-write: a
             # land stopped mid-write would otherwise leave the spec empty.
             # `cp -p` first, so the copy carries the spec's own permissions
@@ -591,6 +605,10 @@ keeler-land:
         # A landed task's worktree and branch have done their job — but
         # only when the worktree is clean. Uncommitted work is the human's
         # to look at before anything removes it.
+        # Worktrees fan out from the feature branch, and are its to remove;
+        # on main there is nothing of the kind to clean up, and a leftover
+        # is the feature branch's business.
+        [ "$level" = feature ] || continue
         while read -r id state _rest; do
             [ "$state" = done ] || continue
             tid="$(printf '%s' "$id" | tr '[:upper:]' '[:lower:]')"
@@ -623,7 +641,7 @@ keeler-land:
             # squash merge looks exactly like this from here, so the
             # refusal comes with the command that finishes the job.
             if ! git merge-base --is-ancestor "$branch" HEAD; then
-                echo "keeler-land: $branch has commits that are not on $main_branch — left in place, with $worktree. If they landed as a squash merge, finish it yourself:"
+                echo "keeler-land: $branch has commits that are not on $current — left in place, with $worktree. If they landed as a squash merge, finish it yourself:"
                 echo "    git worktree remove $worktree && git branch -D $branch"
                 continue
             fi

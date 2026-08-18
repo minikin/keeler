@@ -60,7 +60,7 @@ The approved spec is what every spawned agent reads, so the graph lives in the s
 | `just keeler-spawn <spec> <task>`             | Cuts the worktree and branch `keeler/<spec-slug>/<task-id>` and hands the task to a headless agent in a detached tmux session, returning at once. Runs only from the feature's branch, **`feat/<spec-slug>`**, and refuses anywhere else. Also refuses a blocked, done or already-spawned task, a spec that differs from HEAD or is not `Approved`, and a machine without tmux. |
 | `just keeler-status <spec>`                   | The board: running, passed, failed, died mid-pipeline, or never spawned — with each run's log and worktree, which are what a resume reads.                                                                             |
 | `just keeler-branch`                          | The gate a task branch runs in place of `just dev`: `dev`, then `crap-delta`, then `mutants-diff` — diff-based by construction.                                                                                        |
-| `just keeler-land`                            | Fan-in, on main: `just dev` first, and only if it is green the baseline is regenerated and **staged, never committed**; a spec whose every box is ticked gets `Status: Implemented` staged beside it, and each landed task's clean worktree and branch are removed. |
+| `just keeler-land`                            | Fan-in, at two levels the branch name decides. On the feature branch `feat/<spec-slug>`: `just dev`, then each landed task's clean worktree and branch are removed. On main: `just dev`, then the baseline is regenerated and **staged, never committed**, and a spec whose every box is ticked gets `Status: Implemented` staged beside it. Anywhere else it refuses. |
 
 Three rules keep parallel branches from lying to each other:
 
@@ -140,7 +140,7 @@ just keeler-graph specs/01-foo.md      # ready / blocked / done
 just keeler-spawn specs/01-foo.md T3   # hand a ready task to an agent on its own branch
 just keeler-status specs/01-foo.md     # what each task is doing right now
 just keeler-branch                     # the gate a task branch runs
-just keeler-land                       # fan-in, on main: gates, then the baseline
+just keeler-land                       # fan-in: worktrees on the feature branch, baseline and Status: on main
 ```
 
 ## Skills
