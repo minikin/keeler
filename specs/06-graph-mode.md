@@ -1,6 +1,6 @@
 # Spec 06 — Graph mode: parallel agents over a task DAG
 
-**Status:** Implemented
+**Status:** Approved
 **Effort:** Large
 **Module:** `.claude/commands/keeler/` (`graph.md` new; `tasks.md`, `review.md`, `mutants.md`, `feature.md` amended), `.claude/keeler.md`, `templates/keeler.yml`, `Justfile`, `scripts/keeler-graph.sh`, `install.sh`, `specs/TEMPLATE.md`, `tests/graph.rs`
 
@@ -129,8 +129,11 @@ When  its tmux session is gone
 Then  .keeler/runs/<spec-slug>/<task-id>.exit holds the exit code of
       `just keeler-branch`, run after the agent finished — not the agent's
       own, which is zero for a turn that ended in FAIL
-And   .keeler/runs/<spec-slug>/<task-id>.log holds everything the session
-      printed, so the run can be read after the window is gone
+And   .keeler/runs/<spec-slug>/<task-id>.log holds the session's progress
+      as it goes — the agent's tool calls and text, not only its final
+      answer — so a run that has been silent for four minutes can be told
+      from one that has been working for four minutes, and the run can be
+      read after the window is gone
 And   `just keeler-status <spec>` lists each task as running, passed or
       failed, deciding "running" by asking tmux and not by the absence of
       a file
@@ -143,11 +146,23 @@ Given a spawned session that died before its pipeline finished — a usage
       limit, a killed terminal, a reboot
 When  `just keeler-status <spec>` runs
 Then  it distinguishes a task that died mid-pipeline from one that failed
-      its gate: the first has no .exit at all, the second has a non-zero
-      one
+      its gate — the gate runs only when the agent finished its turn, so
+      an agent that ended without one leaves a `died` marker and no
+      verdict, and the board says `died` and never `failed` for it
 And   it names the log and the worktree, which together are what a resume
       reads — the commits already on the branch say how far the pipeline
       got
+```
+
+### Scenario: A dead task is resumed by name
+
+```
+Given a task the board reports as died
+When  `just keeler-resume <spec> T1` runs
+Then  it re-runs the task's runner in its existing worktree and branch,
+      whose commits already say how far the pipeline got — creating
+      nothing new, and refusing a task that is running, passed or done
+And   the board offers that command beside every task it reports died
 ```
 
 ### Scenario: Spawning without tmux is refused, and says how to get it
@@ -438,6 +453,13 @@ split it rather than ship a task eight scenarios wide.
       changed and what did not; a red feature branch removes nothing;
       running it on a task branch is refused as before.
 
+- [ ] **T11 — A dead task is resumed by name.** Needs: T3. Scenarios:
+      _A dead task is resumed by name_. Deliverable: `just keeler-resume
+      <spec> <task>`, and the board's line for a died task naming it.
+      Tests: acceptance — with the stub tmux, a died fixture is re-run in
+      place and nothing new is created; running, passed and done fixtures
+      are refused by name.
+
 ---
 
 ## Implementation Notes
@@ -584,7 +606,14 @@ exits zero for any finished turn, including one that ended in FAIL. The
 verdict is the machine's, as everywhere else in this pipeline. Everything
 printed is teed to `<task>.log` beside it, so a run can be read after its
 window is gone; `keeler-status` reads both, and asks `tmux has-session`
-for "running" rather than inferring it from a missing file. The three
+for "running" rather than inferring it from a missing file. Two things
+the first live spawn taught, both now scenarios: `claude -p` prints
+nothing until its final answer, so without `--verbose` a working agent
+and a hung one leave the same empty log for four minutes; and the gate
+must run only after the agent finished its turn — a runner that gates
+unconditionally turns an API death into `failed (exit 101)`, which is
+what the board said about an agent that had done four minutes of honest
+reading and then simply stopped. The three
 states are not two: a session that is gone with no `.exit` died before
 its gate ever ran, which is a different thing from a gate that failed,
 and a resume starts from the commits already on the branch — this was
