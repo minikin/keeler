@@ -418,6 +418,25 @@ split it rather than ship a task eight scenarios wide.
       shipped workflow, and all of them are on the linear road. What is
       unaffected is its behaviour, and that is what the test asserts.
 
+- [ ] **T9 — The graph is read from the feature's branch.** Needs: T8.
+      Scenarios: _Spawning from anywhere but the feature's branch is
+      refused_, _A branch ticks its task and nothing else_. Deliverable:
+      `keeler-spawn` and `keeler-status` read the spec from
+      `feat/<spec-slug>` rather than main, and `keeler-spawn` refuses to
+      run anywhere else. Tests: acceptance — the harness spawns from the
+      feature branch, from main and from an unrelated branch, and asserts
+      the refusal names what it expected; a dependency ticked on the
+      feature branch unblocks its dependent, and one ticked on a task
+      branch does not.
+- [ ] **T10 — Landing happens twice.** Needs: T9. Scenarios: _Landing the
+      last task marks the spec implemented_, _Baseline updates happen at
+      fan-in, on main_. Deliverable: `keeler-land` split by level — on the
+      feature branch it ticks and cleans up; on main it sets `Status:` and
+      moves the baseline, and each refuses the other's work. Tests:
+      acceptance — the harness runs it at both levels and inspects what
+      changed and what did not; running it on a task branch is refused as
+      before.
+
 ---
 
 ## Implementation Notes
