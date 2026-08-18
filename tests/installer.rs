@@ -225,9 +225,15 @@ impl TempProject {
     /// Runs a recipe of the project's installed `Justfile` with the stub
     /// cargo first on PATH, so no real cargo subcommand ever executes.
     fn run_just(&self, recipe: &str) -> std::process::Output {
+        self.run_just_args(&[recipe])
+    }
+
+    /// `run_just` for the recipes that take arguments — and for `--list`,
+    /// which is what an adopter sees when they type `just` with none.
+    fn run_just_args(&self, args: &[&str]) -> std::process::Output {
         let path_var = std::env::var("PATH").unwrap();
         std::process::Command::new("just")
-            .arg(recipe)
+            .args(args)
             .current_dir(&self.dir)
             .env(
                 "PATH",
@@ -686,6 +692,199 @@ fn an_adopting_project_still_receives_every_gate() {
             "the shipped Justfile lost its `{recipe}` recipe",
         );
     }
+}
+
+/// The recipes graph mode adds, as an adopter meets them: the name `just`
+/// lists, and the argument list that follows it in the `Justfile`.
+const GRAPH_MODE_RECIPES: [(&str, &str); 5] = [
+    ("keeler-graph", "keeler-graph SPEC"),
+    ("keeler-spawn", "keeler-spawn SPEC TASK"),
+    ("keeler-status", "keeler-status SPEC"),
+    ("keeler-branch", "keeler-branch"),
+    ("keeler-land", "keeler-land"),
+];
+
+/// A spec of the shape they all had before graph mode existed: task items
+/// with no dependency annotation this parser reads, one of them carrying
+/// the `Deps:` prose older specs wrote by hand.
+const OLD_FORMAT_SPEC: &str = "\
+# Spec 07 — written before graph mode
+
+**Status:** Approved
+
+## Tasks
+
+- [ ] **T1 — The first thing.** Scenarios: _One_. Tests: acceptance.
+- [ ] **T2 — The second thing.** Scenarios: _Two_. Tests: unit.
+- [ ] **T3 — The third thing.** Scenarios: _Three_. Tests: property.
+      Deps: T1.
+
+---
+
+## Implementation Notes
+";
+
+/// The description `just --list` shows for `recipe` — the last comment line
+/// above it, which is the only one `just` carries into the listing.
+fn listed_description(list: &str, recipe: &str) -> Option<String> {
+    list.lines().find_map(|line| {
+        let (name, description) = line.trim().split_once('#')?;
+        (name.split_whitespace().next()? == recipe).then(|| description.trim().to_string())
+    })
+}
+
+/// Graph mode's file set, in the project the installer just wrote it to.
+fn assert_graph_mode_landed(project: &TempProject, justfile: &str) {
+    for file in [
+        ".claude/commands/keeler/graph.md",
+        // The command shells out to it; without it /keeler:graph exits 127.
+        "scripts/keeler-graph.sh",
+    ] {
+        assert!(
+            project.path().join(file).is_file(),
+            "the install left the project without {file}",
+        );
+    }
+    for (_, signature) in GRAPH_MODE_RECIPES {
+        assert!(
+            justfile.lines().any(|line| line == format!("{signature}:")),
+            "the installed Justfile has no `{signature}` recipe",
+        );
+    }
+    // The private helper too: `keeler-spawn` and `keeler-land` both call it,
+    // and a project that got them without it has two recipes that abort.
+    assert!(
+        justfile.lines().any(|line| line == "_main-ref:"),
+        "the installed Justfile has no `_main-ref` helper",
+    );
+    let workflow =
+        std::fs::read_to_string(project.path().join(".github/workflows/keeler.yml")).unwrap();
+    let jobs = job_names(&workflow);
+    for job in ["branch-baseline", "review-record"] {
+        assert!(
+            jobs.iter().any(|name| name == job),
+            "the installed workflow has no `{job}` job: {jobs:?}",
+        );
+    }
+    // A spawned run writes .keeler/runs/<slug>/; that is machinery, not the
+    // project's source, and the installer's ignore list says so.
+    let gitignore = std::fs::read_to_string(project.path().join(".gitignore")).unwrap();
+    assert!(
+        gitignore.lines().any(|line| line.trim() == ".keeler/"),
+        "the installed .gitignore does not ignore .keeler/:\n{gitignore}",
+    );
+}
+
+/// Landing is not arriving: the recipes must be findable where an adopter
+/// looks, and the shipped documentation must say what they are for.
+fn assert_graph_mode_is_documented(project: &TempProject) {
+    // `just` shows the *last* comment line above a recipe and no other, so
+    // a rationale paragraph ending mid-sentence is what the listing carries.
+    let listing = project.run_just_args(&["--list"]);
+    let listing = String::from_utf8_lossy(&listing.stdout).into_owned();
+    for (recipe, _) in GRAPH_MODE_RECIPES {
+        let description = listed_description(&listing, recipe)
+            .unwrap_or_else(|| panic!("`just --list` does not list {recipe}:\n{listing}"));
+        assert!(
+            description.starts_with("Graph mode:"),
+            "`just --list` describes {recipe} with a fragment of the prose above it: {description:?}",
+        );
+    }
+    // /keeler:graph tells the agent to "see .claude/keeler.md" for graph
+    // mode; rules that never mention it send the reader to a section that
+    // is not there.
+    let rules = std::fs::read_to_string(project.path().join(".claude/keeler.md")).unwrap();
+    for (recipe, _) in GRAPH_MODE_RECIPES {
+        assert!(
+            rules.contains(&format!("just {recipe}")),
+            "the installed rules never mention `just {recipe}` — an agent reading them stays on the linear road",
+        );
+    }
+    assert!(
+        rules.contains("/keeler:graph"),
+        "the installed rules never mention the /keeler:graph command",
+    );
+    // And the guide the installer points humans at when it finishes.
+    let guide = std::fs::read_to_string(project.path().join("KEELER.md")).unwrap();
+    assert!(
+        guide.to_lowercase().contains("graph mode") && guide.contains("just keeler-spawn"),
+        "KEELER.md describes the workflow without the parallel road the install just added",
+    );
+}
+
+/// A spec with no dependency annotation anywhere: every task is a root, so
+/// every task is ready.
+fn assert_an_old_spec_reads_as_a_graph(project: &TempProject) {
+    std::fs::write(project.path().join("specs/07-legacy.md"), OLD_FORMAT_SPEC).unwrap();
+    let read = project.run_just_args(&["keeler-graph", "specs/07-legacy.md"]);
+    let report = String::from_utf8_lossy(&read.stdout).into_owned();
+    assert!(
+        read.status.success(),
+        "`just keeler-graph` refused a spec in the old format:\n{report}{}",
+        String::from_utf8_lossy(&read.stderr),
+    );
+    let states: Vec<&str> = report
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    assert_eq!(
+        states,
+        ["T1 ready", "T2 ready", "T3 ready"],
+        "the old format did not read as three ready tasks",
+    );
+}
+
+/// Behaviour, not bytes: the gate an adopter runs is the recipe it was, and
+/// /keeler:feature routes through the same six stages in the same order.
+fn assert_the_linear_road_is_unchanged(project: &TempProject, justfile: &str) {
+    assert!(
+        justfile.contains("\ndev: fmt lint test crap\n"),
+        "the installed `dev` recipe is no longer `dev: fmt lint test crap`",
+    );
+    let feature =
+        std::fs::read_to_string(project.path().join(".claude/commands/keeler/feature.md")).unwrap();
+    let mut at = 0;
+    for stage in [
+        "/keeler:spec",
+        "/keeler:tasks",
+        "/keeler:tdd",
+        "/keeler:qa",
+        "/keeler:review",
+        "/keeler:mutants",
+    ] {
+        let found = feature[at..]
+            .find(stage)
+            .unwrap_or_else(|| panic!("/keeler:feature no longer routes through {stage} in order"));
+        at += found + stage.len();
+    }
+    for detour in ["keeler-spawn", "keeler-branch", "keeler-graph"] {
+        assert!(
+            !feature.contains(detour),
+            "/keeler:feature now routes through {detour} — the linear road changed",
+        );
+    }
+}
+
+#[test]
+fn adopters_opt_in_not_out() {
+    // Given a fresh Rust project
+    let project = TempProject::new("graph-mode-opt-in", MANIFEST_WITH_PROPTEST);
+
+    // When Keeler is installed into it
+    project.install();
+    let justfile = std::fs::read_to_string(project.path().join("Justfile")).unwrap();
+
+    // Then the graph command, the spawn, status, branch and land recipes,
+    // and the review-evidence check land alongside the existing pipeline
+    assert_graph_mode_landed(&project, &justfile);
+    assert_graph_mode_is_documented(&project);
+
+    // And a spec written in the old format — no Needs: on any task — is
+    // read by `just keeler-graph` with every task reported ready
+    assert_an_old_spec_reads_as_a_graph(&project);
+
+    // And `just dev` is the recipe it was, and /keeler:feature routes as it did
+    assert_the_linear_road_is_unchanged(&project, &justfile);
 }
 
 /// Files from the install set a generated project may already contain, with

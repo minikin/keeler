@@ -200,14 +200,18 @@ keeler-branch:
     fi
     just mutants-diff
 
-# Graph mode: what a spec's Tasks section says is ready, blocked or done —
-# `just keeler-graph specs/01-foo.md`. The script's report is the
-# machine's, one `<id> <state> [needs...]` line per task, and the spawn
-# recipe reads it as such; this is the human's view of the same lines,
-# where a blocked task shows only what it is still waiting on — the needs
-# whose own line is not done — rather than every edge it declares. A
-# refusal (a cycle, a need naming no task) is the script's: it exits
-# non-zero naming the line, and nothing here is printed.
+# The script's report is the machine's, one `<id> <state> [needs...]` line
+# per task, and the spawn recipe reads it as such; this is the human's view
+# of the same lines, where a blocked task shows only what it is still
+# waiting on — the needs whose own line is not done — rather than every
+# edge it declares. A refusal (a cycle, a need naming no task) is the
+# script's: it exits non-zero naming the line, and nothing here is printed.
+#
+# `just` carries the *last* comment line into `just --list`, so every
+# recipe here ends its documentation with the line an adopter should read
+# there. The rationale above it is for whoever opens this file.
+#
+# Graph mode: what a spec's Tasks section says is ready, blocked or done — `just keeler-graph specs/01-foo.md`.
 keeler-graph SPEC:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -227,15 +231,16 @@ keeler-graph SPEC:
             }
         }'
 
-# Graph mode: hand one ready task to a headless agent on its own branch —
-# `just keeler-spawn specs/01-foo.md T3`. It refuses before creating
-# anything when tmux is missing, when the spec differs from HEAD or is not
-# Approved (the worktree is cut from HEAD, so an uncommitted graph is one
-# the agent would never see), when the graph script says the task is
-# blocked, and when the task already has a worktree. Otherwise it creates a
-# worktree beside the repository on keeler/<spec-slug>/<task-id>, writes a
-# runner script under .keeler/runs/, starts a detached tmux session on it
-# and returns at once. `just keeler-status <spec>` is the board afterwards.
+# It refuses before creating anything when tmux is missing, when the spec
+# differs from HEAD or is not Approved (the worktree is cut from HEAD, so an
+# uncommitted graph is one the agent would never see), when the graph script
+# says the task is blocked, and when the task already has a worktree.
+# Otherwise it creates a worktree beside the repository on
+# keeler/<spec-slug>/<task-id>, writes a runner script under .keeler/runs/,
+# starts a detached tmux session on it and returns at once.
+# `just keeler-status <spec>` is the board afterwards.
+#
+# Graph mode: hand one ready task to a headless agent on its own branch — `just keeler-spawn specs/01-foo.md T3`.
 keeler-spawn SPEC TASK:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -399,11 +404,11 @@ keeler-spawn SPEC TASK:
     echo "  verdict:  $exit_file   (the exit code of just keeler-branch, once the run ends)"
     echo "  board:    just keeler-status $rel"
 
-# Graph mode: what every task of a spec is doing right now — running,
-# passed, failed, died mid-pipeline, or never spawned. "Running" is tmux's
-# answer, never the absence of a file; a task with no verdict at all died
-# before its gate ever ran, which is a different thing from a gate that
-# failed, and its log and worktree are what a resume reads.
+# "Running" is tmux's answer, never the absence of a file; a task with no
+# verdict at all died before its gate ever ran, which is a different thing
+# from a gate that failed, and its log and worktree are what a resume reads.
+#
+# Graph mode: what every task of a spec is doing right now — running, passed, failed, died mid-pipeline, or never spawned.
 keeler-status SPEC:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -450,13 +455,12 @@ keeler-status SPEC:
 keeler-upgrade:
     curl -fsSL https://raw.githubusercontent.com/minikin/keeler/main/install.sh | bash -s .
 
-# Graph mode: fan-in, on main — gates first, baseline second, staged and
-# never committed. `just dev` runs first and the baseline moves only if it
-# was green: a baseline recorded from a red main would write "broken" down
-# as the new normal, and two branches that were each green alone can be
-# wrong together. Not `dev-full` — hours of mutants at every fan-in is a
-# cost nobody would pay, and `mutants-diff` on a freshly merged main has
-# nothing to diff.
+# `just dev` runs first and the baseline moves only if it was green: a
+# baseline recorded from a red main would write "broken" down as the new
+# normal, and two branches that were each green alone can be wrong
+# together. Not `dev-full` — hours of mutants at every fan-in is a cost
+# nobody would pay, and `mutants-diff` on a freshly merged main has nothing
+# to diff.
 #
 # Then it finishes what the fan-in finished: a spec whose every box is
 # ticked — as committed, never as the working tree happens to read — gets
@@ -467,6 +471,8 @@ keeler-upgrade:
 # commits main does not have are each named and left where they are.
 # Nothing here is committed, and nothing a human has not seen is thrown
 # away.
+#
+# Graph mode: fan-in, on main — gates first, baseline second, staged and never committed.
 keeler-land:
     #!/usr/bin/env bash
     set -euo pipefail
