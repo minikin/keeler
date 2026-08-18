@@ -97,15 +97,20 @@ impl Repo {
 
     /// Runs git with a fixed identity and no user config, so a global
     /// `commit.gpgsign` cannot hang the suite waiting for a key.
-    fn git(&self, args: &[&str]) -> String {
-        let output = std::process::Command::new("git")
+    fn git_output(&self, args: &[&str]) -> Output {
+        std::process::Command::new("git")
             .args(["-c", "user.email=probe@keeler", "-c", "user.name=probe"])
             .args(args)
             .current_dir(&self.0)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_SYSTEM", "/dev/null")
             .output()
-            .expect("failed to run git");
+            .expect("failed to run git")
+    }
+
+    /// `git_output`, asserting success and returning stdout trimmed.
+    fn git(&self, args: &[&str]) -> String {
+        let output = self.git_output(args);
         assert!(
             output.status.success(),
             "git {args:?} failed:\n{}",
@@ -323,6 +328,21 @@ fn a_review_record_must_name_a_commit_on_its_own_branch() {
         "an honest record was refused in a clone with only origin/ refs:\n{}",
         said(&out)
     );
+
+    // And in the one CI has for a pull request from a fork: the branch is
+    // known by no name at all, only as the HEAD that was checked out
+    for ref_ in [
+        format!("refs/remotes/origin/{BRANCH}"),
+        format!("refs/heads/{BRANCH}"),
+    ] {
+        let _ = clone.git_output(&["update-ref", "-d", &ref_]);
+    }
+    let out = clone.check(&script, BRANCH, "main");
+    assert!(
+        out.status.success(),
+        "an honest record was refused when the branch exists only as HEAD:\n{}",
+        said(&out)
+    );
 }
 
 #[test]
@@ -385,6 +405,57 @@ fn a_malformed_record_or_branch_is_refused_and_does_not_crash_the_gate() {
         assert!(
             said(&out).contains(branch) && said(&out).contains("keeler/<spec-slug>/<task-id>"),
             "the refusal of `{branch}` does not name the branch and the shape:\n{}",
+            said(&out)
+        );
+    }
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::prelude::ProptestConfig {
+        cases: 12,
+        failure_persistence: Some(Box::new(
+            proptest::test_runner::FileFailurePersistence::WithSource("proptest-regressions"),
+        )),
+        ..proptest::prelude::ProptestConfig::default()
+    })]
+
+    /// Over any history — some commits on main before the branch, some
+    /// on the branch, some on main after it left — a record passes for
+    /// exactly the commits the branch itself made: ancestors of its head
+    /// that are not ancestors of main. Either half alone lets a wrong
+    /// commit through; the invariant is the two together.
+    #[test]
+    fn a_record_passes_for_exactly_the_commits_the_branch_made(
+        before in 1usize..3,
+        on_branch in 1usize..3,
+        after in 0usize..2,
+        pick in 0usize..7,
+    ) {
+        let script = run_script(&job_block(&shipped_workflow(), REVIEW_JOB));
+        let repo = Repo::new("property");
+        let mut commits = Vec::new();
+        for i in 0..before {
+            commits.push((repo.commit(&format!("main-{i}.md"), "m\n", "main"), false));
+        }
+        repo.git(&["checkout", "-qb", BRANCH]);
+        for i in 0..on_branch {
+            commits.push((repo.commit(&format!("branch-{i}.md"), "b\n", "branch"), true));
+        }
+        repo.git(&["checkout", "-q", "main"]);
+        for i in 0..after {
+            commits.push((repo.commit(&format!("later-{i}.md"), "l\n", "later"), false));
+        }
+        repo.git(&["checkout", "-q", BRANCH]);
+
+        let (sha, own) = &commits[pick % commits.len()];
+        repo.record(SLUG, TASK, &record_body(SLUG, TASK, sha));
+        let out = repo.check(&script, BRANCH, "main");
+        proptest::prop_assert_eq!(
+            out.status.success(),
+            *own,
+            "commit {} (own: {}) — the check said:\n{}",
+            sha,
+            own,
             said(&out)
         );
     }

@@ -145,7 +145,11 @@ jobs:
               || git rev-parse --verify -q "$1^{commit}"
           }
           base_ref="${BASE_REF:-main}"
-          head=$(resolve "$HEAD_REF") || fail "cannot resolve branch $HEAD_REF — is the checkout fetch-depth: 0?"
+          # A pull request from a fork has no ref for its branch here at
+          # all — only the HEAD that was checked out, whose ancestry is
+          # the branch's plus the base's, and the base is excluded below.
+          head=$(resolve "$HEAD_REF" || git rev-parse --verify -q "HEAD^{commit}") \
+            || fail "cannot resolve branch $HEAD_REF — is the checkout fetch-depth: 0?"
           base=$(resolve "$base_ref") || fail "cannot resolve base branch $base_ref"
           git rev-parse --verify -q "$sha^{commit}" >/dev/null \
             || fail "$record: Commit: $sha is not a commit in this repository"
