@@ -63,6 +63,10 @@ dev)
     exit "${KEELER_STUB_DEV_EXIT:-0}"
     ;;
 crap-baseline)
+    if [ "${KEELER_STUB_BASELINE_EXIT:-0}" != 0 ]; then
+        echo "crap-baseline stub: the measurement itself broke" >&2
+        exit "$KEELER_STUB_BASELINE_EXIT"
+    fi
     if [ "${KEELER_STUB_BASELINE_SKIP:-0}" = 1 ]; then
         echo "no Rust sources to measure — skipping (no library or binary targets)"
         exit 0
@@ -90,6 +94,9 @@ struct Project {
     /// Whether the stub `just crap-baseline` produces nothing, the way the
     /// shipped recipe does in a project with no Rust targets to measure.
     baseline_skip: bool,
+    /// The exit code the stub `just crap-baseline` reports — the
+    /// measurement machinery breaking is not the same as a red main.
+    baseline_exit: i32,
 }
 
 impl Project {
@@ -116,6 +123,7 @@ impl Project {
             dir,
             dev_exit: 0,
             baseline_skip: false,
+            baseline_exit: 0,
         };
         project.git(&["init", "-qb", branch]);
         project.git(&["add", "-A"]);
@@ -158,6 +166,7 @@ impl Project {
             .env("KEELER_STUB_JUST_LOG", self.dir.join("just-calls"))
             .env("KEELER_STUB_DEV_EXIT", self.dev_exit.to_string())
             .env("KEELER_STUB_NEW_BASELINE", NEW_BASELINE)
+            .env("KEELER_STUB_BASELINE_EXIT", self.baseline_exit.to_string())
             .env(
                 "KEELER_STUB_BASELINE_SKIP",
                 if self.baseline_skip { "1" } else { "0" },
@@ -368,6 +377,52 @@ fn a_project_with_nothing_to_measure_stages_nothing() {
         both(&output)
     );
     assert!(project.staged().is_empty());
+}
+
+#[test]
+fn a_detached_head_is_refused_by_the_name_it_has() {
+    // Given a working tree on no branch at all — the shape a mid-rebase or
+    // a `git checkout <sha>` leaves, where "am I on main?" has no answer
+    let project = Project::new("detached");
+    project.git(&["checkout", "-q", "--detach"]);
+
+    // When `just keeler-land` runs
+    let output = project.land();
+
+    // Then it refuses before running any gate, saying what it is on
+    assert!(
+        !output.status.success(),
+        "keeler-land landed off a branch:\n{}",
+        both(&output)
+    );
+    assert!(
+        both(&output).contains("detached HEAD"),
+        "the refusal does not say the tree is on no branch:\n{}",
+        both(&output)
+    );
+    assert!(project.gates().is_empty(), "{:?}", project.calls());
+    assert_eq!(project.baseline(), OLD_BASELINE);
+}
+
+#[test]
+fn a_baseline_that_could_not_be_regenerated_is_not_staged() {
+    // Given a green main whose measurement machinery itself breaks
+    let mut project = Project::new("baseline-broke");
+    project.baseline_exit = 2;
+
+    // When `just keeler-land` runs on main
+    let output = project.land();
+
+    // Then it fails, and stages nothing: only a baseline that was actually
+    // regenerated is one a human can be asked to commit
+    assert!(
+        !output.status.success(),
+        "a broken measurement landed anyway:\n{}",
+        both(&output)
+    );
+    assert!(project.staged().is_empty(), "a failed run staged something");
+    assert_eq!(project.baseline(), OLD_BASELINE);
+    assert_eq!(project.git(&["status", "--porcelain"]), "");
 }
 
 #[test]
