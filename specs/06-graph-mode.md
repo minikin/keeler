@@ -1,6 +1,6 @@
 # Spec 06 — Graph mode: parallel agents over a task DAG
 
-**Status:** Implemented
+**Status:** Approved
 **Effort:** Large
 **Module:** `.claude/commands/keeler/` (`graph.md` new; `tasks.md`, `review.md`, `mutants.md`, `feature.md` amended), `.claude/keeler.md`, `templates/keeler.yml`, `Justfile`, `scripts/keeler-graph.sh`, `install.sh`, `specs/TEMPLATE.md`, `tests/graph.rs`
 
@@ -169,6 +169,16 @@ Then  it refuses before creating anything, saying which — the worktree is
       unapproved spec is not a contract any agent should build from
 ```
 
+### Scenario: Spawning from anywhere but the feature's branch is refused
+
+```
+Given a checkout on any branch other than feat/<spec-slug> for the spec
+      being spawned from
+When  `just keeler-spawn <spec> T3` runs
+Then  it refuses before creating anything, naming the branch it expected
+And   no worktree, branch or run directory is created
+```
+
 ### Scenario: Spawning a task that is already spawned is refused
 
 ```
@@ -219,10 +229,11 @@ And   crap-baseline.json is regenerated and staged, not committed, and the
 And   the working tree holds exactly that staged change and nothing else
 ```
 
-### Scenario: keeler-land refuses to run anywhere but main
+### Scenario: keeler-land refuses a task branch
 
 ```
-Given the current branch is keeler/06-graph-mode/t3
+Given the current branch is keeler/06-graph-mode/t3 — neither main nor
+      the feature's branch
 When  `just keeler-land` runs
 Then  it refuses before running any gate, naming the branch it is on
 And   crap-baseline.json and the spec are untouched
@@ -255,8 +266,9 @@ Given a task branch keeler/06-graph-mode/t2 whose pipeline reached
 When  the stage finishes
 Then  T2's checkbox is ticked in the spec on that branch
 And   the spec's Status: line is unchanged
-And   `just keeler-graph` on main still reports T2 as not done, because
-      readiness is read from main, not from an unlanded branch
+And   `just keeler-graph` on feat/06-graph-mode still reports T2 as not
+      done, because readiness is read from the feature branch and not
+      from an unlanded task branch
 ```
 
 ### Scenario: Landing the last task marks the spec implemented
@@ -368,7 +380,7 @@ split it rather than ship a task eight scenarios wide.
 - [x] **T5 — keeler-land: gates first, baseline second, staged not
       committed.** Needs: T1. Scenarios: _Baseline updates happen at
       fan-in, on main_, _A branch that was green alone can still redden
-      main_, _keeler-land refuses to run anywhere but main_. Deliverable:
+      main_, _keeler-land refuses a task branch_. Deliverable:
       `just keeler-land`, and the shared main-resolution helper it and
       `mutants-diff` both call. Tests: acceptance — the harness runs the
       recipe on a fixture main and inspects the index; a fixture whose
@@ -406,6 +418,25 @@ split it rather than ship a task eight scenarios wide.
       `TEMPLATE.md` and `tasks.md`, T5 rewrites `review.md` and the
       shipped workflow, and all of them are on the linear road. What is
       unaffected is its behaviour, and that is what the test asserts.
+
+- [x] **T9 — The graph is read from the feature's branch.** Needs: T8.
+      Scenarios: _Spawning from anywhere but the feature's branch is
+      refused_, _A branch ticks its task and nothing else_. Deliverable:
+      `keeler-spawn` and `keeler-status` read the spec from
+      `feat/<spec-slug>` rather than main, and `keeler-spawn` refuses to
+      run anywhere else. Tests: acceptance — the harness spawns from the
+      feature branch, from main and from an unrelated branch, and asserts
+      the refusal names what it expected; a dependency ticked on the
+      feature branch unblocks its dependent, and one ticked on a task
+      branch does not.
+- [x] **T10 — Landing happens twice.** Needs: T9. Scenarios: _Landing the
+      last task marks the spec implemented_, _Baseline updates happen at
+      fan-in, on main_. Deliverable: `keeler-land` split by level — on the
+      feature branch it ticks and cleans up; on main it sets `Status:` and
+      moves the baseline, and each refuses the other's work. Tests:
+      acceptance — the harness runs it at both levels and inspects what
+      changed and what did not; a red feature branch removes nothing;
+      running it on a task branch is refused as before.
 
 ---
 
@@ -567,12 +598,33 @@ tracking, or N terminals by hand — are respectively half a scheduler and
 no parallelism; tmux is the thing that is neither. It becomes a
 requirement, checked by `install.sh` the way `just` is.
 
-Readiness is read from the spec **on main**. A tick on an unlanded branch
-unblocks nothing, which is what keeps five parallel branches from racing
-each other's dependencies. The tick still happens on the branch — it is
-how anyone can see the task was finished — and `keeler-land` sets
-`Status: Implemented` only when every box on main is ticked. `Status:` is
-therefore the one line no branch may write.
+**Readiness is read from the spec on the feature's branch,
+`feat/<spec-slug>`.** A feature gets one branch and its tasks fan out from
+it; `keeler-spawn` refuses to run anywhere else, so which branch holds the
+graph is a name a machine checks rather than a convention someone
+remembers. A tick on a *task* branch unblocks nothing — that is what keeps
+parallel branches from racing each other's dependencies — while a tick on
+the feature branch does, because arriving there **is** the landing. The
+tick still happens on the task branch, which is how anyone sees the work
+was finished, and `Status:` remains the one line no task branch may write.
+
+This is the amendment the first real use of graph mode earned. Reading
+readiness from main is right only when every task lands on main directly;
+with a branch per feature it is wrong, and wrong in the silent direction —
+a task whose dependency had landed on the feature branch read as blocked,
+so the graph refused work that was ready on disk. The invariant survives
+at the level where it belongs.
+
+**Landing happens twice, and the two are not the same.** A task lands into
+the feature branch: the merge carries its tick there and its worktree
+goes. The feature lands into main: that is where `Status:` becomes
+`Implemented`, and where the baseline moves — the baseline is the whole
+team's reference, and a moved one must be visible in one place rather
+than in every feature's branch. **The gate runs first at both levels**,
+for the same reason at each: two branches green alone can be wrong
+together, and a red branch stages nothing and removes nothing — cleaning
+up on a red feature branch would throw away the only place the offending
+work can still be looked at.
 
 `keeler-land` runs in one order and refuses to run in any other:
 `just dev` on main first, the baseline second, and only if the first was
@@ -607,8 +659,8 @@ the fan-out would be gone. Under the per-region rule they stay parallel,
 and the fan-in works only if each adds where the rule says. If that fails
 in practice, the rule was wrong and the spec should say so.
 
-**"Main" is one thing, decided once.** `keeler-land` refuses to run off
-it, and finds it exactly the way `mutants-diff` already does — the first
+**"Main" is one thing, decided once.** `keeler-land` tells it from a
+feature branch by it, and finds it exactly the way `mutants-diff` already does — the first
 of `origin/main`, `origin/master`, `main`, `master` that exists — through
 one shared helper, so no two recipes can disagree about where main is.
 `crap-baseline` is *not* changed: `/keeler:feature` runs it at step 0 on

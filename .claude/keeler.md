@@ -56,16 +56,16 @@ The approved spec is what every spawned agent reads, so the graph lives in the s
 
 | Command                                       | What it does                                                                                                                                                                                                          |
 | --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/keeler:graph` — `just keeler-graph <spec>`  | Reads the graph: which tasks are ready, blocked (naming what they wait on) or done. A cycle or a `Needs:` naming no task is refused by the parser, naming the line. Readiness is read from the spec **on main** — a tick on an unlanded branch unblocks nothing. |
-| `just keeler-spawn <spec> <task>`             | Cuts the worktree and branch `keeler/<spec-slug>/<task-id>` and hands the task to a headless agent in a detached tmux session, returning at once. Refuses a blocked or already-spawned task, a spec that differs from HEAD or is not `Approved`, and a machine without tmux. |
+| `/keeler:graph` — `just keeler-graph <spec>`  | Reads the graph: which tasks are ready, blocked (naming what they wait on) or done. A cycle or a `Needs:` naming no task is refused by the parser, naming the line. Readiness is read from the spec on the feature's own branch, **`feat/<spec-slug>`** — a tick on a task branch unblocks nothing until it lands there. |
+| `just keeler-spawn <spec> <task>`             | Cuts the worktree and branch `keeler/<spec-slug>/<task-id>` and hands the task to a headless agent in a detached tmux session, returning at once. Runs only from the feature's branch, **`feat/<spec-slug>`**, and refuses anywhere else. Also refuses a blocked, done or already-spawned task, a spec that differs from HEAD or is not `Approved`, and a machine without tmux. |
 | `just keeler-status <spec>`                   | The board: running, passed, failed, died mid-pipeline, or never spawned — with each run's log and worktree, which are what a resume reads.                                                                             |
 | `just keeler-branch`                          | The gate a task branch runs in place of `just dev`: `dev`, then `crap-delta`, then `mutants-diff` — diff-based by construction.                                                                                        |
-| `just keeler-land`                            | Fan-in, on main: `just dev` first, and only if it is green the baseline is regenerated and **staged, never committed**; a spec whose every box is ticked gets `Status: Implemented` staged beside it, and each landed task's clean worktree and branch are removed. |
+| `just keeler-land`                            | Fan-in, at two levels the branch name decides. On the feature branch `feat/<spec-slug>`: `just dev`, then each landed task's clean worktree and branch are removed. On main: `just dev`, then the baseline is regenerated and **staged, never committed**, and a spec whose every box is ticked gets `Status: Implemented` staged beside it. Anywhere else it refuses. |
 
 Three rules keep parallel branches from lying to each other:
 
 - **A branch measures the shared reference; it never moves it.** `crap-baseline.json` and the coverage bar in the `cov` recipe settle at fan-in, on main. CI refuses a `keeler/*` pull request whose diff touched either.
-- **A branch ticks its own task and leaves `Status:` alone.** `Status:` is the one line no branch may write; `just keeler-land` sets it on main once every box there is ticked.
+- **A task branch ticks its own task and leaves `Status:` alone.** `Status:` is the one line no task branch may write; `just keeler-land` sets it on main once every box is ticked.
 - **Review leaves a record.** /keeler:review writes `reviews/<spec-slug>/<task-id>.md`, and CI on a `keeler/*` pull request fails when it is missing or names a commit the branch did not make.
 
 `<spec-slug>` is the spec's file name without `.md`, and the task id is lowercased on the way into every path: `specs/01-login.md` T3 gives the branch `keeler/01-login/t3`, the worktree `../<repo>-01-login-t3`, the tmux session `keeler-01-login-t3` and the record `reviews/01-login/t3.md`. tmux is graph mode's one extra requirement; `just` and the cargo tools are the same ones the linear road uses.
@@ -140,7 +140,7 @@ just keeler-graph specs/01-foo.md      # ready / blocked / done
 just keeler-spawn specs/01-foo.md T3   # hand a ready task to an agent on its own branch
 just keeler-status specs/01-foo.md     # what each task is doing right now
 just keeler-branch                     # the gate a task branch runs
-just keeler-land                       # fan-in, on main: gates, then the baseline
+just keeler-land                       # fan-in: worktrees on the feature branch, baseline and Status: on main
 ```
 
 ## Skills

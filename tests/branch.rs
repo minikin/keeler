@@ -184,6 +184,45 @@ fn the_branch_gate_leaves_dev_alone() {
 }
 
 #[test]
+fn every_recipe_is_listed_by_a_summary_not_by_the_tail_of_its_rationale() {
+    // `just --list` is the road into the whole Justfile, and it shows only
+    // the *last* comment line above a recipe. A recipe documented with a
+    // paragraph is therefore listed by whatever that paragraph happened to
+    // end on — "run. A test that is never run is not a test." — which
+    // reads as noise to someone meeting the project for the first time.
+    let output = Command::new(real_just())
+        .arg("--list")
+        .current_dir(repo_root())
+        .output()
+        .expect("failed to run just --list");
+    let listing = String::from_utf8_lossy(&output.stdout).into_owned();
+
+    let mut fragments = Vec::new();
+    for line in listing.lines() {
+        let Some((name, summary)) = line.split_once('#') else {
+            continue;
+        };
+        let name = name.trim();
+        let summary = summary.trim();
+        if name.is_empty() || summary.is_empty() {
+            continue;
+        }
+        // A summary opens the way a sentence or a code span does. A
+        // fragment opens mid-clause: lowercase prose, or a word that ended
+        // someone else's sentence.
+        let opens = summary.chars().next().expect("a non-empty summary");
+        if !(opens.is_ascii_uppercase() || opens == '`') {
+            fragments.push(format!("{name}  # {summary}"));
+        }
+    }
+    assert!(
+        fragments.is_empty(),
+        "these recipes are listed by the tail of their rationale, not by a summary:\n{}",
+        fragments.join("\n")
+    );
+}
+
+#[test]
 fn the_branch_gate_is_listed_by_what_it_does() {
     // `just --list` is the road into every recipe, and it shows the last
     // comment line above one. A recipe whose rationale ends in an aside is
@@ -526,6 +565,13 @@ fn a_branch_ticks_its_task_and_nothing_else() {
     repo.git(&["add", "-A"]);
     repo.git(&["commit", "-qm", "keeler"]);
     repo.commit(SPEC, &fixture_spec(false), "spec");
+    // ... on the branch its feature is developed on, which is where the
+    // graph is read from and where its tasks fan out
+    let feature = format!(
+        "feat/{}",
+        SPEC.trim_start_matches("specs/").trim_end_matches(".md")
+    );
+    repo.git(&["checkout", "-qb", &feature]);
 
     // When the stage finishes
     repo.git(&["checkout", "-qb", TICK_BRANCH]);
@@ -534,12 +580,12 @@ fn a_branch_ticks_its_task_and_nothing_else() {
     // Then T2's checkbox is ticked in the spec on that branch, and the
     // branch touched the spec and nothing else in it
     assert_eq!(
-        repo.git(&["diff", "--name-only", "main", "HEAD"]),
+        repo.git(&["diff", "--name-only", &feature, "HEAD"]),
         SPEC,
         "the tick reached beyond the spec"
     );
     let changed: Vec<String> = repo
-        .git(&["diff", "-U0", "main", "HEAD", "--", SPEC])
+        .git(&["diff", "-U0", &feature, "HEAD", "--", SPEC])
         .lines()
         .filter(|line| {
             (line.starts_with('+') || line.starts_with('-'))
@@ -558,31 +604,32 @@ fn a_branch_ticks_its_task_and_nothing_else() {
     );
 
     // And the spec's Status: line is unchanged
-    let on_main = repo.git(&["show", &format!("main:{SPEC}")]);
+    let on_feature = repo.git(&["show", &format!("{feature}:{SPEC}")]);
     let on_branch = repo.git(&["show", &format!("HEAD:{SPEC}")]);
     assert_eq!(
-        status_line(&on_main),
+        status_line(&on_feature),
         status_line(&on_branch),
         "the branch rewrote the spec's Status: line"
     );
 
-    // And `just keeler-graph` on main still reports T2 as not done,
-    // because readiness is read from main, not from an unlanded branch
+    // And `just keeler-graph` on the feature branch still reports T2 as
+    // not done, because readiness is read from there and not from an
+    // unlanded task branch
     let on_branch = keeler_graph(&repo, SPEC);
     assert_eq!(state_of(&on_branch, "T2"), "done", "{}", said(&on_branch));
-    repo.git(&["checkout", "-q", "main"]);
-    let on_main = keeler_graph(&repo, SPEC);
+    repo.git(&["checkout", "-q", &feature]);
+    let on_feature = keeler_graph(&repo, SPEC);
     assert_eq!(
-        state_of(&on_main, "T2"),
+        state_of(&on_feature, "T2"),
         "ready",
-        "a tick on an unlanded branch was read as done on main:\n{}",
-        said(&on_main)
+        "a tick on an unlanded task branch was read as done on the feature branch:\n{}",
+        said(&on_feature)
     );
     assert_eq!(
-        state_of(&on_main, "T3"),
+        state_of(&on_feature, "T3"),
         "blocked",
-        "a tick on an unlanded branch unblocked the task after it:\n{}",
-        said(&on_main)
+        "a tick on an unlanded task branch unblocked the task after it:\n{}",
+        said(&on_feature)
     );
 }
 

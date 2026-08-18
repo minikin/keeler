@@ -173,6 +173,10 @@ impl Project {
         project.git(&["init", "-qb", "main"]);
         project.git(&["add", "-A"]);
         project.git(&["commit", "-qm", "fixture"]);
+        // A feature is developed on its own branch, and that is where its
+        // tasks fan out from — so that is where a fixture stands unless a
+        // test moves it.
+        project.git(&["checkout", "-qb", &format!("feat/{slug}")]);
         project
     }
 
@@ -407,9 +411,13 @@ fn spawning_a_task_creates_an_isolated_agent() {
         "the recipe does not say how to attach:\n{said}"
     );
 
-    // And the main working tree is untouched
+    // And the working tree the spawn was run from is untouched — still on
+    // the feature branch, at the same commit, with nothing written into it
     assert_eq!(project.git(&["rev-parse", "HEAD"]), before);
-    assert_eq!(project.git(&["symbolic-ref", "--short", "HEAD"]), "main");
+    assert_eq!(
+        project.git(&["symbolic-ref", "--short", "HEAD"]),
+        format!("feat/{SLUG}")
+    );
     assert_eq!(project.git(&["status", "--porcelain"]), "");
 }
 
@@ -554,6 +562,31 @@ fn task_line<'a>(listed: &'a str, id: &str) -> &'a str {
 }
 
 #[test]
+fn the_board_reads_the_graph_that_spawn_and_land_read() {
+    // Given an uncommitted tick — someone editing the spec, or a stage
+    // that has not been committed yet
+    let project = Project::new("uncommitted-tick");
+    let spec = project.dir.join("specs").join(format!("{SLUG}.md"));
+    let text = std::fs::read_to_string(&spec).unwrap();
+    std::fs::write(&spec, text.replace("- [ ] **T3", "- [x] **T3")).unwrap();
+
+    // When the board is read
+    let listed = stdout(&project.status(SLUG));
+
+    // Then T3 is not done. keeler-spawn refuses a spec that differs from
+    // HEAD and computes readiness from main; keeler-land acts only on
+    // committed ticks. A board answering from the working tree would be
+    // the one place in graph mode where an uncommitted edit counts —
+    // reporting a task finished that neither of the other two believes,
+    // and hiding the log and worktree a resume needs.
+    let line = task_line(&listed, "T3");
+    assert!(
+        !line.contains("done"),
+        "the board counted an uncommitted tick:\n{listed}"
+    );
+}
+
+#[test]
 fn a_task_that_landed_after_a_failed_run_reads_as_done() {
     // Given a task whose gate once failed — a verdict on disk saying so —
     // and which was then fixed and landed, so the graph counts it done
@@ -566,11 +599,13 @@ fn a_task_that_landed_after_a_failed_run_reads_as_done() {
         project.runs(SLUG).join("t3.exit").exists(),
         "the fixture wrote no verdict; there is nothing to outrank"
     );
-    // The task then lands: its box is ticked on main, as keeler-land
-    // leaves it
+    // The task then lands: its box is ticked and committed on main, which
+    // is the state keeler-land leaves and the state the board reads
     let spec = project.dir.join("specs").join(format!("{SLUG}.md"));
     let text = std::fs::read_to_string(&spec).unwrap();
     std::fs::write(&spec, text.replace("- [ ] **T3", "- [x] **T3")).unwrap();
+    project.git(&["add", "-A"]);
+    project.git(&["commit", "-qm", "land T3"]);
 
     // When the board is read
     let listed = stdout(&project.status(SLUG));
@@ -692,6 +727,83 @@ fn spawning_without_tmux_is_refused_and_says_how_to_get_it() {
     assert!(
         !project.path().join(".keeler").exists(),
         "a run directory was created"
+    );
+}
+
+#[test]
+fn spawning_from_anywhere_but_the_features_branch_is_refused() {
+    // Given a checkout on main, and on an unrelated branch — neither is
+    // the branch this spec's feature is developed on
+    let project = Project::new("wrong-branch");
+    for branch in ["main", "some-other-work"] {
+        if branch == "main" {
+            project.git(&["checkout", "-q", "main"]);
+        } else {
+            project.git(&["checkout", "-qb", branch]);
+        }
+
+        // When a ready task is spawned from there
+        let output = project.spawn(SLUG, "T3");
+
+        // Then it refuses, naming the branch it expected. Which branch
+        // holds the graph is a name a machine checks: readiness is read
+        // from the feature's branch, and spawning from anywhere else
+        // would cut a worktree from a history the graph never saw.
+        let said = both(&output);
+        assert!(
+            !output.status.success(),
+            "a spawn ran from {branch}:\n{said}"
+        );
+        assert!(
+            said.contains(&format!("feat/{SLUG}")),
+            "the refusal from {branch} does not name the branch it expected:\n{said}"
+        );
+        assert!(
+            !project.worktree(SLUG, "T3").exists(),
+            "a worktree was created from {branch}"
+        );
+        assert!(
+            !project.dir.join(".keeler").join("runs").exists(),
+            "a run directory was created from {branch}"
+        );
+        assert_eq!(
+            project.git(&["branch", "--list", &format!("keeler/{SLUG}/t3")]),
+            "",
+            "a branch was created from {branch}"
+        );
+    }
+}
+
+#[test]
+fn a_dependency_ticked_on_the_feature_branch_unblocks_its_dependent() {
+    // Given a feature branch where T1 is not yet done, so T3 is blocked
+    let project = Project::with_spec(
+        "feature-branch-readiness",
+        SLUG,
+        &spec_body("Approved", &TASKS.replace("- [x] **T1", "- [ ] **T1")),
+    );
+    let output = project.spawn(SLUG, "T3");
+    assert!(
+        !output.status.success(),
+        "T3 spawned with its need unticked:\n{}",
+        both(&output)
+    );
+
+    // When T1 lands on the feature branch — its tick arriving there is
+    // the landing
+    let spec = project.dir.join("specs").join(format!("{SLUG}.md"));
+    std::fs::write(&spec, spec_body("Approved", TASKS)).unwrap();
+    project.git(&["add", "-A"]);
+    project.git(&["commit", "-qm", "land T1 into the feature branch"]);
+
+    // Then T3 spawns. Reading readiness from main would have called this
+    // blocked while its dependency sat ready on disk — work refused for a
+    // reason that was true of another branch.
+    let output = project.spawn(SLUG, "T3");
+    assert!(
+        output.status.success(),
+        "a dependency landed on the feature branch did not unblock its dependent:\n{}",
+        both(&output)
     );
 }
 
@@ -1076,9 +1188,9 @@ fn run_check(script: &str, path: &str) -> String {
 /// shared main-resolution helper is T5's deliverable and a second
 /// resolution here is the disagreement the spec forbids.
 #[test]
-fn readiness_is_read_from_the_spec_on_main() {
-    // Given a spec whose T1 is not done on main — so T3, which needs it,
-    // is blocked there — and a branch that ticks T1 and commits it
+fn readiness_is_read_from_the_committed_spec_not_the_task_branch() {
+    // Given a spec whose T1 is not done on the feature branch — so T3,
+    // which needs it, is blocked — and a task branch that ticks T1
     let project = Project::with_spec(
         "readiness",
         SLUG,
@@ -1088,17 +1200,20 @@ fn readiness_is_read_from_the_spec_on_main() {
     let spec = project.path().join("specs").join(format!("{SLUG}.md"));
     std::fs::write(&spec, spec_body("Approved", TASKS)).unwrap();
     project.git(&["add", "-A"]);
-    project.git(&["commit", "-qm", "tick T1 on the branch"]);
+    project.git(&["commit", "-qm", "tick T1 on the task branch"]);
+    // The task branch keeps its tick to itself: back on the feature
+    // branch, T1 is still unticked
+    project.git(&["checkout", "-q", &format!("feat/{SLUG}")]);
 
-    // When `just keeler-spawn <spec> T3` runs on that branch
+    // When `just keeler-spawn <spec> T3` runs there
     let output = project.spawn(SLUG, "T3");
 
-    // Then it refuses, naming the unmet need: a tick on an unlanded branch
-    // unblocks nothing, which is what keeps parallel branches from racing
-    // each other's dependencies
+    // Then it refuses, naming the unmet need: a tick on a task branch
+    // unblocks nothing until it lands on the feature branch, which is
+    // what keeps parallel branches from racing each other's dependencies
     assert!(
         !output.status.success(),
-        "a branch's own tick unblocked T3:\n{}",
+        "a task branch's own tick unblocked T3:\n{}",
         both(&output)
     );
     let said = both(&output);

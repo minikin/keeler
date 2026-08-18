@@ -6,6 +6,8 @@ default:
 # --workspace, not the default: in a project whose root manifest is itself a
 # package, cargo tests only that package and a member crate's tests never
 # run. A test that is never run is not a test.
+#
+# Run every test in the workspace, plus doc tests.
 test:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -24,6 +26,8 @@ fmt:
 # The shellcheck branch below is inert in your project — it is keyed on a
 # marker file only Keeler's own repository has. Your shell scripts are
 # yours to gate, not Keeler's.
+#
+# Check formatting and lints, the way CI does.
 lint:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -94,6 +98,8 @@ dev: fmt lint test crap
 # Mutation tests for a specific file: just mutants src/lib.rs
 # --workspace, or a member crate's file yields "Found 0 mutants" and the
 # gate passes having tested nothing.
+#
+# Mutation tests for one file — `just mutants src/lib.rs`.
 mutants FILE:
     cargo mutants --workspace --file {{FILE}}
 
@@ -103,7 +109,7 @@ mutants-all:
 
 # "Main" is one thing, decided once: the first of the four names below
 # that exists in this repository. `mutants-diff` diffs against it and
-# `keeler-land` refuses to run anywhere else — through this one helper, so
+# `keeler-land` tells it from a feature branch — through this one helper, so
 # no two recipes can disagree about where main is and be silently wrong in
 # different directions. Private (the leading `_`): it prints a ref for
 # other recipes, not a line for a human reading `just --list`.
@@ -121,6 +127,8 @@ _main-ref:
 
 # Mutation tests on changed lines only (--in-diff vs HEAD, else the branch
 # base, else the last commit)
+#
+# Mutation tests on the lines this branch changed.
 mutants-diff:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -278,18 +286,28 @@ keeler-spawn SPEC TASK:
     esac
     # Readiness is the graph script's answer, never this recipe's: one
     # parser reads the format, so a human and the tools cannot disagree.
-    # And it is read from the spec on main — through the same `_main-ref`
-    # `keeler-land` uses — because a tick on an unlanded branch unblocks
-    # nothing: that is what keeps parallel branches from racing each
-    # other's dependencies.
-    main_ref="$(just _main-ref)"
-    main_copy="$(mktemp -d)"
-    trap 'rm -rf "$main_copy"' EXIT
-    if ! git show "$main_ref:$rel" > "$main_copy/$(basename "$spec_abs")" 2>/dev/null; then
-        echo "keeler-spawn: $rel is not on $main_ref — readiness is read from main, and a spec that has not landed there is not a graph to spawn from." >&2
+    # And it is read from the spec on the feature's own branch. A tick on a
+    # *task* branch unblocks nothing — that is what keeps parallel branches
+    # from racing each other's dependencies — while a tick on the feature
+    # branch does, because arriving there is the landing. Which branch that
+    # is, is a name a machine checks rather than one someone remembers.
+    feature="feat/$(basename "$spec_abs" .md)"
+    if ! git check-ref-format --branch "$feature" >/dev/null 2>&1; then
+        echo "keeler-spawn: $rel would need the branch $feature, which git will not accept — rename the spec file." >&2
         exit 1
     fi
-    report="$(bash "$root/scripts/keeler-graph.sh" "$main_copy/$(basename "$spec_abs")")"
+    here="$(git symbolic-ref --quiet --short HEAD || true)"
+    if [ "$here" != "$feature" ]; then
+        echo "keeler-spawn: on ${here:-a detached HEAD}, but this spec's tasks fan out from $feature — check it out, or create it, and spawn from there." >&2
+        exit 1
+    fi
+    feature_copy="$(mktemp -d)"
+    trap 'rm -rf "$feature_copy"' EXIT
+    if ! git show "$feature:$rel" > "$feature_copy/$(basename "$spec_abs")" 2>/dev/null; then
+        echo "keeler-spawn: $rel is not committed on $feature — the worktree is cut from it, so an uncommitted graph is one the agent would never see." >&2
+        exit 1
+    fi
+    report="$(bash "$root/scripts/keeler-graph.sh" "$feature_copy/$(basename "$spec_abs")")"
     entry="$(printf '%s\n' "$report" | awk -v id="$task" '$1 == id')"
     if [ -z "$entry" ]; then
         echo "keeler-spawn: $rel defines no task $task" >&2
@@ -416,7 +434,25 @@ keeler-status SPEC:
     spec_abs="$(cd "$(dirname "$spec")" && pwd)/$(basename "$spec")"
     slug="$(basename "$spec_abs" .md)"
     runs="$root/.keeler/runs/$slug"
-    report="$(bash "$root/scripts/keeler-graph.sh" "$spec_abs")"
+    # The graph comes from the feature's branch, the same place
+    # keeler-spawn reads it: a board that answered from the working tree
+    # would be the one place in graph mode where an uncommitted tick
+    # counts, and it would report a task done that spawn does not believe.
+    rel="${spec_abs#"$root/"}"
+    feature="feat/$slug"
+    # After a feature lands, its branch is gone and the board must still
+    # answer — so HEAD stands in, and the run says which ref it read
+    # rather than leaving the reader to assume.
+    graph_ref="$feature"
+    git rev-parse --verify -q "$feature^{commit}" >/dev/null || graph_ref=HEAD
+    echo "graph: $rel on $graph_ref"
+    graph_copy="$(mktemp -d)"
+    trap 'rm -rf "$graph_copy"' EXIT
+    if ! git show "$graph_ref:$rel" > "$graph_copy/$(basename "$spec_abs")" 2>/dev/null; then
+        echo "keeler-status: $rel is not committed on $graph_ref — there is no graph to report against." >&2
+        exit 1
+    fi
+    report="$(bash "$root/scripts/keeler-graph.sh" "$graph_copy/$(basename "$spec_abs")")"
     while read -r id graph_state _rest; do
         [ -n "$id" ] || continue
         tid="$(printf '%s' "$id" | tr '[:upper:]' '[:lower:]')"
@@ -453,24 +489,30 @@ keeler-status SPEC:
 keeler-upgrade:
     curl -fsSL https://raw.githubusercontent.com/minikin/keeler/main/install.sh | bash -s .
 
-# `just dev` runs first and the baseline moves only if it was green: a
-# baseline recorded from a red main would write "broken" down as the new
+# Landing happens twice, and the branch says which one this is. On the
+# feature branch feat/<spec-slug>: `just dev`, then each landed task's
+# clean worktree and branch are removed — that is where tasks fan out
+# from and where their leftovers belong. On main: `just dev`, then the
+# baseline is regenerated and staged, and a spec whose every box is
+# ticked — as committed, never as the working tree happens to read — gets
+# `Status: Implemented` staged beside it for the same human commit. The
+# baseline is the whole team's reference and moves in one visible place;
+# Implemented is what main says about a feature that has arrived. Anywhere
+# else it refuses by name.
+#
+# The gate runs first at both levels and nothing moves if it is red: a
+# baseline recorded from a red main writes "broken" down as the new
 # normal, and two branches that were each green alone can be wrong
 # together. Not `dev-full` — hours of mutants at every fan-in is a cost
-# nobody would pay, and `mutants-diff` on a freshly merged main has nothing
-# to diff.
+# nobody would pay.
 #
-# Then it finishes what the fan-in finished: a spec whose every box is
-# ticked — as committed, never as the working tree happens to read — gets
-# `Status: Implemented`, staged beside the baseline for the same human
-# commit, and each landed task's worktree and branch are removed. Only
-# when there is nothing to lose, though: a worktree with uncommitted
+# Cleanup only when there is nothing to lose: a worktree with uncommitted
 # changes, one that has moved to another branch, and a branch holding
-# commits main does not have are each named and left where they are.
-# Nothing here is committed, and nothing a human has not seen is thrown
-# away.
+# commits the feature branch does not have are each named and left where
+# they are. Nothing here is committed, and nothing a human has not seen is
+# thrown away.
 #
-# Graph mode: fan-in, on main — gates first, baseline second, staged and never committed.
+# Graph mode: fan-in — worktrees on the feature branch, baseline and Status: on main; staged, never committed.
 keeler-land:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -481,23 +523,37 @@ keeler-land:
     main_ref="$(just _main-ref)"
     main_branch="${main_ref##*/}"
     current="$(git symbolic-ref --quiet --short HEAD || echo 'a detached HEAD')"
-    if [ "$current" != "$main_branch" ]; then
-        echo "keeler-land: on $current, not $main_branch — the baseline moves at fan-in, on main, and nowhere else." >&2
-        exit 1
-    fi
+    # Landing happens twice, and the branch says which one this is. A task
+    # lands into the feature branch, feat/<spec-slug>: its box is ticked
+    # there and its worktree goes. The feature lands into main: that is
+    # where Status: becomes Implemented and where the baseline moves — the
+    # baseline is the whole team's reference and must move in one visible
+    # place, not in every feature's branch. Anywhere else is neither.
+    level=""
+    case "$current" in
+        "$main_branch") level=main ;;
+        feat/*)         level=feature ;;
+        *)
+            echo "keeler-land: on $current — a task lands on its feature branch feat/<spec-slug>, a feature lands on $main_branch, and there is nothing to land anywhere else." >&2
+            exit 1
+            ;;
+    esac
     if ! just dev; then
-        echo "keeler-land: main is red after fan-in — branches that were green alone are wrong together. The baseline is untouched and nothing is staged; fix or revert, then land again." >&2
+        echo "keeler-land: $current is red after fan-in — branches that were green alone are wrong together. Nothing is staged and nothing is removed; fix or revert, then land again." >&2
         exit 1
     fi
-    just crap-baseline
-    # Staged, never committed: the rules say no commit without the human's
-    # word, and a moved baseline is a decision worth a diff someone reads.
-    if [ -e crap-baseline.json ]; then
-        git add -- crap-baseline.json
-        echo "keeler-land: crap-baseline.json is staged, not committed — review the diff and commit it yourself:"
-        echo "    git diff --cached -- crap-baseline.json"
-    else
-        echo "keeler-land: no baseline was produced — nothing in this project to measure yet, so nothing is staged."
+    if [ "$level" = main ]; then
+        just crap-baseline
+        # Staged, never committed: the rules say no commit without the
+        # human's word, and a moved baseline is a decision worth a diff
+        # someone reads.
+        if [ -e crap-baseline.json ]; then
+            git add -- crap-baseline.json
+            echo "keeler-land: crap-baseline.json is staged, not committed — review the diff and commit it yourself:"
+            echo "    git diff --cached -- crap-baseline.json"
+        else
+            echo "keeler-land: no baseline was produced — nothing in this project to measure yet, so nothing is staged."
+        fi
     fi
     # Fan-in, part two: a spec whose every box is ticked is finished, and a
     # landed task's worktree is litter. Readiness is the graph script's
@@ -539,7 +595,10 @@ keeler-land:
         # Implemented follows Approved: a Draft nobody approved is not a
         # contract that can have been fulfilled, however many boxes are
         # ticked — and a spec already Implemented needs no second write.
-        if [ "$all_done" = yes ] && [ "$status" = Approved ]; then
+        if [ "$level" = feature ] && [ "$all_done" = yes ] && [ "$status" = Approved ] && [ "$current" = "feat/$slug" ]; then
+            echo "keeler-land: every task in $rel is ticked — the feature is finished here; land it on $main_branch to mark it Implemented and move the baseline."
+        fi
+        if [ "$level" = main ] && [ "$all_done" = yes ] && [ "$status" = Approved ]; then
             # Onto a copy and then a move, never a truncate-and-write: a
             # land stopped mid-write would otherwise leave the spec empty.
             # `cp -p` first, so the copy carries the spec's own permissions
@@ -555,6 +614,22 @@ keeler-land:
         # A landed task's worktree and branch have done their job — but
         # only when the worktree is clean. Uncommitted work is the human's
         # to look at before anything removes it.
+        # Worktrees fan out from the feature branch, and are its to remove;
+        # on main there is nothing of the kind to clean up, and a leftover
+        # is the feature branch's business. And only its *own* — keeler-spawn
+        # binds one spec to one feat/<slug> by name, and the land side must
+        # honour the same binding or a feature branch would clean up after
+        # tasks it never fanned out.
+        if [ "$level" = main ]; then
+            # Name what is left standing rather than pass it in silence: a
+            # task worktree still here on main is the feature branch's to
+            # remove, and the human should know it exists.
+            for wt in "$(dirname "$root")/$(basename "$root")-$slug-"*; do
+                [ -e "$wt" ] && echo "keeler-land: $wt is a task worktree — land on feat/$slug to remove it"
+            done
+            continue
+        fi
+        [ "$current" = "feat/$slug" ] || continue
         while read -r id state _rest; do
             [ "$state" = done ] || continue
             tid="$(printf '%s' "$id" | tr '[:upper:]' '[:lower:]')"
@@ -587,7 +662,7 @@ keeler-land:
             # squash merge looks exactly like this from here, so the
             # refusal comes with the command that finishes the job.
             if ! git merge-base --is-ancestor "$branch" HEAD; then
-                echo "keeler-land: $branch has commits that are not on $main_branch — left in place, with $worktree. If they landed as a squash merge, finish it yourself:"
+                echo "keeler-land: $branch has commits that are not on $current — left in place, with $worktree. If they landed as a squash merge, finish it yourself:"
                 echo "    git worktree remove $worktree && git branch -D $branch"
                 continue
             fi
