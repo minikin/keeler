@@ -969,6 +969,46 @@ fn run_check(script: &str, path: &str) -> String {
     both(&output)
 }
 
+/// Not one of T3's eight scenarios: the Implementation Notes' "readiness
+/// is read from the spec **on main**", which T3 left open because the
+/// shared main-resolution helper is T5's deliverable and a second
+/// resolution here is the disagreement the spec forbids.
+#[test]
+fn readiness_is_read_from_the_spec_on_main() {
+    // Given a spec whose T1 is not done on main — so T3, which needs it,
+    // is blocked there — and a branch that ticks T1 and commits it
+    let project = Project::with_spec(
+        "readiness",
+        SLUG,
+        &spec_body("Approved", &TASKS.replace("- [x] **T1", "- [ ] **T1")),
+    );
+    project.git(&["checkout", "-q", "-b", &format!("keeler/{SLUG}/t1")]);
+    let spec = project.path().join("specs").join(format!("{SLUG}.md"));
+    std::fs::write(&spec, spec_body("Approved", TASKS)).unwrap();
+    project.git(&["add", "-A"]);
+    project.git(&["commit", "-qm", "tick T1 on the branch"]);
+
+    // When `just keeler-spawn <spec> T3` runs on that branch
+    let output = project.spawn(SLUG, "T3");
+
+    // Then it refuses, naming the unmet need: a tick on an unlanded branch
+    // unblocks nothing, which is what keeps parallel branches from racing
+    // each other's dependencies
+    assert!(
+        !output.status.success(),
+        "a branch's own tick unblocked T3:\n{}",
+        both(&output)
+    );
+    let said = both(&output);
+    assert!(
+        said.contains("blocked") && said.contains("T1"),
+        "the refusal does not name the unmet need:\n{said}"
+    );
+
+    // And nothing was created
+    assert!(!project.worktree(SLUG, "T3").exists());
+}
+
 proptest::proptest! {
     #![proptest_config(proptest::prelude::ProptestConfig {
         cases: 12,

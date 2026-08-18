@@ -365,7 +365,7 @@ split it rather than ship a task eight scenarios wide.
       fixture branch and asserts the baseline and the recipe are byte-
       identical after; the CI check driven against fixture diffs;
       `mutants.md` text carries the branch condition.
-- [ ] **T5 — keeler-land: gates first, baseline second, staged not
+- [x] **T5 — keeler-land: gates first, baseline second, staged not
       committed.** Needs: T1. Scenarios: _Baseline updates happen at
       fan-in, on main_, _A branch that was green alone can still redden
       main_, _keeler-land refuses to run anywhere but main_. Deliverable:
