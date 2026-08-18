@@ -764,6 +764,13 @@ fn spawning_a_task_that_is_already_spawned_is_refused() {
         said.contains(&format!("keeler/{SLUG}/t3")),
         "the refusal does not name the branch:\n{said}"
     );
+    // And it is Keeler's refusal, not git's crash: without a guard of its
+    // own the recipe would still exit non-zero, deep inside `git worktree
+    // add`, having said `fatal:` instead of what to do about it.
+    assert!(
+        said.contains("keeler-spawn:") && !said.contains("fatal:"),
+        "the branch was refused by git rather than by the recipe:\n{said}"
+    );
     assert!(verdict.is_file(), "the refusal destroyed the run's verdict");
     assert_eq!(project.new_sessions().len(), 1, "a session was started");
 
