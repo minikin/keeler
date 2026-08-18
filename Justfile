@@ -176,6 +176,165 @@ keeler-graph SPEC:
             }
         }'
 
+# Graph mode: hand one ready task to a headless agent on its own branch —
+# `just keeler-spawn specs/01-foo.md T3`. It refuses before creating
+# anything when tmux is missing, when the spec differs from HEAD or is not
+# Approved (the worktree is cut from HEAD, so an uncommitted graph is one
+# the agent would never see), when the graph script says the task is
+# blocked, and when the task already has a worktree. Otherwise it creates a
+# worktree beside the repository on keeler/<spec-slug>/<task-id>, writes a
+# runner script under .keeler/runs/, starts a detached tmux session on it
+# and returns at once. `just keeler-status <spec>` is the board afterwards.
+keeler-spawn SPEC TASK:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! command -v tmux >/dev/null 2>&1; then
+        echo "keeler-spawn: tmux is required — every spawned agent runs in a detached tmux session." >&2
+        echo "  macOS:         brew install tmux" >&2
+        echo "  Debian/Ubuntu: sudo apt-get install tmux" >&2
+        exit 1
+    fi
+    spec="{{SPEC}}"
+    task="{{TASK}}"
+    [ -f "$spec" ] || { echo "keeler-spawn: $spec is not a file" >&2; exit 1; }
+    root="$(git rev-parse --show-toplevel)"
+    spec_abs="$(cd "$(dirname "$spec")" && pwd)/$(basename "$spec")"
+    rel="${spec_abs#"$root"/}"
+    # The spec as committed, because that is what the new worktree will see:
+    # /keeler:tasks leaves the graph uncommitted, and a spawn straight after
+    # would compute readiness from a file the worktree does not have.
+    if [ -n "$(git status --porcelain -- "$spec_abs")" ]; then
+        echo "keeler-spawn: $rel differs from HEAD — commit it first; the worktree is cut from HEAD and would not see it." >&2
+        exit 1
+    fi
+    status_line="$(grep -m1 -E '^[*_[:space:]]*Status:' "$spec_abs" || true)"
+    case "$status_line" in
+        *Approved*) ;;
+        *)
+            echo "keeler-spawn: $rel is not Approved (${status_line:-no Status: line}) — an unapproved spec is not a contract to build from." >&2
+            exit 1
+            ;;
+    esac
+    # Readiness is the graph script's answer, never this recipe's: one
+    # parser reads the format, so a human and the tools cannot disagree.
+    report="$(bash "$root/scripts/keeler-graph.sh" "$spec_abs")"
+    entry="$(printf '%s\n' "$report" | awk -v id="$task" '$1 == id')"
+    if [ -z "$entry" ]; then
+        echo "keeler-spawn: $rel defines no task $task" >&2
+        exit 1
+    fi
+    if [ "$(printf '%s\n' "$entry" | awk '{ print $2 }')" = blocked ]; then
+        unmet=""
+        for need in $(printf '%s\n' "$entry" | cut -d' ' -f3-); do
+            if [ "$(printf '%s\n' "$report" | awk -v n="$need" '$1 == n { print $2 }')" != done ]; then
+                unmet="$unmet $need"
+            fi
+        done
+        echo "keeler-spawn: $task is blocked, waiting on:$unmet" >&2
+        exit 1
+    fi
+    # One name in four places: the spec's file name, and the id lowercased
+    # once, on the way out of the parser.
+    slug="$(basename "$spec_abs" .md)"
+    tid="$(printf '%s' "$task" | tr '[:upper:]' '[:lower:]')"
+    branch="keeler/$slug/$tid"
+    session="keeler-$slug-$tid"
+    worktree="$(dirname "$root")/$(basename "$root")-$slug-$tid"
+    if [ -e "$worktree" ]; then
+        echo "keeler-spawn: $worktree already exists — $task is already spawned; land it or remove it first." >&2
+        exit 1
+    fi
+    runs="$root/.keeler/runs/$slug"
+    mkdir -p "$runs"
+    exit_file="$runs/$tid.exit"
+    log_file="$runs/$tid.log"
+    runner="$runs/$tid.sh"
+    # A verdict left by an earlier run of this task is not this run's.
+    rm -f "$exit_file"
+    git worktree add -b "$branch" "$worktree" HEAD
+    prompt="Implement task $task of $rel, and nothing else.
+
+    Read $rel in full first, then .claude/keeler.md.
+
+    Run the whole per-task pipeline for this one task, in order and without
+    stopping between stages: /keeler:tdd, then /keeler:qa, then
+    /keeler:review, then /keeler:mutants. The gate is 'just keeler-branch';
+    it must be green before the task is done.
+
+    You are on branch $branch, in the worktree $worktree. Commit there as
+    each stage finishes: the human ran keeler-spawn for this task, and that
+    was the consent for those commits. Commit nowhere else, never push, and
+    never open a pull request."
+    # Enough to edit, test and commit inside the worktree, and no more. Not
+    # bypassPermissions: a headless agent with an unrestricted shell is not
+    # a decision a recipe should make by default.
+    tools='Bash(cargo:*),Bash(just:*),Bash(git:*)'
+    cat > "$runner" <<RUNNER
+    #!/usr/bin/env bash
+    # Written by 'just keeler-spawn' for $branch. Re-runnable by hand:
+    #     bash $runner
+    cd "$worktree" || exit 1
+    prompt=\$(cat <<'KEELER_PROMPT'
+    $prompt
+    KEELER_PROMPT
+    )
+    # Everything the session prints is teed to the log, so the run can be
+    # read after the tmux window is gone.
+    {
+        claude -p "\$prompt" --permission-mode acceptEdits --allowedTools '$tools'
+        # The verdict is the gate's, not the agent's: claude -p exits zero
+        # for any finished turn, including one that ended in FAIL.
+        just keeler-branch
+        echo \$? > "$exit_file"
+    } 2>&1 | tee "$log_file"
+    RUNNER
+    printf -v run_cmd 'bash %q' "$runner"
+    tmux new-session -d -s "$session" -c "$worktree" "$run_cmd"
+    echo "spawned $task on $branch"
+    echo "  worktree: $worktree"
+    echo "  session:  tmux attach -t $session   (a view, not a seat: claude -p is not interactive)"
+    echo "  log:      $log_file"
+    echo "  verdict:  $exit_file   (the exit code of just keeler-branch, once the run ends)"
+    echo "  board:    just keeler-status $rel"
+
+# Graph mode: what every task of a spec is doing right now — running,
+# passed, failed, died mid-pipeline, or never spawned. "Running" is tmux's
+# answer, never the absence of a file; a task with no verdict at all died
+# before its gate ever ran, which is a different thing from a gate that
+# failed, and its log and worktree are what a resume reads.
+keeler-status SPEC:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    spec="{{SPEC}}"
+    [ -f "$spec" ] || { echo "keeler-status: $spec is not a file" >&2; exit 1; }
+    root="$(git rev-parse --show-toplevel)"
+    spec_abs="$(cd "$(dirname "$spec")" && pwd)/$(basename "$spec")"
+    slug="$(basename "$spec_abs" .md)"
+    runs="$root/.keeler/runs/$slug"
+    report="$(bash "$root/scripts/keeler-graph.sh" "$spec_abs")"
+    while read -r id _rest; do
+        [ -n "$id" ] || continue
+        tid="$(printf '%s' "$id" | tr '[:upper:]' '[:lower:]')"
+        session="keeler-$slug-$tid"
+        worktree="$(dirname "$root")/$(basename "$root")-$slug-$tid"
+        exit_file="$runs/$tid.exit"
+        log_file="$runs/$tid.log"
+        # The `=` is exact matching: without it tmux answers about t10 when
+        # asked about t1.
+        if command -v tmux >/dev/null 2>&1 && tmux has-session -t "=$session" 2>/dev/null; then
+            state=running
+        elif [ -f "$exit_file" ]; then
+            code="$(tr -d '[:space:]' < "$exit_file")"
+            if [ "$code" = 0 ]; then state=passed; else state="failed (exit $code)"; fi
+        elif [ -e "$worktree" ] || [ -f "$log_file" ]; then
+            state=died
+        else
+            printf '%-6s %s\n' "$id" "not spawned"
+            continue
+        fi
+        printf '%-6s %-16s log %s  worktree %s\n' "$id" "$state" "$log_file" "$worktree"
+    done <<< "$report"
+
 # Upgrade Keeler itself (KEELER_REF=v0.3.0 just keeler-upgrade to pin a tag)
 keeler-upgrade:
     curl -fsSL https://raw.githubusercontent.com/minikin/keeler/main/install.sh | bash -s .

@@ -94,3 +94,4 @@ crap-report.json
 mutants.out*/
 .DS_Store
 improvements.md
+.keeler/

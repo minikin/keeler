@@ -52,6 +52,8 @@ Rule of thumb: if you're debating whether it changes behavior, it's not trivial.
 
 **Never commit without explicit user confirmation.** Finish the work, run the gates, then ask — the user decides when a commit happens and may want to review the diff first. This applies to every stage, including "obvious" checkpoints like a finished task or a green pipeline.
 
+**The one place an agent commits without asking is a branch the human spawned.** `just keeler-spawn <spec> <task>` cuts a worktree, creates `keeler/<spec-slug>/<task-id>` in it, and hands it to a headless session that cannot stop to ask. So the word is given in advance and narrowly: on that branch, in that worktree, the agent commits as each stage finishes — which is what gives the review record a `Commit:` to name and leaves the worktree clean for `just keeler-land` to remove. The human named the task and ran the spawn: **that was the asking**, given before rather than after. Nowhere else, and never on main. And never pushed — the branch reaches the remote, and a pull request, only by the human's hand.
+
 ## Reporting
 
 **Every finished task ends with a summary in English**, regardless of the conversation language. The summary must cover:
