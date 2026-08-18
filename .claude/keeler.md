@@ -68,6 +68,19 @@ Three rules keep parallel branches from lying to each other:
 - **A task branch ticks its own task and leaves `Status:` alone.** `Status:` is the one line no task branch may write; `just keeler-land` sets it on main once every box is ticked.
 - **Review leaves a record.** /keeler:review writes `reviews/<spec-slug>/<task-id>.md`, and CI on a `keeler/*` pull request fails when it is missing or names a commit the branch did not make.
 
+**A feature, start to finish.** The commands above are the parts; this is the day.
+
+1. `/keeler:spec` on any branch, iterate to approval — as always.
+2. `git checkout -b feat/<spec-slug>` — the one manual step graph mode adds. The name must be the spec's file name without `.md`; `keeler-spawn` checks it and refuses anything else. Commit the approved spec there.
+3. `/keeler:tasks` — writes `Needs:` into every task. Commit: spawn reads the committed spec, never the working tree.
+4. `just keeler-graph <spec>` — what is ready.
+5. `just keeler-spawn <spec> T1`, then T3, then whatever else is ready — one at a time, each named by you. Each returns at once; the agent runs the whole per-task pipeline in its tmux session and ticks its box at the end.
+6. `just keeler-status <spec>` for the board; `tmux attach -t keeler-<spec-slug>-t1` to watch, `Ctrl-b d` to leave. `died` means the session ended before its gate ran — its commits are on the branch and its log is under `.keeler/runs/`, which is what a resume starts from.
+7. Merge each finished task branch into `feat/<spec-slug>` and run `just keeler-land` there: gates, then the landed worktrees go. The tick has arrived, so its dependents are ready — back to step 5, until `keeler-land` says the feature is finished.
+8. Pull request from `feat/<spec-slug>` to main; merge; on main, `just keeler-land` stages the baseline and `Status: Implemented`; you commit.
+
+Three things no step may do for you: an agent never pushes; only `keeler-land` on main writes `Status:`; `keeler-land` runs on the feature branch and on main and refuses everywhere else.
+
 `<spec-slug>` is the spec's file name without `.md`, and the task id is lowercased on the way into every path: `specs/01-login.md` T3 gives the branch `keeler/01-login/t3`, the worktree `../<repo>-01-login-t3`, the tmux session `keeler-01-login-t3` and the record `reviews/01-login/t3.md`. tmux is graph mode's one extra requirement; `just` and the cargo tools are the same ones the linear road uses.
 
 ## Commits

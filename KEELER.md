@@ -99,12 +99,25 @@ meets them.
 
 ```mermaid
 flowchart LR
-    S[Approved spec<br/>Tasks carry <b>Needs:</b>] --> G["/keeler:graph — which<br/>tasks are unblocked?"]
+    S[Approved spec on<br/><b>feat/&lt;spec-slug&gt;</b><br/>Tasks carry <b>Needs:</b>] --> G["/keeler:graph — which<br/>tasks are unblocked?"]
     G --> SP1["just keeler-spawn &lt;spec&gt; T2"] --> B1["keeler/&lt;spec&gt;/t2<br/>tdd → qa → review → mutants<br/><b>just keeler-branch</b>"]
     G --> SP2["just keeler-spawn &lt;spec&gt; T3"] --> B2["keeler/&lt;spec&gt;/t3<br/>tdd → qa → review → mutants<br/><b>just keeler-branch</b>"]
-    B1 --> L["merge, then <b>just keeler-land</b> on main:<br/>just dev, then the baseline —<br/>staged, never committed"]
-    B2 --> L
+    B1 --> LF["merge into feat/, then<br/><b>just keeler-land</b> there:<br/>gates, worktrees removed"]
+    B2 --> LF
+    LF -- "ticks landed —<br/>dependents ready" --> G
+    LF -- "every box ticked" --> LM["PR to main, then<br/><b>just keeler-land</b> on main:<br/>gates, baseline, Status: —<br/>staged, never committed"]
 ```
+
+**A feature, start to finish** — the commands are the parts, this is the day:
+
+1. `/keeler:spec`, iterate to approval, on any branch.
+2. `git checkout -b feat/<spec-slug>` — the one manual step graph mode adds; the name is the spec's file name without `.md`, and `keeler-spawn` checks it. Commit the spec there.
+3. `/keeler:tasks` writes `Needs:` into every task; commit — spawn reads the committed spec.
+4. `just keeler-graph <spec>` shows what is ready.
+5. `just keeler-spawn <spec> T1`, then whatever else is ready, one at a time. Each returns at once; its agent runs the whole per-task pipeline in tmux and ticks its box at the end.
+6. `just keeler-status <spec>` is the board; `tmux attach -t keeler-<spec-slug>-t1` to watch. `died` means the session ended before its gate — its commits and log are what a resume starts from.
+7. Merge each finished task branch into `feat/<spec-slug>`, `just keeler-land` there. The tick has landed, so its dependents are ready: back to 5, until `keeler-land` says the feature is finished.
+8. Pull request to main, merge, `just keeler-land` on main, commit what it staged.
 
 What makes this more than "several agents at once" is that the two things
 usually missing are already here: the **approved spec is the contract** every
