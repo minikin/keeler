@@ -310,6 +310,51 @@ fn a_needs_list_is_validated_not_guessed_at() {
 }
 
 #[test]
+fn a_hash_inside_a_fence_is_a_comment_not_a_heading() {
+    // Given a fenced example in the section's prose whose lines begin
+    // with `#` — a shell comment, which is what an example usually is
+    let fixture = Spec::new(
+        "fenced-hash",
+        &spec(
+            "Example:\n\n```\n# how to read it\njust keeler-graph specs/01-foo.md\n```\n\n- [ ] **T1 — a.**\n- [ ] **T2 — b.** Needs: T1.\n",
+        ),
+    );
+    let output = fixture.graph();
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    // Then the section did not end at it: inside a fence, `#` is text
+    let ids: Vec<String> = report(&output).into_iter().map(|(id, _, _)| id).collect();
+    assert_eq!(
+        ids,
+        vec!["T1".to_string(), "T2".to_string()],
+        "a comment in a fenced example truncated the section"
+    );
+}
+
+#[test]
+fn a_sub_heading_inside_the_section_does_not_end_it() {
+    // Given a Tasks section organised in phases, as a long spec would be
+    let fixture = Spec::new(
+        "phases",
+        &spec("### Phase 1\n\n- [ ] **T1 — a.**\n\n### Phase 2\n\n- [ ] **T2 — b.** Needs: T1.\n"),
+    );
+    let output = fixture.graph();
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    // Then both tasks are read. A deeper heading is structure *within*
+    // the section, and truncating there loses tasks silently — the worst
+    // shape this failure can take, because a graph that reports fewer
+    // tasks than exist reports every one of them done, and keeler-land
+    // marks a spec Implemented on that.
+    let ids: Vec<String> = report(&output).into_iter().map(|(id, _, _)| id).collect();
+    assert_eq!(
+        ids,
+        vec!["T1".to_string(), "T2".to_string()],
+        "a sub-heading truncated the section"
+    );
+}
+
+#[test]
 fn any_heading_ends_the_section_not_only_a_level_two_one() {
     // Given a checkbox under a later heading of any level — an appendix,
     // a backlog, a note someone kept

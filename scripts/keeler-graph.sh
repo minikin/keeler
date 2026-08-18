@@ -107,15 +107,20 @@ function visit(id,    k, j, m, cycle) {
 { sub(/\r$/, "") }
 
 /^## Tasks[ \t]*$/ { in_tasks = 1; found_section = 1; next }
-# Any heading ends the section, not only a `## ` one: a `# Appendix` with
-# a checkbox under it would otherwise read as more tasks.
-in_tasks && /^#+ /  { close_item(); in_tasks = 0 }
+# A heading at the section level or above ends it — `## Notes`, or a
+# `# Appendix` whose checkboxes would otherwise read as more tasks. A
+# deeper one does not: `### Phase 1` is structure *within* the section,
+# and truncating there would drop tasks in silence, which is the worst
+# shape this can take — a graph reporting fewer tasks than exist reports
+# every one of them done.
 !in_tasks           { next }
 
-# A fenced code block inside the section is prose, not tasks — the
-# example that will be pasted into the intro of the next spec.
+# The fence is settled first, because inside one `#` is a comment and
+# ``` is not a boundary anyone meant: a fenced example is prose, the one
+# that will be pasted into the intro of the next spec.
 /^[ \t]*```/        { close_item(); in_fence = !in_fence; next }
 in_fence            { next }
+in_tasks && /^#{1,2} / { close_item(); in_tasks = 0; next }
 
 /^- \[[ xX]\] /     {
     close_item()
