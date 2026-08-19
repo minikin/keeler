@@ -211,22 +211,19 @@ fn approval_asks_which_road() {
     let spec = command("spec");
 
     // Then after setting Status: Approved it instructs asking which road,
-    // and waiting for the answer
+    // and waiting for the answer. Read from the approval onwards, because
+    // that is where the scenario puts the question: a fork asked earlier
+    // is asked about a spec nobody has agreed to yet.
     let approved = spec
         .find("Approved")
         .expect("spec.md no longer sets Status: Approved");
-    let question = spec
-        .find("linearly")
-        .expect("spec.md never asks whether to develop the feature linearly");
-    assert!(
-        approved < question,
-        "spec.md asks which road before the spec is approved",
-    );
-    let asked = unwrapped(&spec[question..]);
-    assert!(
-        asked.contains("graph"),
-        "the question offers no road but the linear one:\n{asked}",
-    );
+    let asked = unwrapped(&spec[approved..]);
+    for road in ["linearly", "graph"] {
+        assert!(
+            asked.contains(road),
+            "spec.md never offers the `{road}` road after the spec is approved:\n{asked}",
+        );
+    }
     assert!(
         asked.contains("wait for the answer") || asked.contains("waiting for the answer"),
         "spec.md asks which road without waiting for the answer:\n{asked}",
@@ -374,6 +371,49 @@ fn a_feature_branch_that_already_exists_is_used_not_remade() {
         both(&again).contains("nothing was committed"),
         "the run does not say that it committed nothing:\n{}",
         both(&again),
+    );
+}
+
+/// Not a scenario of its own — the promise underneath two of them. To
+/// switch branches at all, the recipe has to put the spec back to what
+/// this branch committed, so the approved text exists nowhere in git
+/// while the switch happens. A switch that fails there would take the
+/// human's approval with it, and the answer to "which road" is not a
+/// thing anyone can be asked to give twice.
+#[test]
+fn the_approved_spec_survives_a_checkout_that_cannot_happen() {
+    // Given a feature branch holding a file the working tree also has,
+    // untracked — which is a checkout git refuses
+    let project = Project::new("checkout-refused");
+    project.git(&["checkout", "-qb", &format!("feat/{SLUG}")]);
+    project.write("blocker.txt", "as the branch has it\n");
+    project.git(&["add", "-A"]);
+    project.git(&["commit", "-qm", "a file only the feature branch has"]);
+    project.git(&["checkout", "-q", "main"]);
+    project.write("blocker.txt", "as the working tree has it\n");
+    let approved = spec_body("Approved", TASKS);
+    project.write_spec(&approved);
+
+    // When `just keeler-feature-branch <spec>` runs
+    let output = project.feature_branch();
+
+    // Then it refuses, and the spec in the working tree is still the copy
+    // the user approved — not the one this branch happens to have committed
+    assert!(
+        !output.status.success(),
+        "the fork reported success over a checkout that did not happen:\n{}",
+        both(&output),
+    );
+    assert!(
+        both(&output).contains("could not check out"),
+        "the run refused for some other reason than the checkout it could not do:\n{}",
+        both(&output),
+    );
+    assert_eq!(project.branch(), "main");
+    assert_eq!(
+        project.read_spec(),
+        approved,
+        "the approved spec was lost to a checkout that never happened",
     );
 }
 
