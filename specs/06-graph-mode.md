@@ -481,7 +481,7 @@ split it rather than ship a task eight scenarios wide.
       place and nothing new is created; running, passed and done fixtures
       are refused by name.
 
-- [ ] **T12 — A task is closed by three things, not one.** Needs: T11.
+- [x] **T12 — A task is closed by three things, not one.** Needs: T11.
       Scenarios: _A task is closed by three things, not one_.
       Deliverable: `keeler-status` reads the record and the tick beside
       the verdict and says `incomplete` naming what is missing;

@@ -329,6 +329,23 @@ impl Project {
         std::fs::write(runs.join(format!("{tid}.exit")), "0\n").unwrap();
         std::fs::write(runs.join(format!("{tid}.log")), "the run said things\n").unwrap();
         std::fs::write(runs.join(format!("{tid}.sh")), "#!/usr/bin/env bash\n").unwrap();
+        // A landed task carries its review record: closed is three
+        // things, and a fixture without one is a task keeler-land is
+        // right to leave alone.
+        self.write_review_record(tid);
+    }
+
+    /// The review record a closed task carries, committed on the branch.
+    fn write_review_record(&self, tid: &str) {
+        let dir = self.dir.join("reviews").join(SLUG);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(format!("{tid}.md")),
+            format!("Spec: {SLUG}\nTask: {tid}\nCommit: fixture\nVerdict: pass\n\nnone\n"),
+        )
+        .unwrap();
+        self.git(&["add", "-A"]);
+        self.git(&["commit", "-qm", &format!("the review record for {tid}")]);
     }
 
     /// Every branch this repository has, by name.
@@ -745,6 +762,20 @@ fn the_feature_level_touches_only_its_own_specs_tasks() {
     project.git(&["add", "-A"]);
     project.git(&["commit", "-qm", "another spec"]);
     let mine = project.add_worktree("t1");
+    project.write_review_record("t1");
+    // 43-other's task carries its record too, so the only reason its
+    // worktree survives is the spec-to-branch binding — without it the
+    // record check would spare the worktree and the test would pass with
+    // the binding gone.
+    let other_reviews = project.dir.join("reviews").join("43-other");
+    std::fs::create_dir_all(&other_reviews).unwrap();
+    std::fs::write(
+        other_reviews.join("t1.md"),
+        "Spec: 43-other\nTask: t1\nCommit: x\nVerdict: pass\n",
+    )
+    .unwrap();
+    project.git(&["add", "-A"]);
+    project.git(&["commit", "-qm", "43-other's record"]);
     let theirs = project.worktree_path_for("43-other", "t1");
     project.git(&[
         "worktree",
@@ -850,6 +881,103 @@ fn landing_on_main_takes_status_and_the_baseline_and_no_worktrees() {
 }
 
 #[test]
+fn landing_leaves_a_task_whose_gate_was_red() {
+    // Given a ticked task with its record — and a verdict saying the gate
+    // failed
+    let project = Project::on_feature_branch("red-gate", &spec_with(&[true, true], "Approved"));
+    let worktree = project.add_worktree("t1");
+    let runs = project.runs_dir();
+    std::fs::create_dir_all(&runs).unwrap();
+    std::fs::write(runs.join("t1.exit"), "3\n").unwrap();
+    project.write_review_record("t1");
+
+    // When keeler-land runs
+    let output = project.land();
+    assert!(output.status.success(), "{}", both(&output));
+
+    // Then the worktree stands. Closed is three things and the gate is
+    // one of them: a red gate with a tick and a record is a task someone
+    // marked finished over a failure, and its tree is where the failure
+    // can still be looked at.
+    assert!(
+        worktree.exists(),
+        "a task whose gate was red had its worktree removed:\n{}",
+        both(&output)
+    );
+}
+
+#[test]
+fn landing_says_nothing_about_worktrees_that_do_not_exist() {
+    // Given ticked tasks with no records and no worktrees — this
+    // repository's own spec 06, where T1 and T2 landed long before the
+    // record was a rule
+    let project = Project::on_feature_branch("no-worktrees", &spec_with(&[true, true], "Approved"));
+
+    // When keeler-land runs
+    let output = project.land();
+    assert!(output.status.success(), "{}", both(&output));
+
+    // Then it says nothing about leaving worktrees in place, because
+    // there are none. A refusal that names a path that does not exist
+    // teaches the reader to skim the output.
+    assert!(
+        !both(&output).contains("left in place, with its worktree"),
+        "the run promised to leave worktrees that never existed:\n{}",
+        both(&output)
+    );
+}
+
+#[test]
+fn landing_removes_only_a_closed_tasks_worktree() {
+    // Given a ticked task whose branch carries no review record — the
+    // shape a session that died after tdd leaves behind
+    let project = Project::on_feature_branch("unreviewed", &spec_with(&[true, true], "Approved"));
+    let unreviewed = project.add_worktree("t1");
+    // The run files, deliberately without the review record — the shape a
+    // session that died after tdd leaves behind.
+    let runs = project.runs_dir();
+    std::fs::create_dir_all(&runs).unwrap();
+    std::fs::write(runs.join("t1.exit"), "0\n").unwrap();
+    std::fs::write(runs.join("t1.log"), "the run said things\n").unwrap();
+
+    // When keeler-land runs on the feature branch
+    let output = project.land();
+    assert!(output.status.success(), "{}", both(&output));
+
+    // Then the worktree stands. A tick without a record is not a landing,
+    // and this worktree may hold the only copy of work nobody has read —
+    // removing it on the strength of a box would take that with it.
+    assert!(
+        unreviewed.exists(),
+        "an unreviewed task's worktree was removed:\n{}",
+        both(&output)
+    );
+    assert!(
+        both(&output).contains("review") || both(&output).contains("record"),
+        "the run does not say why it left the worktree:\n{}",
+        both(&output)
+    );
+
+    // And with the record beside it, the same task lands
+    let reviews = project.dir.join("reviews").join(SLUG);
+    std::fs::create_dir_all(&reviews).unwrap();
+    std::fs::write(
+        reviews.join("t1.md"),
+        "Spec: x\nTask: t1\nCommit: x\nVerdict: pass\n",
+    )
+    .unwrap();
+    project.git(&["add", "-A"]);
+    project.git(&["commit", "-qm", "the review record"]);
+    let output = project.land();
+    assert!(output.status.success(), "{}", both(&output));
+    assert!(
+        !unreviewed.exists(),
+        "a closed task's worktree survived:\n{}",
+        both(&output)
+    );
+}
+
+#[test]
 fn landing_cleans_up_only_what_is_clean() {
     // Given a landed task whose worktree has no uncommitted changes, and
     // another landed task whose worktree has some
@@ -857,6 +985,9 @@ fn landing_cleans_up_only_what_is_clean() {
     let clean = project.add_worktree("t1");
     let dirty = project.add_worktree("t2");
     project.write_run_record("t1");
+    // Both are closed but for the dirt: the record exists for each, so
+    // what this test measures is the working tree and nothing else.
+    project.write_review_record("t2");
     std::fs::write(
         dirty.join("crap-baseline.json"),
         "{\"still\":\"working\"}\n",
@@ -929,6 +1060,9 @@ fn a_worktree_that_will_not_go_is_named_rather_than_fatal() {
     let project = Project::on_feature_branch("locked", &spec_with(&[true, true], "Approved"));
     let locked = project.add_worktree("t1");
     let clean = project.add_worktree("t2");
+    // Both carry their records, so what is measured is the lock.
+    project.write_review_record("t1");
+    project.write_review_record("t2");
     project.git(&["worktree", "lock", locked.to_str().unwrap()]);
 
     // When `just keeler-land` runs on the feature branch
@@ -992,6 +1126,9 @@ fn a_branch_whose_commits_are_not_on_the_feature_branch_keeps_its_worktree() {
     let project = Project::on_feature_branch("unmerged", &spec_with(&[true, true], "Approved"));
     let unmerged = project.add_worktree("t1");
     let merged = project.add_worktree("t2");
+    // Both carry their records, so what is measured is containment.
+    project.write_review_record("t1");
+    project.write_review_record("t2");
     std::fs::write(unmerged.join("notes.txt"), "work nobody merged\n").unwrap();
     Project::git_in(&unmerged, &["add", "notes.txt"]);
     Project::git_in(&unmerged, &["commit", "-qm", "work nobody merged"]);
@@ -1028,6 +1165,9 @@ fn a_worktree_that_moved_to_another_branch_is_left_alone() {
     // their own — the task's branch now stands somewhere else entirely
     let project = Project::on_feature_branch("moved", &spec_with(&[true, true], "Approved"));
     let moved = project.add_worktree("t1");
+    // Closed but for the branch it moved to: the record exists, so this
+    // test measures where the worktree points and nothing else.
+    project.write_review_record("t1");
     Project::git_in(&moved, &["switch", "-q", "-c", "fixup"]);
 
     // When `just keeler-land` runs on the feature branch

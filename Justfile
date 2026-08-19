@@ -446,7 +446,7 @@ keeler-spawn SPEC TASK:
 # verdict at all died before its gate ever ran, which is a different thing
 # from a gate that failed, and its log and worktree are what a resume reads.
 #
-# Graph mode: what every task of a spec is doing right now — running, passed, failed, died mid-pipeline, or never spawned.
+# Graph mode: what every task of a spec is doing right now — running, passed, incomplete, failed, died, done, or never spawned.
 keeler-status SPEC:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -482,27 +482,71 @@ keeler-status SPEC:
         worktree="$(dirname "$root")/$(basename "$root")-$slug-$tid"
         exit_file="$runs/$tid.exit"
         log_file="$runs/$tid.log"
+        branch="keeler/$slug/$tid"
+        record="reviews/$slug/$tid.md"
+        # Closed is three things, and two of them live on the task's own
+        # branch until someone merges it. Reading them from here would
+        # make `incomplete` mean "not merged yet" — which every task says
+        # before a merge, finished or not — and the guard would be absent
+        # at the one moment it is for: deciding whether to merge. So the
+        # branch is asked while it exists, and this tree once it is gone.
+        landed=no
+        if [ "$graph_state" = done ] && [ -f "$root/$record" ]; then
+            # Landed and closed: this tree counts the tick and carries the
+            # record. A task branch left standing afterwards says nothing —
+            # the work is here.
+            landed=yes
+        fi
+        if [ "$landed" = no ] && git rev-parse --verify -q "$branch^{commit}" >/dev/null 2>&1; then
+            has_record=no
+            git cat-file -e "$branch:$record" 2>/dev/null && has_record=yes
+            ticked=no
+            branch_copy="$(mktemp -d)"
+            if git show "$branch:$rel" > "$branch_copy/$(basename "$spec_abs")" 2>/dev/null; then
+                branch_state="$(bash "$root/scripts/keeler-graph.sh" "$branch_copy/$(basename "$spec_abs")" 2>/dev/null | awk -v id="$id" '$1 == id { print $2 }')"
+                [ "$branch_state" = done ] && ticked=yes
+            fi
+            rm -rf "$branch_copy"
+        else
+            has_record=no
+            [ -f "$root/$record" ] && has_record=yes
+            ticked=no
+            [ "$graph_state" = done ] && ticked=yes
+        fi
+        missing=""
+        [ "$has_record" = yes ] || missing="no review record"
+        if [ "$ticked" = no ]; then
+            [ -n "$missing" ] && missing="$missing, "
+            missing="${missing}box not ticked"
+        fi
         # The `=` is exact matching: without it tmux answers about t10 when
         # asked about t1.
         if command -v tmux >/dev/null 2>&1 && tmux has-session -t "=$session" 2>/dev/null; then
             state=running
-        elif [ "$graph_state" = done ]; then
-            # The graph answers before any leftover does. A landed task
-            # whose worktree was never removed is done and not dead, and a
-            # task that failed a run, was fixed and landed is done and not
-            # failed — a verdict on disk is the record of a run that has
-            # since been superseded, and the board does not invent a second
-            # answer for work the graph already counts.
+        elif [ "$landed" = yes ]; then
+            # Landed and closed: the graph on this branch counts it, and it
+            # carries its record. This answers before any leftover does — a
+            # stale verdict from a run that was later fixed and landed is
+            # the record of something superseded.
             printf '%-6s %s\n' "$id" "done"
             continue
-        elif [ -f "$exit_file" ]; then
-            code="$(tr -d '[:space:]' < "$exit_file")"
-            if [ "$code" = 0 ]; then state=passed; else state="failed (exit $code)"; fi
-        elif [ -e "$worktree" ] || [ -f "$log_file" ]; then
+        elif [ -f "$exit_file" ] && [ "$(tr -d '[:space:]' < "$exit_file")" != 0 ]; then
+            state="failed (exit $(tr -d '[:space:]' < "$exit_file"))"
+        elif [ ! -f "$exit_file" ] && { [ -e "$worktree" ] || [ -f "$log_file" ]; }; then
             state=died
-        else
+        elif [ ! -f "$exit_file" ] && [ "$graph_state" != done ] && [ ! -e "$worktree" ]; then
+            # Nothing was ever started here, so there is nothing to be
+            # incomplete about.
             printf '%-6s %s\n' "$id" "not spawned"
             continue
+        elif [ -n "$missing" ]; then
+            # A green gate is one stage of four: a task can pass it having
+            # done only tdd, and calling that closed invites landing work
+            # nobody has read. The tick is the cheapest of the three to
+            # produce, so it is never the one that answers alone.
+            state="incomplete ($missing)"
+        else
+            state=passed
         fi
         printf '%-6s %-16s log %s  worktree %s\n' "$id" "$state" "$log_file" "$worktree"
         # A death is ordinary rather than exceptional — five of this
@@ -592,7 +636,11 @@ keeler-upgrade:
 # together. Not `dev-full` — hours of mutants at every fan-in is a cost
 # nobody would pay.
 #
-# Cleanup only when there is nothing to lose: a worktree with uncommitted
+# Cleanup asks for a closed task, not a ticked one: the review record and
+# a green gate beside the box, because a tick is the cheapest of the three
+# to produce and a worktree may hold the only copy of unread work.
+#
+# Cleanup only when there is nothing else to lose: a worktree with uncommitted
 # changes, one that has moved to another branch, and a branch holding
 # commits the feature branch does not have are each named and left where
 # they are. Nothing here is committed, and nothing a human has not seen is
@@ -729,6 +777,20 @@ keeler-land:
             # registered. Draining grep's input costs nothing.
             registered="$(git worktree list --porcelain)"
             printf '%s\n' "$registered" | grep -xF "worktree $worktree" > /dev/null || continue
+            # Closed is three things, and the tick is only one of them. A
+            # worktree may hold the only copy of work nobody has read, and
+            # a box is cheap to tick — so the other two are asked for
+            # before anything is removed. Below the registered filter, so
+            # a task with no worktree is not told its worktree was left.
+            if [ ! -f "$root/reviews/$slug/$tid.md" ]; then
+                echo "keeler-land: $id is ticked but carries no review record at reviews/$slug/$tid.md — left in place, with its worktree; a tick without a record is not a landing"
+                continue
+            fi
+            verdict="$root/.keeler/runs/$slug/$tid.exit"
+            if [ -f "$verdict" ] && [ "$(tr -d '[:space:]' < "$verdict")" != 0 ]; then
+                echo "keeler-land: $id is ticked but its gate failed (exit $(tr -d '[:space:]' < "$verdict")) — left in place, with its worktree; the tree is where the failure can still be read"
+                continue
+            fi
             # And it must still be the task's worktree: a human who
             # switched it to a branch of their own left the task's branch
             # standing somewhere else, and deleting it here would be
