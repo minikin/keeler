@@ -158,6 +158,23 @@ And   it names the log and the worktree, which together are what a resume
       got
 ```
 
+### Scenario: A task is closed by three things, not one
+
+```
+Given a task whose gate ran green
+When  `just keeler-status <spec>` runs
+Then  it says passed only when all three hold — the gate was green, the
+      branch carries reviews/<spec-slug>/<task-id>.md, and the task's box
+      is ticked
+And   with any of them missing it says incomplete, naming which: a green
+      gate is one stage of four, and a task that reached it with no
+      review record is work nobody has read
+And   `just keeler-land` on the feature branch removes the worktree and
+      branch of a closed task only — a tick without a record is not a
+      landing, and a worktree removed on the strength of one takes the
+      only copy of the work with it
+```
+
 ### Scenario: A dead task is resumed by name
 
 ```
@@ -464,6 +481,15 @@ split it rather than ship a task eight scenarios wide.
       place and nothing new is created; running, passed and done fixtures
       are refused by name.
 
+- [ ] **T12 — A task is closed by three things, not one.** Needs: T11.
+      Scenarios: _A task is closed by three things, not one_.
+      Deliverable: `keeler-status` reads the record and the tick beside
+      the verdict and says `incomplete` naming what is missing;
+      `keeler-land` on the feature branch requires all three before it
+      removes anything. Tests: acceptance — fixtures for each of the
+      three missing in turn, on the board and at the landing; the
+      all-three fixture passes and lands.
+
 ---
 
 ## Implementation Notes
@@ -610,8 +636,18 @@ exits zero for any finished turn, including one that ended in FAIL. The
 verdict is the machine's, as everywhere else in this pipeline. Everything
 printed is teed to `<task>.log` beside it, so a run can be read after its
 window is gone; `keeler-status` reads both, and asks `tmux has-session`
-for "running" rather than inferring it from a missing file. Two things
-the first live spawn taught, both now scenarios: `claude -p` prints
+for "running" rather than inferring it from a missing file. **A green gate is one stage of four.** The second live spawn passed its
+gate on real work — eight hundred lines of tests, two hundred and
+thirty-five of them green — and had done only the first stage: no review
+record, no tick, its session having reached a limit mid-pipeline. The
+gate cannot know that; it measures the tree, not the pipeline. So closed
+means three things — gate green, record on the branch, box ticked — and
+both the board and the landing ask for all three. A tick without a record
+is not a landing, and `keeler-land` removing a worktree on the strength
+of one would take the only copy of unreviewed work with it.
+
+Three things
+the first live spawns taught, all now scenarios: `claude -p` prints
 nothing until its final answer, so without `--verbose` a working agent
 and a hung one leave the same empty log for four minutes; and the gate
 must run only after the agent finished its turn — a runner that gates

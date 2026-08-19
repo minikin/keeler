@@ -518,6 +518,7 @@ fn this_spec_is_its_own_fixture() {
         ("T9", vec!["T8"]),
         ("T10", vec!["T9"]),
         ("T11", vec!["T3"]),
+        ("T12", vec!["T11"]),
     ]
     .into_iter()
     .map(|(id, needs)| {
