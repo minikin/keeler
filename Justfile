@@ -355,6 +355,7 @@ keeler-spawn SPEC TASK:
     runs="$root/.keeler/runs/$slug"
     mkdir -p "$runs"
     exit_file="$runs/$tid.exit"
+    stream_file="$runs/$tid.stream"
     log_file="$runs/$tid.log"
     runner="$runs/$tid.sh"
     # A verdict left by an earlier run of this task is not this run's.
@@ -397,16 +398,22 @@ keeler-spawn SPEC TASK:
     # final answer, and four minutes of honest work looks exactly like a
     # hang to anyone watching.
     {
-        claude -p "\$prompt" --verbose --permission-mode acceptEdits --allowedTools '$tools' --disallowedTools '$blocked'
-        agent=\$?
-        # The gate runs only after a finished turn. claude -p exits zero
-        # for any turn it finished, including one that ended in FAIL — so
-        # a non-zero exit is a turn that never ended, and gating on top of
-        # it would make the agent's death the gate's verdict on a worktree
-        # nobody touched.
-        if [ "\$agent" != 0 ]; then
-            echo "keeler: the agent ended without finishing its turn (exit \$agent) — the gate did not run" >&2
-            exit "\$agent"
+        # stream-json, because the exit code cannot answer the question
+        # that matters. A session that hits its limit mid-work prints its
+        # apology and exits zero, tidily, having finished nothing — this
+        # project met exactly that. The stream's final `result` record is
+        # written only when the turn ends, so its presence is the signal
+        # and its absence is the death, however calm the exit.
+        claude -p "\$prompt" --verbose --output-format stream-json \
+            --permission-mode acceptEdits --allowedTools '$tools' --disallowedTools '$blocked' \
+            | tee "$stream_file"
+        if ! grep -q '"type":"result"' "$stream_file" 2>/dev/null; then
+            echo "keeler: the agent ended without finishing its turn — the gate did not run, and there is no verdict to mistake for one" >&2
+            exit 1
+        fi
+        if grep -q '"is_error":true' "$stream_file" 2>/dev/null; then
+            echo "keeler: the agent finished its turn with an error — the gate did not run" >&2
+            exit 1
         fi
         just keeler-branch
         echo \$? > "$exit_file"

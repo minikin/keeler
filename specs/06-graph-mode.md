@@ -146,9 +146,13 @@ Given a spawned session that died before its pipeline finished — a usage
       limit, a killed terminal, a reboot
 When  `just keeler-status <spec>` runs
 Then  it distinguishes a task that died mid-pipeline from one that failed
-      its gate — the gate runs only when the agent finished its turn, so
-      an agent that ended without one leaves a `died` marker and no
-      verdict, and the board says `died` and never `failed` for it
+      its gate — the gate runs only when the agent's stream carried a
+      final result record, which is written when a turn ends and by
+      nothing else, so an agent that stopped without one leaves no
+      verdict and the board says `died`
+And   that holds however the process exited: a session that reaches its
+      limit mid-work prints its apology and exits zero, and an exit code
+      cannot tell that from a turn that finished
 And   it names the log and the worktree, which together are what a resume
       reads — the commits already on the branch say how far the pipeline
       got

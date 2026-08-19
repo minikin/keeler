@@ -104,10 +104,17 @@ exit 0
 const CLAUDE_STUB: &str = r#"#!/usr/bin/env bash
 { for a in "$@"; do printf '%s\037' "$a"; done; printf '\036'; } >> "$KEELER_STUB_CLAUDE_LOG"
 if [ "${KEELER_STUB_CLAUDE_EXIT:-0}" != 0 ]; then
-    # An API death: the turn never finished, and nothing is printed.
+    # An API death that reports itself: the turn never finished.
     exit "$KEELER_STUB_CLAUDE_EXIT"
 fi
-echo "claude stub: the turn ended in FAIL"
+if [ "${KEELER_STUB_CLAUDE_SILENT_DEATH:-0}" = 1 ]; then
+    # The death this project actually met: a session limit, no result
+    # record in the stream, and exit zero all the same.
+    echo '{"type":"assistant","message":{"content":[{"type":"text","text":"You have hit your session limit"}]}}'
+    exit 0
+fi
+echo '{"type":"assistant","message":{"content":[{"type":"text","text":"claude stub: the turn ended in FAIL"}]}}'
+echo '{"type":"result","subtype":"success","is_error":false}'
 exit 0
 "#;
 
@@ -134,6 +141,8 @@ struct Project {
     branch_exit: i32,
     /// Non-zero makes the stub agent die without finishing its turn.
     claude_exit: i32,
+    /// The death that exits zero: no result record, nothing to complain of.
+    claude_silent_death: bool,
 }
 
 impl Project {
@@ -176,6 +185,7 @@ impl Project {
             run_sessions: false,
             branch_exit: 0,
             claude_exit: 0,
+            claude_silent_death: false,
         };
         project.git(&["init", "-qb", "main"]);
         project.git(&["add", "-A"]);
@@ -249,6 +259,10 @@ impl Project {
             )
             .env("KEELER_STUB_BRANCH_EXIT", self.branch_exit.to_string())
             .env("KEELER_STUB_CLAUDE_EXIT", self.claude_exit.to_string())
+            .env(
+                "KEELER_STUB_CLAUDE_SILENT_DEATH",
+                if self.claude_silent_death { "1" } else { "0" },
+            )
             .env(
                 "KEELER_STUB_TMUX_FAIL",
                 if self.dir.join(".stub-tmux-fail").exists() {
@@ -630,6 +644,37 @@ fn a_task_that_landed_after_a_failed_run_reads_as_done() {
     assert!(
         !line.contains("failed"),
         "a landed task reads as a failed gate:\n{listed}"
+    );
+}
+
+#[test]
+fn a_death_that_exits_zero_is_still_a_death() {
+    // Given the death this project actually met: a session limit reached
+    // mid-work, no result record in the stream — and exit zero, because
+    // the process ended tidily even though the turn did not
+    let mut project = Project::new("silent-death");
+    project.run_sessions = true;
+    project.claude_silent_death = true;
+    let output = project.spawn(SLUG, "T3");
+    assert!(output.status.success(), "{}", both(&output));
+
+    // Then the gate still did not run. An exit code says how the process
+    // ended, not whether the turn did; the stream's final result record
+    // is the only thing that says the latter, and its absence is the
+    // death — however calmly the process exited.
+    assert!(
+        !project.runs(SLUG).join("t3.exit").exists(),
+        "a turn that never finished was gated and given a verdict"
+    );
+    let listed = stdout(&project.status(SLUG));
+    let line = task_line(&listed, "T3");
+    assert!(
+        line.contains("died"),
+        "a death that exits zero reads as something else:\n{line}"
+    );
+    assert!(
+        !line.contains("passed"),
+        "a death that exits zero reads as a pass:\n{line}"
     );
 }
 
