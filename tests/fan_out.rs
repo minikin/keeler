@@ -88,9 +88,15 @@ mod wave {
     exit 0
     "#;
 
+    /// What the real binary emits for a turn that finished: a result
+    /// record, which is the only thing the runner gates on. The older
+    /// two-line stub predated that check and made every stubbed run die
+    /// before its gate — which is how a test came to assert `passed`
+    /// against a board that said `died`.
     const CLAUDE_STUB: &str = r#"#!/usr/bin/env bash
     { for a in "$@"; do printf '%s\037' "$a"; done; printf '\036'; } >> "$KEELER_STUB_CLAUDE_LOG"
-    echo "claude stub: the turn ended"
+    echo '{"type":"assistant","message":{"content":[{"type":"text","text":"claude stub: the turn ended"}]}}'
+    echo '{"is_error":false,"type":"result","subtype":"success"}'
     exit 0
     "#;
 
@@ -173,6 +179,45 @@ mod wave {
 
         fn spec_file(&self, slug: &str) -> PathBuf {
             self.dir.join(spec_path(slug))
+        }
+
+        /// Closes a task on its own branch: the review record and the
+        /// tick, committed there. Without both the board says
+        /// `incomplete`, which is right and is a different clause.
+        fn close_on_branch(&self, slug: &str, task: &str) {
+            let tid = task.to_lowercase();
+            let wt = self.worktree(slug, task);
+            let reviews = wt.join("reviews").join(slug);
+            std::fs::create_dir_all(&reviews).unwrap();
+            std::fs::write(
+                reviews.join(format!("{tid}.md")),
+                format!("Spec: {slug}\nTask: {tid}\nCommit: fixture\nVerdict: pass\n"),
+            )
+            .unwrap();
+            let spec = wt.join("specs").join(format!("{slug}.md"));
+            let text = std::fs::read_to_string(&spec).unwrap();
+            std::fs::write(
+                &spec,
+                text.replace(&format!("- [ ] **{task}"), &format!("- [x] **{task}")),
+            )
+            .unwrap();
+            for args in [
+                vec!["add", "-A"],
+                vec!["commit", "-qm", "the record and the tick"],
+            ] {
+                let out = Command::new("git")
+                    .args(["-c", "user.email=p@k", "-c", "user.name=p"])
+                    .args(&args)
+                    .current_dir(&wt)
+                    .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                    .output()
+                    .expect("git");
+                assert!(
+                    out.status.success(),
+                    "git {args:?}: {}",
+                    String::from_utf8_lossy(&out.stderr)
+                );
+            }
         }
 
         fn worktree(&self, slug: &str, task: &str) -> PathBuf {
@@ -336,6 +381,17 @@ mod wave {
 
     /// The line the run prints for one task id — the graph's line for a task
     /// it offers or holds back, the board's line for one already spawned.
+    /// The state field of a board line — the second word, which is what
+    /// the board decides. Matching the whole line matches the fixture's
+    /// own paths, and a directory name is not a verdict.
+    fn state_of(said: &str, id: &str) -> String {
+        task_line(said, id)
+            .split_whitespace()
+            .nth(1)
+            .unwrap_or_default()
+            .to_string()
+    }
+
     fn task_line<'a>(said: &'a str, id: &str) -> &'a str {
         said.lines()
             .find(|line| line.split_whitespace().next() == Some(id))
@@ -393,7 +449,7 @@ mod wave {
         assert_eq!(wave_of(&said), ["T2", "T3", "T5"], "{said}");
         for id in ["T2", "T3", "T5"] {
             assert!(
-                task_line(&said, id).contains("ready"),
+                state_of(&said, id) == "ready",
                 "{id} is not listed as ready:\n{said}"
             );
         }
@@ -486,15 +542,24 @@ mod wave {
 
         // And a task that passed but has not landed is the same: known to the
         // board, listed by its verdict, not offered
-        let mut passed = Project::new("board-passed");
-        passed.run_sessions = true;
-        passed.branch_exit = 0;
-        assert!(passed.spawn(SLUG, "T2").status.success());
-        passed.run_sessions = false;
-        let said = stdout(&passed.fan_out(SLUG, &Answer::Piped("no\n")));
+        // The third state: a task whose gate ran green and which has not
+        // landed. Closed is three things, so the record and the tick go on
+        // its branch too — without them the board says `incomplete`, which
+        // is a fourth thing this clause does not claim.
+        let mut green = Project::new("board-green");
+        green.run_sessions = true;
+        green.branch_exit = 0;
+        assert!(green.spawn(SLUG, "T2").status.success());
+        green.run_sessions = false;
+        green.close_on_branch(SLUG, "T2");
+        let said = stdout(&green.fan_out(SLUG, &Answer::Piped("no\n")));
         assert_eq!(wave_of(&said), ["T3", "T5"], "{said}");
-        assert!(
-            task_line(&said, "T2").contains("passed"),
+        // The state field, not the whole line: the line carries the
+        // fixture's own directory name, and a fixture called board-passed
+        // satisfied `contains("passed")` while the board said `died`.
+        assert_eq!(
+            state_of(&said, "T2"),
+            "passed",
             "T2 is not listed as passed:\n{said}"
         );
     }
@@ -584,7 +649,7 @@ mod wave {
                 both(&output)
             );
             assert!(
-                said.to_lowercase().contains("nothing"),
+                said.to_lowercase().contains("nothing is ready"),
                 "the run does not say nothing is ready:\n{said}"
             );
             assert!(
@@ -801,7 +866,6 @@ mod wave {
             proptest::prop_assert_eq!(wave_of(&said), ready, "{}", both(&output));
         }
     }
-
 }
 
 mod fork {
@@ -1412,5 +1476,4 @@ mod fork {
             );
         }
     }
-
 }

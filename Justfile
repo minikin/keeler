@@ -429,14 +429,7 @@ _write-runner SPEC TASK BRANCH WORKTREE RUNNER EXIT_FILE LOG_FILE STREAM_FILE:
     RUNNER
     chmod +x "$runner"
 
-# It refuses before creating anything when tmux is missing, when the spec
-# differs from HEAD or is not Approved (the worktree is cut from HEAD, so an
-# uncommitted graph is one the agent would never see), when the graph script
-# says the task is blocked, and when the task already has a worktree.
-# Otherwise it creates a worktree beside the repository on
-# keeler/<spec-slug>/<task-id>, writes a runner script under .keeler/runs/,
-# starts a detached tmux session on it and returns at once.
-# `just keeler-status <spec>` is the board afterwards.
+
 # The guards `keeler-spawn` fires on its way to a worktree, and the graph
 # it then reads: written once, here, because `keeler-fan-out` must refuse
 # on the same grounds before it prints a wave, and two copies of a check
@@ -894,6 +887,10 @@ keeler-fan-out SPEC:
     # The yes is given. What it spawns — the loop over `keeler-spawn`, one
     # task at a time, in this order — is the spawning half of the recipe
     # and lands here.
+    # The answer is the human's, and it must not travel: a spawned agent
+    # that inherited it could run a wave with the one question already
+    # answered. T3 spawns from here, so it is unset before anything is.
+    unset KEELER_FAN_OUT_YES
     echo "keeler-fan-out: yes to $wave"
 
 # Upgrade Keeler itself (KEELER_REF=v0.3.0 just keeler-upgrade to pin a tag)
