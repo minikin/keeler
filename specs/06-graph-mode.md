@@ -474,7 +474,7 @@ split it rather than ship a task eight scenarios wide.
       changed and what did not; a red feature branch removes nothing;
       running it on a task branch is refused as before.
 
-- [ ] **T11 — A dead task is resumed by name.** Needs: T3. Scenarios:
+- [x] **T11 — A dead task is resumed by name.** Needs: T3. Scenarios:
       _A dead task is resumed by name_. Deliverable: `just keeler-resume
       <spec> <task>`, and the board's line for a died task naming it.
       Tests: acceptance — with the stub tmux, a died fixture is re-run in
@@ -636,9 +636,11 @@ exits zero for any finished turn, including one that ended in FAIL. The
 verdict is the machine's, as everywhere else in this pipeline. Everything
 printed is teed to `<task>.log` beside it, so a run can be read after its
 window is gone; `keeler-status` reads both, and asks `tmux has-session`
-for "running" rather than inferring it from a missing file. **A green gate is one stage of four.** The second live spawn passed its
+for "running" rather than inferring it from a missing file.
+
+**A green gate is one stage of four.** The second live spawn passed its
 gate on real work — eight hundred lines of tests, two hundred and
-thirty-five of them green — and had done only the first stage: no review
+thirty-five of them green — having done only the first stage: no review
 record, no tick, its session having reached a limit mid-pipeline. The
 gate cannot know that; it measures the tree, not the pipeline. So closed
 means three things — gate green, record on the branch, box ticked — and
@@ -646,26 +648,21 @@ both the board and the landing ask for all three. A tick without a record
 is not a landing, and `keeler-land` removing a worktree on the strength
 of one would take the only copy of unreviewed work with it.
 
-Three things
-the first live spawns taught, all now scenarios: `claude -p` prints
-nothing until its final answer, so without `--verbose` a working agent
-and a hung one leave the same empty log for four minutes; and the gate
-must run only after the agent finished its turn — a runner that gates
-unconditionally turns an API death into `failed (exit 101)`, which is
-what the board said about an agent that had done four minutes of honest
-reading and then simply stopped. The three
-states are not two: a session that is gone with no `.exit` died before
-its gate ever ran, which is a different thing from a gate that failed,
-and a resume starts from the commits already on the branch — this was
-learned the hard way when both agents of the manual dry run died on a
-usage limit and had to be restored by reading their commits by hand. The paths are
-absolute and under the main checkout, and `.keeler/` is added to the
-ignore list the installer already writes. Nothing here decides *what* to spawn:
-every session is one the human named, so the no-scheduler line holds. The
-alternatives — plain background processes with log files and PID
-tracking, or N terminals by hand — are respectively half a scheduler and
-no parallelism; tmux is the thing that is neither. It becomes a
-requirement, checked by `install.sh` the way `just` is.
+**Three things the first live spawns taught, all now scenarios.** First,
+`claude -p` prints nothing until its final answer, so without `--verbose`
+a working agent and a hung one leave the same empty log for four minutes.
+Second, the gate must run only after the agent finished its turn: a
+runner that gates unconditionally turns an API death into
+`failed (exit 101)`, which is what the board said about an agent that had
+done four minutes of honest reading and then stopped. Third — and this
+one cost a second try — an exit code cannot tell those apart either. A
+session that reaches its limit prints its apology and exits zero, tidily,
+having finished nothing. So the runner reads `--output-format
+stream-json` into `<task>.stream` and gates only when that stream carries
+a final `result` record, which is written when a turn ends and by nothing
+else. The check is scoped to that record: `is_error` is a field of every
+failed tool result too, and red-then-green means every honest task has
+one — unscoped, it called every finished task dead.
 
 **Readiness is read from the spec on the feature's branch,
 `feat/<spec-slug>`.** A feature gets one branch and its tasks fan out from
