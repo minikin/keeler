@@ -219,7 +219,7 @@ the one piece the stub tmux cannot stand in for.
       <spec>`, the harness drives against a fixture repository with and
       without the branch existing. Deliverable: the question in `spec.md`,
       the recipe, and the hand-off text.
-- [ ] **T2 — Fan-out reads and asks.** Scenarios: _Fan-out
+- [x] **T2 — Fan-out reads and asks.** Scenarios: _Fan-out
       names the wave and waits for yes_, _An empty wave says so_,
       _Fan-out refuses where spawn would_. Tests: acceptance — the harness
       runs the recipe with a piped answer against fixture graphs; property
