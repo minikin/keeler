@@ -763,6 +763,19 @@ fn the_feature_level_touches_only_its_own_specs_tasks() {
     project.git(&["commit", "-qm", "another spec"]);
     let mine = project.add_worktree("t1");
     project.write_review_record("t1");
+    // 43-other's task carries its record too, so the only reason its
+    // worktree survives is the spec-to-branch binding — without it the
+    // record check would spare the worktree and the test would pass with
+    // the binding gone.
+    let other_reviews = project.dir.join("reviews").join("43-other");
+    std::fs::create_dir_all(&other_reviews).unwrap();
+    std::fs::write(
+        other_reviews.join("t1.md"),
+        "Spec: 43-other\nTask: t1\nCommit: x\nVerdict: pass\n",
+    )
+    .unwrap();
+    project.git(&["add", "-A"]);
+    project.git(&["commit", "-qm", "43-other's record"]);
     let theirs = project.worktree_path_for("43-other", "t1");
     project.git(&[
         "worktree",
@@ -863,6 +876,53 @@ fn landing_on_main_takes_status_and_the_baseline_and_no_worktrees() {
     assert!(
         both(&output).contains(leftover.to_str().unwrap()),
         "main passed a leftover task worktree in silence:\n{}",
+        both(&output)
+    );
+}
+
+#[test]
+fn landing_leaves_a_task_whose_gate_was_red() {
+    // Given a ticked task with its record — and a verdict saying the gate
+    // failed
+    let project = Project::on_feature_branch("red-gate", &spec_with(&[true, true], "Approved"));
+    let worktree = project.add_worktree("t1");
+    let runs = project.runs_dir();
+    std::fs::create_dir_all(&runs).unwrap();
+    std::fs::write(runs.join("t1.exit"), "3\n").unwrap();
+    project.write_review_record("t1");
+
+    // When keeler-land runs
+    let output = project.land();
+    assert!(output.status.success(), "{}", both(&output));
+
+    // Then the worktree stands. Closed is three things and the gate is
+    // one of them: a red gate with a tick and a record is a task someone
+    // marked finished over a failure, and its tree is where the failure
+    // can still be looked at.
+    assert!(
+        worktree.exists(),
+        "a task whose gate was red had its worktree removed:\n{}",
+        both(&output)
+    );
+}
+
+#[test]
+fn landing_says_nothing_about_worktrees_that_do_not_exist() {
+    // Given ticked tasks with no records and no worktrees — this
+    // repository's own spec 06, where T1 and T2 landed long before the
+    // record was a rule
+    let project = Project::on_feature_branch("no-worktrees", &spec_with(&[true, true], "Approved"));
+
+    // When keeler-land runs
+    let output = project.land();
+    assert!(output.status.success(), "{}", both(&output));
+
+    // Then it says nothing about leaving worktrees in place, because
+    // there are none. A refusal that names a path that does not exist
+    // teaches the reader to skim the output.
+    assert!(
+        !both(&output).contains("left in place, with its worktree"),
+        "the run promised to leave worktrees that never existed:\n{}",
         both(&output)
     );
 }

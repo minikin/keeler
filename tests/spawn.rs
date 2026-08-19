@@ -195,6 +195,13 @@ impl Project {
         project.git(&["init", "-qb", "main"]);
         project.git(&["add", "-A"]);
         project.git(&["commit", "-qm", "fixture"]);
+        // T1 is ticked in the fixture spec, so it is a landed task — and a
+        // landed task carries its review record. Without one the board is
+        // right to call it incomplete, which is a different subject from
+        // what most of these tests measure.
+        project.write_review_record(SLUG, "t1");
+        project.git(&["add", "-A"]);
+        project.git(&["commit", "-qm", "T1's review record"]);
         // A feature is developed on its own branch, and that is where its
         // tasks fan out from — so that is where a fixture stands unless a
         // test moves it.
@@ -237,6 +244,25 @@ impl Project {
         assert!(
             output.status.success(),
             "git {args:?} failed:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
+    /// Runs git inside one of this project's worktrees.
+    fn git_in(worktree: &Path, args: &[&str]) -> String {
+        let output = Command::new("git")
+            .args(["-c", "user.email=probe@keeler", "-c", "user.name=probe"])
+            .args(args)
+            .current_dir(worktree)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .output()
+            .expect("failed to run git");
+        assert!(
+            output.status.success(),
+            "git {args:?} in {} failed:\n{}",
+            worktree.display(),
             String::from_utf8_lossy(&output.stderr)
         );
         String::from_utf8_lossy(&output.stdout).trim().to_string()
@@ -641,11 +667,13 @@ fn a_task_that_landed_after_a_failed_run_reads_as_done() {
         project.runs(SLUG).join("t3.exit").exists(),
         "the fixture wrote no verdict; there is nothing to outrank"
     );
-    // The task then lands: its box is ticked and committed on main, which
-    // is the state keeler-land leaves and the state the board reads
+    // The task then lands: its box ticked and its review record committed
+    // here, which is the state keeler-land leaves and the state the board
+    // reads — a tick alone is not a landing
     let spec = project.dir.join("specs").join(format!("{SLUG}.md"));
     let text = std::fs::read_to_string(&spec).unwrap();
     std::fs::write(&spec, text.replace("- [ ] **T3", "- [x] **T3")).unwrap();
+    project.write_review_record(SLUG, "t3");
     project.git(&["add", "-A"]);
     project.git(&["commit", "-qm", "land T3"]);
 
@@ -923,6 +951,73 @@ fn a_resume_runs_the_runner_in_the_worktree_whatever_the_path() {
         call.windows(2)
             .any(|w| w[0] == "-c" && w[1] == project.worktree(SLUG, "T3").to_str().unwrap()),
         "the session does not start in the task's worktree: {call:?}"
+    );
+}
+
+#[test]
+fn the_board_asks_the_task_branch_that_carries_the_record() {
+    // Given a task branch that did everything — gate green, review record
+    // committed, box ticked — and has not been merged yet, which is the
+    // moment the board is read to decide whether it may be
+    let mut project = Project::new("board-reads-the-branch");
+    project.run_sessions = true;
+    let output = project.spawn(SLUG, "T3");
+    assert!(output.status.success(), "{}", both(&output));
+    let worktree = project.worktree(SLUG, "T3");
+    let branch_spec = worktree.join("specs").join(format!("{SLUG}.md"));
+    let text = std::fs::read_to_string(&branch_spec).unwrap();
+    std::fs::write(&branch_spec, text.replace("- [ ] **T3", "- [x] **T3")).unwrap();
+    let reviews = worktree.join("reviews").join(SLUG);
+    std::fs::create_dir_all(&reviews).unwrap();
+    std::fs::write(
+        reviews.join("t3.md"),
+        "Spec: x\nTask: t3\nCommit: x\nVerdict: pass\n",
+    )
+    .unwrap();
+    Project::git_in(&worktree, &["add", "-A"]);
+    Project::git_in(&worktree, &["commit", "-qm", "review record and tick"]);
+
+    // When the board is read from the feature branch
+    let listed = stdout(&project.status(SLUG));
+    let line = task_line(&listed, "T3");
+
+    // Then it says the task is closed. The record and the tick live on the
+    // task branch until someone merges it — reading them from the feature
+    // branch's tree makes `incomplete` mean "not merged yet", which every
+    // finished and unfinished task alike would say, and the guard would be
+    // absent exactly when it is needed: deciding whether to merge.
+    assert!(
+        line.contains("passed"),
+        "a task branch carrying all three read as unfinished:\n{listed}"
+    );
+}
+
+#[test]
+fn a_ticked_task_without_a_record_is_not_closed() {
+    // Given a task ticked on the feature branch — landed, so its branch is
+    // gone — whose review record was never committed with it
+    let project = Project::new("ticked-no-record");
+    let spec = project.dir.join("specs").join(format!("{SLUG}.md"));
+    let text = std::fs::read_to_string(&spec).unwrap();
+    std::fs::write(&spec, text.replace("- [ ] **T3", "- [x] **T3")).unwrap();
+    project.git(&["add", "-A"]);
+    project.git(&["commit", "-qm", "tick T3 with no record"]);
+
+    // When the board is read
+    let listed = stdout(&project.status(SLUG));
+    let line = task_line(&listed, "T3");
+
+    // Then it is not called done. A tick is the cheapest of the three to
+    // produce, and the state that skips the other two checks is the state
+    // a tick alone reaches — so `done` there closes the very hole the rule
+    // was written for.
+    assert!(
+        !line.contains("done"),
+        "a tick alone was read as closed:\n{listed}"
+    );
+    assert!(
+        line.contains("incomplete") && line.contains("record"),
+        "the board does not name the missing record:\n{line}"
     );
 }
 
