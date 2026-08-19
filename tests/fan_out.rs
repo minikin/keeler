@@ -11,7 +11,7 @@
 //! shipped rules say about the fork and the wave — is text an agent reads
 //! as instruction, so it is asserted as text.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::OnceLock;
 
@@ -109,13 +109,11 @@ impl Project {
     }
 
     fn just(&self, args: &[&str]) -> Output {
-        Command::new(real_just())
-            .args(args)
-            .current_dir(&self.0)
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_SYSTEM", "/dev/null")
-            .output()
-            .expect("failed to run just")
+        just_from(&self.0, args)
+    }
+
+    fn dir(&self) -> &Path {
+        &self.0
     }
 
     /// The fork, run the way `/keeler:spec` runs it on the "graph" answer.
@@ -163,6 +161,20 @@ impl Drop for Project {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
     }
+}
+
+/// `just`, run from a path that reaches the project — which is not always
+/// the path git will answer with. `PWD` is set the way a login shell sets
+/// it, because that is what makes bash's `pwd` logical.
+fn just_from(cwd: &Path, args: &[&str]) -> Output {
+    Command::new(real_just())
+        .args(args)
+        .current_dir(cwd)
+        .env("PWD", cwd)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .output()
+        .expect("failed to run just")
 }
 
 fn both(output: &Output) -> String {
@@ -371,6 +383,64 @@ fn a_feature_branch_that_already_exists_is_used_not_remade() {
         both(&again).contains("nothing was committed"),
         "the run does not say that it committed nothing:\n{}",
         both(&again),
+    );
+}
+
+/// Not a scenario of its own — the path a human is standing in. `git
+/// rev-parse --show-toplevel` answers physically and a shell's `pwd`
+/// answers logically, so a repository reached through a symlink — /tmp on
+/// macOS is one — gives two names for one directory. A guard that
+/// compares them as strings refuses the spec it is looking at.
+#[test]
+fn a_repository_reached_through_a_symlink_is_still_this_repository() {
+    // Given the project reached through a symlink, as a shell that
+    // followed one would report it
+    let project = Project::new("through-a-symlink");
+    let link = std::env::temp_dir().join(format!("keeler-fan-out-link-{}", std::process::id()));
+    let _ = std::fs::remove_file(&link);
+    std::os::unix::fs::symlink(project.dir(), &link).unwrap();
+    project.write_spec(&spec_body("Approved", TASKS));
+
+    // When `just keeler-feature-branch <spec>` runs from there
+    let output = just_from(&link, &["keeler-feature-branch", &spec_path()]);
+    let _ = std::fs::remove_file(&link);
+
+    // Then it is the same repository, and the same fork
+    assert!(
+        output.status.success(),
+        "the fork refused a spec inside the repository it was run in:\n{}",
+        both(&output),
+    );
+    assert_eq!(project.branch(), format!("feat/{SLUG}"));
+    assert_eq!(project.touched("HEAD"), [spec_path()]);
+}
+
+/// Not a scenario of its own — the state a new spec is in when the human
+/// answers. `/keeler:spec` writes `specs/NN-slug.md` for the first time,
+/// and a human who ran `git add` before approving has a spec git knows
+/// and HEAD does not. Everything the recipe asks HEAD about has to be
+/// asked of HEAD, not of the index.
+#[test]
+fn a_spec_staged_but_never_committed_is_carried_across_like_any_other() {
+    // Given a spec that exists only in the working tree and the index
+    let project = Project::new("staged-not-committed");
+    project.git(&["rm", "-q", "--cached", "--", &spec_path()]);
+    project.git(&["commit", "-qm", "the repository before this spec existed"]);
+    let approved = spec_body("Approved", TASKS);
+    project.write_spec(&approved);
+    project.git(&["add", "--", &spec_path()]);
+
+    // When `just keeler-feature-branch <spec>` runs
+    let output = project.feature_branch();
+
+    // Then the branch is cut and the spec is committed on it, as it is for
+    // a spec HEAD already knew
+    assert!(output.status.success(), "{}", both(&output));
+    assert_eq!(project.branch(), format!("feat/{SLUG}"));
+    assert_eq!(project.touched("HEAD"), [spec_path()]);
+    assert_eq!(
+        project.git(&["show", &format!("HEAD:{}", spec_path())]),
+        approved.trim()
     );
 }
 

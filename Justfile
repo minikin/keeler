@@ -235,7 +235,11 @@ keeler-feature-branch SPEC:
     spec="{{SPEC}}"
     [ -f "$spec" ] || { echo "keeler-feature-branch: $spec is not a file" >&2; exit 1; }
     root="$(git rev-parse --show-toplevel)"
-    spec_abs="$(cd "$(dirname "$spec")" && pwd)/$(basename "$spec")"
+    # `pwd -P`, because `--show-toplevel` answers physically: a repository
+    # reached through a symlink — /tmp on macOS is one — has a logical path
+    # that is not a prefix of git's, and the guard below would refuse a
+    # spec sitting in the repository it is looking at.
+    spec_abs="$(cd "$(dirname "$spec")" && pwd -P)/$(basename "$spec")"
     case "$spec_abs" in
         "$root"/*) ;;
         *)
@@ -272,9 +276,15 @@ keeler-feature-branch SPEC:
     existed=no
     if git show-ref --verify --quiet "refs/heads/$feature"; then existed=yes; fi
     if [ "$here" != "$feature" ]; then
-        if git ls-files --error-unmatch -- "$spec_abs" >/dev/null 2>&1; then
+        # What HEAD has, not what the index has: a spec written and `git
+        # add`ed but never committed is known to git and absent from HEAD,
+        # and `git checkout HEAD -- <it>` fails on a pathspec HEAD does not
+        # know. The index entry goes with it — a staged addition carried
+        # across would collide with a branch that committed its own copy.
+        if git cat-file -e "HEAD:$rel" 2>/dev/null; then
             git checkout -q HEAD -- "$spec_abs"
         else
+            git rm -q --cached --ignore-unmatch -- "$spec_abs" >/dev/null
             rm -f "$spec_abs"
         fi
         if [ "$existed" = yes ]; then
