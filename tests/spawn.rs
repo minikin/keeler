@@ -1075,6 +1075,54 @@ fn a_task_is_closed_by_three_things_not_one() {
 }
 
 #[test]
+fn a_verdict_nobody_can_trust_says_how_to_be_rid_of_it() {
+    // Given a task whose verdict came from a run nobody believes — an
+    // earlier tooling, a gate that measured an untouched tree. This
+    // happened: a spawn's agent died, the runner gated anyway, and 101
+    // was written about work that did not exist.
+    let mut project = Project::new("stuck-verdict");
+    project.run_sessions = true;
+    project.branch_exit = 101;
+    project.spawn(SLUG, "T3");
+    let verdict = project.runs(SLUG).join("t3.exit");
+    assert!(verdict.exists(), "the fixture wrote no verdict");
+
+    // When the board is read
+    let listed = stdout(&project.status(SLUG));
+    let line = task_line(&listed, "T3");
+
+    // Then it names the file, and what removing it does. Without that the
+    // task is locked: the board says failed, the resume refuses, and the
+    // only way out is a path the tool never mentions.
+    assert!(
+        listed.contains(verdict.to_str().unwrap()),
+        "the board does not name the verdict file:\n{listed}"
+    );
+    assert!(
+        listed.contains("resum"),
+        "the board does not say what removing it does:\n{listed}"
+    );
+    assert!(line.contains("failed"), "the state changed:\n{line}");
+
+    // And the resume still refuses while it is there: taking a verdict
+    // back is a judgement about a run, not something a recipe makes
+    let output = project.just(&["keeler-resume", &format!("specs/{SLUG}.md"), "T3"]);
+    assert!(
+        !output.status.success(),
+        "a stuck verdict did not stop the resume"
+    );
+
+    // And removing it is what unlocks the resume
+    std::fs::remove_file(&verdict).unwrap();
+    let output = project.just(&["keeler-resume", &format!("specs/{SLUG}.md"), "T3"]);
+    assert!(
+        output.status.success(),
+        "removing the verdict did not unlock the resume:\n{}",
+        both(&output)
+    );
+}
+
+#[test]
 fn a_dead_task_is_resumed_by_name() {
     // Given a task the board reports as died
     let mut project = Project::new("resume");

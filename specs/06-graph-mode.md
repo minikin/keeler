@@ -175,6 +175,20 @@ And   `just keeler-land` on the feature branch removes the worktree and
       only copy of the work with it
 ```
 
+### Scenario: A verdict nobody can trust says how to be rid of it
+
+```
+Given a task whose verdict was written by a run the human no longer
+      believes — an earlier version of the tooling, a gate that measured
+      an untouched tree
+When  `just keeler-status <spec>` runs
+Then  beside that task it names the file the verdict lives in and says
+      that removing it is what makes the task resumable again
+And   `just keeler-resume` still refuses while the verdict is there:
+      taking it back is the human's judgement about a run, not something
+      a recipe decides
+```
+
 ### Scenario: A dead task is resumed by name
 
 ```
@@ -489,6 +503,14 @@ split it rather than ship a task eight scenarios wide.
       removes anything. Tests: acceptance — fixtures for each of the
       three missing in turn, on the board and at the landing; the
       all-three fixture passes and lands.
+
+- [x] **T13 — A stuck verdict says how to be rid of it.** Needs: T12.
+      Scenarios: _A verdict nobody can trust says how to be rid of it_.
+      Deliverable: `keeler-status` names the verdict file beside a task
+      whose gate failed, and says removing it is what unlocks a resume.
+      Tests: acceptance — a failed fixture's board line names the path;
+      `keeler-resume` still refuses; removing the file makes the resume
+      run.
 
 ---
 
