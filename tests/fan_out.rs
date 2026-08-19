@@ -100,12 +100,20 @@ mod wave {
     exit 0
     "#;
 
-    /// Stands in for `just keeler-branch`; everything else is the real `just`.
+    /// Stands in for the two gates a fixture cannot run — `just
+    /// keeler-branch`, which a spawned run ends with, and `just dev`, which
+    /// `keeler-land` opens with. Everything else is the real `just`.
     const JUST_STUB: &str = r#"#!/usr/bin/env bash
-    if [ "${1:-}" = keeler-branch ]; then
+    case "${1:-}" in
+    keeler-branch)
         echo "keeler-branch stub: the gate ran"
         exit "${KEELER_STUB_BRANCH_EXIT:-0}"
-    fi
+        ;;
+    dev)
+        echo "dev stub: the full gate ran"
+        exit 0
+        ;;
+    esac
     exec "$KEELER_REAL_JUST" "$@"
     "#;
 
@@ -342,6 +350,29 @@ mod wave {
                 .filter(|call| call.first().is_some_and(|verb| verb == "new-session"))
                 .collect()
         }
+
+        /// The sessions the stub tmux was asked to start, in the order it was
+        /// asked — which is the order the wave was spawned in, since one
+        /// `keeler-spawn` starts exactly one.
+        fn started_sessions(&self) -> Vec<String> {
+            self.new_sessions()
+                .iter()
+                .filter_map(|call| {
+                    let at = call.iter().position(|arg| arg == "-s")?;
+                    call.get(at + 1).cloned()
+                })
+                .collect()
+        }
+
+        fn branch_exists(&self, slug: &str, task: &str) -> bool {
+            !self
+                .git(&[
+                    "branch",
+                    "--list",
+                    &format!("keeler/{slug}/{}", task.to_lowercase()),
+                ])
+                .is_empty()
+        }
     }
 
     impl Drop for Project {
@@ -365,6 +396,12 @@ mod wave {
                 let _ = std::fs::remove_file(entry.path());
             }
         }
+    }
+
+    /// The session `keeler-spawn` gives one task, which is the name the board
+    /// and a single attach use.
+    fn session(slug: &str, task: &str) -> String {
+        format!("keeler-{slug}-{}", task.to_lowercase())
     }
 
     fn stdout(output: &Output) -> String {
@@ -724,6 +761,166 @@ mod wave {
             );
             assert!(!asked(&said), "the run asked after refusing:\n{said}");
             nothing_spawned(project, &both(&refused_fan_out));
+        }
+    }
+
+    #[test]
+    fn yes_spawns_the_whole_wave_through_keeler_spawn() {
+        // Given the wave — T2, T3 and T5 ready, T4 blocked on T2 — and the
+        // answer yes
+        let project = Project::new("spawns");
+
+        // When fan-out continues
+        let output = project.fan_out(SLUG, &Answer::Piped("yes\n"));
+        let said = both(&output);
+        assert!(output.status.success(), "the wave did not spawn:\n{said}");
+
+        // Then it runs `just keeler-spawn <spec> T2`, T3 and T5, in that
+        // order — one session apiece, started in the wave's order
+        assert_eq!(wave_of(&stdout(&output)), ["T2", "T3", "T5"], "{said}");
+        assert_eq!(
+            project.started_sessions(),
+            ["T2", "T3", "T5"].map(|id| session(SLUG, id)),
+            "the wave was not spawned in order:\n{said}"
+        );
+
+        // And through the same recipe a hand would use: what each task got is
+        // keeler-spawn's own doing — its branch, its worktree, its runner —
+        // and its report is in the run's own words
+        for id in ["T2", "T3", "T5"] {
+            let tid = id.to_lowercase();
+            assert!(
+                project.worktree(SLUG, id).exists(),
+                "{id} has no worktree:\n{said}"
+            );
+            assert!(
+                project.branch_exists(SLUG, id),
+                "{id} has no branch:\n{said}"
+            );
+            assert!(
+                project.runs(SLUG).join(format!("{tid}.sh")).is_file(),
+                "{id} has no runner:\n{said}"
+            );
+            assert!(
+                said.contains(&format!("spawned {id} on keeler/{SLUG}/{tid}")),
+                "the run does not report {id}'s outcome in keeler-spawn's words:\n{said}"
+            );
+        }
+
+        // And the blocked task is not among them: the wave is what was offered
+        assert!(
+            !project.worktree(SLUG, "T4").exists() && !project.branch_exists(SLUG, "T4"),
+            "the blocked T4 was spawned:\n{said}"
+        );
+
+        // And the wave is a loop over keeler-spawn, not a second
+        // implementation of it: the guards and the cut live there alone
+        let justfile = std::fs::read_to_string(repo_root().join("Justfile")).unwrap();
+        let body = recipe_body(&justfile, "keeler-fan-out");
+        assert!(
+            body.contains("keeler-spawn"),
+            "keeler-fan-out does not run keeler-spawn:\n{body}"
+        );
+        assert!(
+            !body.contains("git worktree add"),
+            "keeler-fan-out cuts a worktree of its own:\n{body}"
+        );
+    }
+
+    #[test]
+    fn a_refusal_mid_wave_is_named_and_the_rest_of_the_wave_still_spawns() {
+        // Given the wave, and T3 become spawned meanwhile — its branch cut
+        // after the board was read, which is what a second hand looks like
+        let project = Project::new("refused-mid-wave");
+        project.git(&["branch", &format!("keeler/{SLUG}/t3")]);
+
+        // When fan-out continues on a yes
+        let output = project.fan_out(SLUG, &Answer::Piped("yes\n"));
+        let said = both(&output);
+
+        // Then T3 is refused and named, in keeler-spawn's own words
+        assert!(
+            stderr(&output).contains(&format!("branch keeler/{SLUG}/t3 already exists")),
+            "T3's refusal is not keeler-spawn's:\n{said}"
+        );
+        assert!(
+            !project.worktree(SLUG, "T3").exists(),
+            "the refused T3 was given a worktree:\n{said}"
+        );
+
+        // And the rest of the wave still spawns, in order
+        assert_eq!(
+            project.started_sessions(),
+            ["T2", "T5"].map(|id| session(SLUG, id)),
+            "the refusal took the rest of the wave with it:\n{said}"
+        );
+        for id in ["T2", "T5"] {
+            assert!(
+                project.worktree(SLUG, id).exists() && project.branch_exists(SLUG, id),
+                "{id} did not spawn after T3's refusal:\n{said}"
+            );
+        }
+
+        // And the run reports each task's outcome and exits non-zero, because
+        // a spawn refused
+        assert!(
+            !output.status.success(),
+            "a refused spawn was reported as a whole wave:\n{said}"
+        );
+        for id in ["T2", "T3", "T5"] {
+            assert!(
+                said.lines()
+                    .any(|line| { line.starts_with("keeler-fan-out:") && line.contains(id) }),
+                "the run never says what became of {id}:\n{said}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_next_wave_is_a_re_run() {
+        // Given a wave that landed: T2, T3 and T5 spawned...
+        let project = Project::new("re-run");
+        let first = project.fan_out(SLUG, &Answer::Piped("yes\n"));
+        assert!(first.status.success(), "{}", both(&first));
+        assert_eq!(wave_of(&stdout(&first)), ["T2", "T3", "T5"]);
+
+        // ...T2 finished — its review record and its tick, committed on its
+        // own branch — its tick merged into feat/<spec-slug>, and
+        // `just keeler-land` run there
+        project.close_on_branch(SLUG, "T2");
+        project.git(&["merge", "-q", "--no-edit", &format!("keeler/{SLUG}/t2")]);
+        let landed = project.just(&["keeler-land"]);
+        assert!(landed.status.success(), "{}", both(&landed));
+        assert!(
+            !project.worktree(SLUG, "T2").exists(),
+            "the landing left T2's worktree behind:\n{}",
+            both(&landed)
+        );
+
+        // When `just keeler-fan-out <spec>` runs again
+        let output = project.fan_out(SLUG, &Answer::Piped("no\n"));
+        let said = stdout(&output);
+
+        // Then the tasks the landing unblocked are the new wave: T4 waited on
+        // T2 and waits no longer
+        assert_eq!(wave_of(&said), ["T4"], "{said}");
+
+        // And the tasks already done are listed as done, not offered
+        for id in ["T1", "T2"] {
+            assert_eq!(
+                state_of(&said, id),
+                "done",
+                "{id} is not listed as done:\n{said}"
+            );
+        }
+
+        // And the tasks still out there are the board's, as they were
+        for id in ["T3", "T5"] {
+            assert_eq!(
+                state_of(&said, id),
+                "died",
+                "{id} is not listed in the board's words:\n{said}"
+            );
         }
     }
 

@@ -814,6 +814,15 @@ keeler-resume SPEC TASK:
 # this recipe otherwise refuses, so no command file may set it, and a
 # test says so.
 #
+# On the yes, the wave is handed to `keeler-spawn` one task at a time, in
+# the order it was printed in — the same recipe a hand would run, so every
+# refusal it has fires per task and nothing here cuts a worktree of its
+# own. A refusal is that task's alone: the board was read a moment before,
+# and a task another hand has spawned since is named and stepped over
+# while the rest of the wave spawns. The run reports what spawned and what
+# did not, and exits non-zero when anything was refused — one wave, one
+# yes, one exit code that says whether it all went out.
+#
 # Graph mode: name every ready, unspawned task and ask for the one yes that spawns the wave — `just keeler-fan-out specs/01-foo.md`.
 keeler-fan-out SPEC:
     #!/usr/bin/env bash
@@ -884,14 +893,37 @@ keeler-fan-out SPEC:
             exit 1
             ;;
     esac
-    # The yes is given. What it spawns — the loop over `keeler-spawn`, one
-    # task at a time, in this order — is the spawning half of the recipe
-    # and lands here.
+    # The yes is given. What it spawns is a loop over `keeler-spawn`, one
+    # task at a time, in the order the wave was printed in — the same recipe
+    # a hand would run, so every refusal it has still fires per task and
+    # nothing here cuts a worktree of its own.
     # The answer is the human's, and it must not travel: a spawned agent
     # that inherited it could run a wave with the one question already
-    # answered. T3 spawns from here, so it is unset before anything is.
+    # answered. So it is unset before anything is spawned.
     unset KEELER_FAN_OUT_YES
     echo "keeler-fan-out: yes to $wave"
+    spawned=""
+    refused=""
+    for id in $wave; do
+        echo
+        # A refusal is one task's, not the wave's: the graph moved under a
+        # board read a moment ago — another hand spawned it, a branch is
+        # still standing — and the tasks after it are unaffected. So the
+        # loop records the outcome and goes on, and the exit code at the end
+        # is what says a spawn refused.
+        if "$just" keeler-spawn "$spec" "$id"; then
+            spawned="$spawned${spawned:+ }$id"
+        else
+            refused="$refused${refused:+ }$id"
+        fi
+    done
+    echo
+    echo "keeler-fan-out: spawned ${spawned:-nothing}"
+    echo "  board:    just keeler-status $spec"
+    if [ -n "$refused" ]; then
+        echo "keeler-fan-out: refused $refused — keeler-spawn said why above, and the rest of the wave spawned anyway." >&2
+        exit 1
+    fi
 
 # Upgrade Keeler itself (KEELER_REF=v0.3.0 just keeler-upgrade to pin a tag)
 keeler-upgrade:
