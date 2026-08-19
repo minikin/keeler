@@ -497,7 +497,27 @@ keeler-status SPEC:
             continue
         elif [ -f "$exit_file" ]; then
             code="$(tr -d '[:space:]' < "$exit_file")"
-            if [ "$code" = 0 ]; then state=passed; else state="failed (exit $code)"; fi
+            if [ "$code" != 0 ]; then
+                state="failed (exit $code)"
+            else
+                # A green gate is one stage of four. Closed means three
+                # things — the gate green, the review record on the
+                # branch, the box ticked — because a gate measures the
+                # tree and not the pipeline: a task can pass it having
+                # done only tdd, and `passed` there invites landing work
+                # nobody has read.
+                missing=""
+                [ -f "$root/reviews/$slug/$tid.md" ] || missing="no review record"
+                if [ "$graph_state" != done ]; then
+                    [ -n "$missing" ] && missing="$missing, "
+                    missing="${missing}box not ticked"
+                fi
+                if [ -n "$missing" ]; then
+                    state="incomplete ($missing)"
+                else
+                    state=passed
+                fi
+            fi
         elif [ -e "$worktree" ] || [ -f "$log_file" ]; then
             state=died
         else
@@ -719,6 +739,14 @@ keeler-land:
         while read -r id state _rest; do
             [ "$state" = done ] || continue
             tid="$(printf '%s' "$id" | tr '[:upper:]' '[:lower:]')"
+            # Closed is three things, and the tick is only one of them. A
+            # worktree may hold the only copy of work nobody has read, and
+            # a box is cheap to tick — so the record is asked for before
+            # anything is removed.
+            if [ ! -f "$root/reviews/$slug/$tid.md" ]; then
+                echo "keeler-land: $id is ticked but carries no review record at reviews/$slug/$tid.md — left in place, with its worktree; a tick without a record is not a landing"
+                continue
+            fi
             branch="keeler/$slug/$tid"
             worktree="$(dirname "$root")/$(basename "$root")-$slug-$tid"
             # Only a worktree this repository registered: a directory that

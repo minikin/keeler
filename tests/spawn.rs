@@ -291,6 +291,18 @@ impl Project {
         self.just(&["keeler-status", &spec_path(slug)])
     }
 
+    /// Writes the review record a closed task carries, naming HEAD.
+    fn write_review_record(&self, slug: &str, tid: &str) {
+        let dir = self.dir.join("reviews").join(slug);
+        std::fs::create_dir_all(&dir).unwrap();
+        let head = self.git(&["rev-parse", "HEAD"]);
+        std::fs::write(
+            dir.join(format!("{tid}.md")),
+            format!("Spec: {slug}\nTask: {tid}\nCommit: {head}\nVerdict: pass\n\nnone\n"),
+        )
+        .unwrap();
+    }
+
     /// Every recorded call to a stub, argv by argv.
     fn calls(&self, stub: &str) -> Vec<Vec<String>> {
         let raw =
@@ -523,7 +535,10 @@ fn section<'a>(text: &'a str, heading: &str) -> &'a str {
 
 #[test]
 fn a_finished_agent_leaves_a_verdict_the_gate_decided_and_a_log() {
-    for (code, expected) in [(0, "passed"), (3, "failed")] {
+    // A green gate with no record and no tick is `incomplete`, not
+    // `passed` — closed is three things, and this test is about the
+    // verdict the gate decided, which is one of them.
+    for (code, expected) in [(0, "incomplete"), (3, "failed")] {
         // Given a spawned session that has run and exited
         let mut project = Project::new(&format!("verdict-{code}"));
         project.run_sessions = true;
@@ -908,6 +923,59 @@ fn a_resume_runs_the_runner_in_the_worktree_whatever_the_path() {
         call.windows(2)
             .any(|w| w[0] == "-c" && w[1] == project.worktree(SLUG, "T3").to_str().unwrap()),
         "the session does not start in the task's worktree: {call:?}"
+    );
+}
+
+#[test]
+fn a_task_is_closed_by_three_things_not_one() {
+    // Given a task whose gate ran green — and nothing else yet
+    let mut project = Project::new("closed-by-three");
+    project.run_sessions = true;
+    let output = project.spawn(SLUG, "T3");
+    assert!(output.status.success(), "{}", both(&output));
+    assert!(
+        project.runs(SLUG).join("t3.exit").exists(),
+        "the fixture has no verdict"
+    );
+
+    // Then the board does not call it passed. A green gate is one stage
+    // of four: the second live spawn passed its gate on eight hundred
+    // lines of real tests having done only the first, and `passed` there
+    // would have invited landing work nobody had read.
+    let listed = stdout(&project.status(SLUG));
+    let line = task_line(&listed, "T3");
+    assert!(
+        line.contains("incomplete"),
+        "a green gate alone was called closed:\n{listed}"
+    );
+    assert!(
+        line.contains("review") || line.contains("record"),
+        "the board does not name what is missing:\n{line}"
+    );
+
+    // And with the record but no tick it is still not closed
+    project.write_review_record(SLUG, "t3");
+    let listed = stdout(&project.status(SLUG));
+    let line = task_line(&listed, "T3");
+    assert!(
+        line.contains("incomplete"),
+        "a gate and a record without a tick were called closed:\n{listed}"
+    );
+    assert!(
+        line.contains("tick") || line.contains("box"),
+        "the board does not name the missing tick:\n{line}"
+    );
+
+    // And with all three it is
+    let spec = project.dir.join("specs").join(format!("{SLUG}.md"));
+    let text = std::fs::read_to_string(&spec).unwrap();
+    std::fs::write(&spec, text.replace("- [ ] **T3", "- [x] **T3")).unwrap();
+    project.git(&["add", "-A"]);
+    project.git(&["commit", "-qm", "land T3"]);
+    let listed = stdout(&project.status(SLUG));
+    assert!(
+        task_line(&listed, "T3").contains("done"),
+        "a task with all three was not closed:\n{listed}"
     );
 }
 
