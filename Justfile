@@ -210,6 +210,116 @@ keeler-branch:
     fi
     just mutants-diff
 
+# The fork after approval, as a recipe. /keeler:spec asks which road once
+# it has set `Status: Approved`, and the "graph" answer runs this — so the
+# branch, the checkout and the one commit are a thing a human can also run
+# by hand, after answering "linearly" and changing their mind. Three lines
+# in a command file would behave one way for the agent and another for the
+# human, and only one of them would be tested.
+#
+# Cut from main and nowhere else, found through `_main-ref` as every other
+# recipe finds it: a feature cut from another feature's branch, or from a
+# task branch, is a feature nested where nothing else in graph mode expects
+# one. The branch's own name is the exception — re-approving an amended
+# spec happens there, and checking out the branch you are already on is
+# the same branch either way.
+#
+# The commit is of one path. An unrelated change in the working tree, or
+# staged beside it, is not this commit's and stays exactly where it was:
+# the human's consent was for the spec, and the spec is what is committed.
+#
+# Graph mode: cut feat/<spec-slug> from main and commit the approved spec there — `just keeler-feature-branch specs/01-foo.md`.
+keeler-feature-branch SPEC:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    spec="{{SPEC}}"
+    [ -f "$spec" ] || { echo "keeler-feature-branch: $spec is not a file" >&2; exit 1; }
+    root="$(git rev-parse --show-toplevel)"
+    # `pwd -P`, because `--show-toplevel` answers physically: a repository
+    # reached through a symlink — /tmp on macOS is one — has a logical path
+    # that is not a prefix of git's, and the guard below would refuse a
+    # spec sitting in the repository it is looking at.
+    spec_abs="$(cd "$(dirname "$spec")" && pwd -P)/$(basename "$spec")"
+    case "$spec_abs" in
+        "$root"/*) ;;
+        *)
+            echo "keeler-feature-branch: $spec_abs is not inside $root — a feature branch is cut in the repository the spec lives in." >&2
+            exit 1
+            ;;
+    esac
+    rel="${spec_abs#"$root"/}"
+    slug="$(basename "$spec_abs" .md)"
+    feature="feat/$slug"
+    if ! git check-ref-format --branch "$feature" >/dev/null 2>&1; then
+        echo "keeler-feature-branch: $rel would need the branch $feature, which git will not accept — rename the spec file." >&2
+        exit 1
+    fi
+    # Where main is, is `_main-ref`'s answer and no one else's.
+    main_ref="$(just _main-ref)"
+    main_branch="${main_ref##*/}"
+    here="$(git symbolic-ref --quiet --short HEAD || true)"
+    if [ "$here" != "$main_branch" ] && [ "$here" != "$feature" ]; then
+        echo "keeler-feature-branch: on ${here:-a detached HEAD} — a feature branch is cut from $main_branch, and a feature nested inside another feature's branch, or inside a task's, is a shape nothing else in graph mode expects. Check out $main_branch and run this again." >&2
+        exit 1
+    fi
+    # The working tree's copy is the one the human just approved, so it is
+    # the one that must end up on the branch — whatever the branch already
+    # holds. Held aside first, because the switch below puts the spec back
+    # to what *this* branch committed: git refuses to carry a modified file
+    # across to a branch holding a different copy of it, and an approval
+    # that ends in "your local changes would be overwritten" is an approval
+    # that ends nowhere.
+    approved="$(mktemp)"
+    branch_copy="$(mktemp)"
+    trap 'rm -f "$approved" "$branch_copy"' EXIT
+    cp "$spec_abs" "$approved"
+    existed=no
+    if git show-ref --verify --quiet "refs/heads/$feature"; then existed=yes; fi
+    if [ "$here" != "$feature" ]; then
+        # What HEAD has, not what the index has: a spec written and `git
+        # add`ed but never committed is known to git and absent from HEAD,
+        # and `git checkout HEAD -- <it>` fails on a pathspec HEAD does not
+        # know. The index entry goes with it — a staged addition carried
+        # across would collide with a branch that committed its own copy.
+        if git cat-file -e "HEAD:$rel" 2>/dev/null; then
+            git checkout -q HEAD -- "$spec_abs"
+        else
+            git rm -q --cached --ignore-unmatch -- "$spec_abs" >/dev/null
+            rm -f "$spec_abs"
+        fi
+        if [ "$existed" = yes ]; then
+            switch=(checkout -q "$feature")
+        else
+            switch=(checkout -q -b "$feature")
+        fi
+        if ! git "${switch[@]}"; then
+            # Whatever stopped the switch, the approved spec is the one
+            # thing here that exists nowhere else — put it back before
+            # saying so.
+            cp "$approved" "$spec_abs"
+            echo "keeler-feature-branch: could not check out $feature — $rel is as it was; commit or stash the rest of the working tree and run this again." >&2
+            exit 1
+        fi
+        cp "$approved" "$spec_abs"
+    fi
+    if [ "$existed" = yes ]; then
+        did="checked out $feature, which already existed"
+    else
+        did="cut $feature from $main_branch"
+    fi
+    # A spec that has not changed is not a commit. Re-approving an
+    # untouched spec — or running this twice — leaves the branch alone.
+    if git show "$feature:$rel" > "$branch_copy" 2>/dev/null && cmp -s "$branch_copy" "$spec_abs"; then
+        echo "keeler-feature-branch: $did — $rel is already the copy it holds, so nothing was committed."
+        exit 0
+    fi
+    git add -- "$spec_abs"
+    # The pathspec is the point: `git commit -- <path>` commits that path
+    # from the working tree and leaves everything else, staged or not,
+    # exactly as it was.
+    git commit -q -m "docs($slug): the approved spec" -- "$spec_abs"
+    echo "keeler-feature-branch: $did — committed $rel there."
+
 # The script's report is the machine's, one `<id> <state> [needs...]` line
 # per task, and the spawn recipe reads it as such; this is the human's view
 # of the same lines, where a blocked task shows only what it is still
@@ -237,129 +347,22 @@ keeler-graph SPEC:
             }
         }'
 
-# It refuses before creating anything when tmux is missing, when the spec
-# differs from HEAD or is not Approved (the worktree is cut from HEAD, so an
-# uncommitted graph is one the agent would never see), when the graph script
-# says the task is blocked, and when the task already has a worktree.
-# Otherwise it creates a worktree beside the repository on
-# keeler/<spec-slug>/<task-id>, writes a runner script under .keeler/runs/,
-# starts a detached tmux session on it and returns at once.
-# `just keeler-status <spec>` is the board afterwards.
-#
-# Graph mode: hand one ready task to a headless agent on its own branch — `just keeler-spawn specs/01-foo.md T3`.
-keeler-spawn SPEC TASK:
+# One generator for the runner, called by keeler-spawn when it cuts a
+# worktree and by keeler-resume before it re-runs one. A runner is
+# generated code and not a record of the run: kept from an earlier
+# version it carries every defect that version had, so a resume writes it
+# afresh rather than executing whatever is on disk.
+_write-runner SPEC TASK BRANCH WORKTREE RUNNER EXIT_FILE LOG_FILE STREAM_FILE:
     #!/usr/bin/env bash
     set -euo pipefail
-    if ! command -v tmux >/dev/null 2>&1; then
-        echo "keeler-spawn: tmux is required — every spawned agent runs in a detached tmux session." >&2
-        echo "  macOS:         brew install tmux" >&2
-        echo "  Debian/Ubuntu: sudo apt-get install tmux" >&2
-        exit 1
-    fi
-    spec="{{SPEC}}"
+    rel="{{SPEC}}"
     task="{{TASK}}"
-    [ -f "$spec" ] || { echo "keeler-spawn: $spec is not a file" >&2; exit 1; }
-    root="$(git rev-parse --show-toplevel)"
-    spec_abs="$(cd "$(dirname "$spec")" && pwd)/$(basename "$spec")"
-    case "$spec_abs" in
-        "$root"/*) ;;
-        *)
-            echo "keeler-spawn: $spec_abs is not inside $root — the worktree is cut from this repository's HEAD and would never see it." >&2
-            exit 1
-            ;;
-    esac
-    rel="${spec_abs#"$root"/}"
-    # The spec as committed, because that is what the new worktree will see:
-    # /keeler:tasks leaves the graph uncommitted, and a spawn straight after
-    # would compute readiness from a file the worktree does not have.
-    if [ -n "$(git status --porcelain -- "$spec_abs")" ]; then
-        echo "keeler-spawn: $rel differs from HEAD — commit it first; the worktree is cut from HEAD and would not see it." >&2
-        exit 1
-    fi
-    status_line="$(grep -m1 -E '^[*_[:space:]]*Status:' "$spec_abs" || true)"
-    case "$status_line" in
-        *Approved*) ;;
-        *)
-            echo "keeler-spawn: $rel is not Approved (${status_line:-no Status: line}) — an unapproved spec is not a contract to build from." >&2
-            exit 1
-            ;;
-    esac
-    # Readiness is the graph script's answer, never this recipe's: one
-    # parser reads the format, so a human and the tools cannot disagree.
-    # And it is read from the spec on the feature's own branch. A tick on a
-    # *task* branch unblocks nothing — that is what keeps parallel branches
-    # from racing each other's dependencies — while a tick on the feature
-    # branch does, because arriving there is the landing. Which branch that
-    # is, is a name a machine checks rather than one someone remembers.
-    feature="feat/$(basename "$spec_abs" .md)"
-    if ! git check-ref-format --branch "$feature" >/dev/null 2>&1; then
-        echo "keeler-spawn: $rel would need the branch $feature, which git will not accept — rename the spec file." >&2
-        exit 1
-    fi
-    here="$(git symbolic-ref --quiet --short HEAD || true)"
-    if [ "$here" != "$feature" ]; then
-        echo "keeler-spawn: on ${here:-a detached HEAD}, but this spec's tasks fan out from $feature — check it out, or create it, and spawn from there." >&2
-        exit 1
-    fi
-    feature_copy="$(mktemp -d)"
-    trap 'rm -rf "$feature_copy"' EXIT
-    if ! git show "$feature:$rel" > "$feature_copy/$(basename "$spec_abs")" 2>/dev/null; then
-        echo "keeler-spawn: $rel is not committed on $feature — the worktree is cut from it, so an uncommitted graph is one the agent would never see." >&2
-        exit 1
-    fi
-    report="$(bash "$root/scripts/keeler-graph.sh" "$feature_copy/$(basename "$spec_abs")")"
-    entry="$(printf '%s\n' "$report" | awk -v id="$task" '$1 == id')"
-    if [ -z "$entry" ]; then
-        echo "keeler-spawn: $rel defines no task $task" >&2
-        exit 1
-    fi
-    state="$(printf '%s\n' "$entry" | awk '{ print $2 }')"
-    # A done task has landed. Spawning it cuts a branch to redo work the
-    # graph already counts — and the guard that refused only `blocked`
-    # let exactly that through.
-    if [ "$state" = done ]; then
-        echo "keeler-spawn: $task is already done — nothing to spawn" >&2
-        exit 1
-    fi
-    if [ "$state" = blocked ]; then
-        unmet=""
-        for need in $(printf '%s\n' "$entry" | cut -d' ' -f3-); do
-            if [ "$(printf '%s\n' "$report" | awk -v n="$need" '$1 == n { print $2 }')" != done ]; then
-                unmet="$unmet $need"
-            fi
-        done
-        echo "keeler-spawn: $task is blocked, waiting on:$unmet" >&2
-        exit 1
-    fi
-    # One name in four places: the spec's file name, and the id lowercased
-    # once, on the way out of the parser.
-    slug="$(basename "$spec_abs" .md)"
-    tid="$(printf '%s' "$task" | tr '[:upper:]' '[:lower:]')"
-    branch="keeler/$slug/$tid"
-    session="keeler-$slug-$tid"
-    worktree="$(dirname "$root")/$(basename "$root")-$slug-$tid"
-    if [ -e "$worktree" ]; then
-        echo "keeler-spawn: $worktree already exists — $task is already spawned; land it or remove it first." >&2
-        exit 1
-    fi
-    # A branch whose worktree is gone is the same task, half cleaned up:
-    # the commits are still on it. Refuse here, naming it, rather than
-    # let `git worktree add` fail somewhere deeper.
-    if git show-ref --verify --quiet "refs/heads/$branch"; then
-        echo "keeler-spawn: branch $branch already exists — $task is already spawned; land it, or delete the branch to start over." >&2
-        exit 1
-    fi
-    # Nothing on disk until the branch and the worktree are real: a path
-    # that refuses must create nothing — and destroy nothing either.
-    git worktree add -b "$branch" "$worktree" HEAD
-    runs="$root/.keeler/runs/$slug"
-    mkdir -p "$runs"
-    exit_file="$runs/$tid.exit"
-    stream_file="$runs/$tid.stream"
-    log_file="$runs/$tid.log"
-    runner="$runs/$tid.sh"
-    # A verdict left by an earlier run of this task is not this run's.
-    rm -f "$exit_file"
+    branch="{{BRANCH}}"
+    worktree="{{WORKTREE}}"
+    runner="{{RUNNER}}"
+    exit_file="{{EXIT_FILE}}"
+    log_file="{{LOG_FILE}}"
+    stream_file="{{STREAM_FILE}}"
     prompt="Implement task $task of $rel, and nothing else.
 
     Read $rel in full first, then .claude/keeler.md.
@@ -424,6 +427,160 @@ keeler-spawn SPEC TASK:
         echo \$? > "$exit_file"
     } 2>&1 | tee -a "$log_file"
     RUNNER
+    chmod +x "$runner"
+
+
+# The guards `keeler-spawn` fires on its way to a worktree, and the graph
+# it then reads: written once, here, because `keeler-fan-out` must refuse
+# on the same grounds before it prints a wave, and two copies of a check
+# are two checks that drift. Private, the way `_main-ref` is: it speaks
+# for `keeler-spawn` — its refusals carry that name, and are the same words
+# whichever recipe called it. On stdout it prints the graph as the feature
+# branch commits it, one `<id> <state> [needs...]` line per task, which is
+# what the caller reads readiness from.
+#
+# It refuses when tmux is missing, when the spec is not a file inside this
+# repository, when it differs from HEAD or is not Approved (the worktree is
+# cut from HEAD, so an uncommitted graph is one the agent would never see),
+# and when HEAD is not the feature's own branch feat/<spec-slug>.
+_spawn-preflight SPEC:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! command -v tmux >/dev/null 2>&1; then
+        echo "keeler-spawn: tmux is required — every spawned agent runs in a detached tmux session." >&2
+        echo "  macOS:         brew install tmux" >&2
+        echo "  Debian/Ubuntu: sudo apt-get install tmux" >&2
+        exit 1
+    fi
+    spec="{{SPEC}}"
+    [ -f "$spec" ] || { echo "keeler-spawn: $spec is not a file" >&2; exit 1; }
+    root="$(git rev-parse --show-toplevel)"
+    spec_abs="$(cd "$(dirname "$spec")" && pwd)/$(basename "$spec")"
+    case "$spec_abs" in
+        "$root"/*) ;;
+        *)
+            echo "keeler-spawn: $spec_abs is not inside $root — the worktree is cut from this repository's HEAD and would never see it." >&2
+            exit 1
+            ;;
+    esac
+    rel="${spec_abs#"$root"/}"
+    # The spec as committed, because that is what the new worktree will see:
+    # /keeler:tasks leaves the graph uncommitted, and a spawn straight after
+    # would compute readiness from a file the worktree does not have.
+    if [ -n "$(git status --porcelain -- "$spec_abs")" ]; then
+        echo "keeler-spawn: $rel differs from HEAD — commit it first; the worktree is cut from HEAD and would not see it." >&2
+        exit 1
+    fi
+    status_line="$(grep -m1 -E '^[*_[:space:]]*Status:' "$spec_abs" || true)"
+    case "$status_line" in
+        *Approved*) ;;
+        *)
+            echo "keeler-spawn: $rel is not Approved (${status_line:-no Status: line}) — an unapproved spec is not a contract to build from." >&2
+            exit 1
+            ;;
+    esac
+    # Readiness is the graph script's answer, never this recipe's: one
+    # parser reads the format, so a human and the tools cannot disagree.
+    # And it is read from the spec on the feature's own branch. A tick on a
+    # *task* branch unblocks nothing — that is what keeps parallel branches
+    # from racing each other's dependencies — while a tick on the feature
+    # branch does, because arriving there is the landing. Which branch that
+    # is, is a name a machine checks rather than one someone remembers.
+    feature="feat/$(basename "$spec_abs" .md)"
+    if ! git check-ref-format --branch "$feature" >/dev/null 2>&1; then
+        echo "keeler-spawn: $rel would need the branch $feature, which git will not accept — rename the spec file." >&2
+        exit 1
+    fi
+    here="$(git symbolic-ref --quiet --short HEAD || true)"
+    if [ "$here" != "$feature" ]; then
+        echo "keeler-spawn: on ${here:-a detached HEAD}, but this spec's tasks fan out from $feature — check it out, or create it, and spawn from there." >&2
+        exit 1
+    fi
+    feature_copy="$(mktemp -d)"
+    trap 'rm -rf "$feature_copy"' EXIT
+    if ! git show "$feature:$rel" > "$feature_copy/$(basename "$spec_abs")" 2>/dev/null; then
+        echo "keeler-spawn: $rel is not committed on $feature — the worktree is cut from it, so an uncommitted graph is one the agent would never see." >&2
+        exit 1
+    fi
+    bash "$root/scripts/keeler-graph.sh" "$feature_copy/$(basename "$spec_abs")"
+
+# It refuses before creating anything on every ground `_spawn-preflight`
+# refuses — tmux missing, the spec not a file in this repository, differing
+# from HEAD, not Approved, HEAD not the feature's branch — and then when
+# the graph script says the task is blocked or done, and when the task
+# already has a worktree or a branch. Otherwise it creates a worktree
+# beside the repository on keeler/<spec-slug>/<task-id>, writes a runner
+# script under .keeler/runs/, starts a detached tmux session on it and
+# returns at once. `just keeler-status <spec>` is the board afterwards.
+#
+# Graph mode: hand one ready task to a headless agent on its own branch — `just keeler-spawn specs/01-foo.md T3`.
+keeler-spawn SPEC TASK:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    spec="{{SPEC}}"
+    task="{{TASK}}"
+    # The just that is running this recipe runs its helper — not whichever
+    # `just` PATH holds, which on a PATH stripped to the shell is none, and
+    # would turn "tmux is required" into "just: command not found". `-q`: a
+    # refusal is the preflight's one line, not that line plus just's report
+    # that a recipe nobody named failed.
+    report="$("{{just_executable()}}" -q _spawn-preflight "$spec")"
+    root="$(git rev-parse --show-toplevel)"
+    spec_abs="$(cd "$(dirname "$spec")" && pwd)/$(basename "$spec")"
+    rel="${spec_abs#"$root"/}"
+    entry="$(printf '%s\n' "$report" | awk -v id="$task" '$1 == id')"
+    if [ -z "$entry" ]; then
+        echo "keeler-spawn: $rel defines no task $task" >&2
+        exit 1
+    fi
+    state="$(printf '%s\n' "$entry" | awk '{ print $2 }')"
+    # A done task has landed. Spawning it cuts a branch to redo work the
+    # graph already counts — and the guard that refused only `blocked`
+    # let exactly that through.
+    if [ "$state" = done ]; then
+        echo "keeler-spawn: $task is already done — nothing to spawn" >&2
+        exit 1
+    fi
+    if [ "$state" = blocked ]; then
+        unmet=""
+        for need in $(printf '%s\n' "$entry" | cut -d' ' -f3-); do
+            if [ "$(printf '%s\n' "$report" | awk -v n="$need" '$1 == n { print $2 }')" != done ]; then
+                unmet="$unmet $need"
+            fi
+        done
+        echo "keeler-spawn: $task is blocked, waiting on:$unmet" >&2
+        exit 1
+    fi
+    # One name in four places: the spec's file name, and the id lowercased
+    # once, on the way out of the parser.
+    slug="$(basename "$spec_abs" .md)"
+    tid="$(printf '%s' "$task" | tr '[:upper:]' '[:lower:]')"
+    branch="keeler/$slug/$tid"
+    session="keeler-$slug-$tid"
+    worktree="$(dirname "$root")/$(basename "$root")-$slug-$tid"
+    if [ -e "$worktree" ]; then
+        echo "keeler-spawn: $worktree already exists — $task is already spawned; land it or remove it first." >&2
+        exit 1
+    fi
+    # A branch whose worktree is gone is the same task, half cleaned up:
+    # the commits are still on it. Refuse here, naming it, rather than
+    # let `git worktree add` fail somewhere deeper.
+    if git show-ref --verify --quiet "refs/heads/$branch"; then
+        echo "keeler-spawn: branch $branch already exists — $task is already spawned; land it, or delete the branch to start over." >&2
+        exit 1
+    fi
+    # Nothing on disk until the branch and the worktree are real: a path
+    # that refuses must create nothing — and destroy nothing either.
+    git worktree add -b "$branch" "$worktree" HEAD
+    runs="$root/.keeler/runs/$slug"
+    mkdir -p "$runs"
+    exit_file="$runs/$tid.exit"
+    stream_file="$runs/$tid.stream"
+    log_file="$runs/$tid.log"
+    runner="$runs/$tid.sh"
+    # A verdict left by an earlier run of this task is not this run's.
+    rm -f "$exit_file"
+    just _write-runner "$rel" "$task" "$branch" "$worktree" "$runner" "$exit_file" "$log_file" "$stream_file"
     printf -v run_cmd 'bash %q' "$runner"
     # If the session will not start, the branch and worktree must not
     # survive it: every retry would then refuse with "already spawned" for
@@ -592,6 +749,7 @@ keeler-resume SPEC TASK:
     tid="$(printf '%s' "$task" | tr '[:upper:]' '[:lower:]')"
     runner="$root/.keeler/runs/$slug/$tid.sh"
     session="keeler-$slug-$tid"
+    branch="keeler/$slug/$tid"
     worktree="$(dirname "$root")/$(basename "$root")-$slug-$tid"
     if [ ! -f "$runner" ]; then
         echo "keeler-resume: $task was never spawned — there is no run to resume; use just keeler-spawn $spec $task" >&2
@@ -621,11 +779,252 @@ keeler-resume SPEC TASK:
         exit 1
     fi
     echo "keeler-resume: re-running $task in the worktree and branch it already has"
+    # Written afresh: a runner is generated code, and one kept from an
+    # earlier recipe carries every defect that recipe had. The worktree,
+    # the branch and the log are what a resume keeps.
+    rel="${spec_abs#"$root/"}"
+    just _write-runner "$rel" "$task" "$branch" "$worktree" "$runner" \
+        "$root/.keeler/runs/$slug/$tid.exit" \
+        "$root/.keeler/runs/$slug/$tid.log" \
+        "$root/.keeler/runs/$slug/$tid.stream"
     printf -v run_cmd 'bash %q' "$runner"
     tmux new-session -d -s "$session" -c "$worktree" "$run_cmd"
     echo "  worktree: $worktree"
     echo "  session:  tmux attach -t '=$session'"
     echo "  board:    just keeler-status $spec"
+# The wave is what is ready and not yet spawned: `keeler-graph`'s ready
+# tasks minus the ones `keeler-status` already knows — running, died,
+# passed or failed but not landed — and this recipe computes neither. It
+# owns no logic those two have; it reads them and prints one line per task
+# in the spec's order: the graph's own line for a task that is done, ready
+# or blocked (with what it waits on), the board's own line for a ready task
+# already spawned. Then it names the wave and asks. `_spawn-preflight`
+# runs first, so a checkout keeler-spawn would refuse is refused here in
+# the same words, before any wave is printed.
+#
+# The yes is read from stdin — a human at a terminal is asked in the
+# ordinary way, and a test pipes its answer — and it is `yes` or `y`, case
+# aside, and nothing else. When there is nobody to ask, the recipe refuses
+# and names KEELER_FAN_OUT_YES rather than hanging or exiting in silence:
+# `read` at EOF under `set -e` would end the recipe with a bare 1, and a
+# pipe nobody closes would hang it, so a stdin that is not a terminal gets
+# a bounded read — an answer piped in advance is there at once; nothing
+# within the wait is nobody. `KEELER_FAN_OUT_YES=1` answers yes without
+# asking, for the caller who has already decided. It is the zero-yes path
+# this recipe otherwise refuses, so no command file may set it, and a
+# test says so.
+#
+# On the yes, the wave is handed to `keeler-spawn` one task at a time, in
+# the order it was printed in — the same recipe a hand would run, so every
+# refusal it has fires per task and nothing here cuts a worktree of its
+# own. A refusal is that task's alone: the board was read a moment before,
+# and a task another hand has spawned since is named and stepped over
+# while the rest of the wave spawns. The run reports what spawned and what
+# did not, and exits non-zero when anything was refused — one wave, one
+# yes, one exit code that says whether it all went out.
+#
+# Then the wave is shown as one thing: a detached session
+# keeler-<spec-slug>-wave holding a pane per run, each attached to that
+# run's own session, tiled as they are added. The per-task sessions are
+# the source of truth and outlive the view — the board reads them,
+# `tmux attach` on one still works, closing the view kills nothing — so a
+# view that cannot be built is reported and leaves the exit code alone.
+#
+# Graph mode: name every ready, unspawned task and ask for the one yes that spawns the wave — `just keeler-fan-out specs/01-foo.md`.
+keeler-fan-out SPEC:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    spec="{{SPEC}}"
+    # The same guards keeler-spawn fires, before a wave is printed — run
+    # by the just that is running this recipe, as keeler-spawn runs them.
+    # The preflight's report is discarded: once it passes, the working
+    # tree's spec is the feature branch's, and `keeler-graph` reads that
+    # same graph in the words this recipe prints — a blocked task with what
+    # it waits on.
+    just="{{just_executable()}}"
+    "$just" -q _spawn-preflight "$spec" >/dev/null
+    # One name for the wave's own things, derived the way every other name
+    # in graph mode is: the spec's file name, which the preflight has just
+    # established is a file inside this repository.
+    root="$(git rev-parse --show-toplevel)"
+    slug="$(basename "$spec" .md)"
+    graph="$("$just" keeler-graph "$spec")"
+    board="$("$just" keeler-status "$spec")"
+    echo "keeler-fan-out: $spec on $(git symbolic-ref --quiet --short HEAD)"
+    wave=""
+    while read -r id state rest; do
+        [ -n "$id" ] || continue
+        if [ "$state" != ready ]; then
+            printf '  %s %s%s\n' "$id" "$state" "${rest:+ $rest}"
+            continue
+        fi
+        # A ready task the board already knows is listed in the board's
+        # words and not offered; one it calls "not spawned" is the wave.
+        known="$(printf '%s\n' "$board" | awk -v id="$id" '$1 == id')"
+        case "$known" in
+            *"not spawned"*)
+                printf '  %s ready\n' "$id"
+                wave="$wave${wave:+ }$id"
+                ;;
+            *)
+                printf '  %s\n' "${known:-$id is not on the board}"
+                ;;
+        esac
+    done <<< "$graph"
+    if [ -z "$wave" ]; then
+        echo "keeler-fan-out: nothing is ready to spawn — every task above is done, blocked, or already spawned and in the state the board gives it."
+        exit 0
+    fi
+    echo "wave: $wave"
+    if [ -n "${KEELER_FAN_OUT_YES:-}" ]; then
+        answer="$KEELER_FAN_OUT_YES"
+        echo "spawn $wave? [yes/no] $answer (from KEELER_FAN_OUT_YES)"
+        # The variable is the answer given in advance, and it is read as
+        # one: 1 is the documented yes; the words the prompt takes are too;
+        # anything else is not.
+        case "$answer" in 1) answer=yes ;; esac
+    elif [ -t 0 ]; then
+        printf 'spawn %s? [yes/no] ' "$wave"
+        IFS= read -r answer || answer=""
+    else
+        printf 'spawn %s? [yes/no] ' "$wave"
+        # Not a terminal: an answer piped in advance is read at once, and
+        # nothing within the wait — EOF, or a pipe nobody writes to — is
+        # nobody to ask.
+        if ! IFS= read -r -t 5 answer; then
+            echo
+            echo "keeler-fan-out: nobody to ask — stdin is not a terminal and KEELER_FAN_OUT_YES is unset. Ask from a terminal, or answer in advance: KEELER_FAN_OUT_YES=1 just keeler-fan-out $spec" >&2
+            exit 1
+        fi
+        echo "$answer"
+    fi
+    case "$(printf '%s' "$answer" | tr '[:upper:]' '[:lower:]')" in
+        yes|y) ;;
+        *)
+            echo "keeler-fan-out: not a yes — nothing spawned." >&2
+            exit 1
+            ;;
+    esac
+    # The yes is given. What it spawns is a loop over `keeler-spawn`, one
+    # task at a time, in the order the wave was printed in — the same recipe
+    # a hand would run, so every refusal it has still fires per task and
+    # nothing here cuts a worktree of its own.
+    # The answer is the human's, and it must not travel: a spawned agent
+    # that inherited it could run a wave with the one question already
+    # answered. So it is unset before anything is spawned.
+    unset KEELER_FAN_OUT_YES
+    echo "keeler-fan-out: yes to $wave"
+    spawned=""
+    refused=""
+    for id in $wave; do
+        echo
+        # A refusal is one task's, not the wave's: the graph moved under a
+        # board read a moment ago — another hand spawned it, a branch is
+        # still standing — and the tasks after it are unaffected. So the
+        # loop records the outcome and goes on, and the exit code at the end
+        # is what says a spawn refused.
+        if "$just" keeler-spawn "$spec" "$id"; then
+            spawned="$spawned${spawned:+ }$id"
+        else
+            refused="$refused${refused:+ }$id"
+        fi
+    done
+    # The view, built after the spawns and out of the sessions they made:
+    # one window, one pane per run, so the wave is watched together instead
+    # of one attach at a time. The per-task sessions are the real thing and
+    # outlive it — closing the view kills nothing, and a tmux that will not
+    # build it is said so and does not touch the exit code below, which
+    # answers about the wave and not about the window over it.
+    view=""
+    shown=""
+    if [ -n "$spawned" ]; then
+        view="keeler-$slug-wave"
+        runs="$root/.keeler/runs/$slug"
+        pane_runner="$runs/wave.sh"
+        # A runner, the way spawn writes its own, and for one more reason:
+        # the pane's command is run by the user's shell, and in zsh a word
+        # beginning with `=` is a command to look up rather than a tmux
+        # target. Inside a script it is neither.
+        write_pane_runner() {
+            mkdir -p "$runs" || return 1
+            cat > "$pane_runner" <<'WAVE' || return 1
+    #!/usr/bin/env bash
+    # Written by 'just keeler-fan-out' — one pane of the wave view:
+    #     bash wave.sh keeler-<spec-slug>-<task>
+    # The target is exact: tmux matches a bare name as a prefix, and
+    # keeler-<spec-slug> is a prefix of every task's session. TMUX= because
+    # this attach is nested by construction — the pane is already in tmux.
+    exec env TMUX= tmux attach-session -t "=$1"
+    WAVE
+            chmod +x "$pane_runner"
+        }
+        # Tested and not left to set -e, all of it: the spawns have already
+        # gone out, and a disk that will not take a runner must not take the
+        # wave's report down with it.
+        if write_pane_runner; then
+            anchor=""
+            if ! tmux has-session -t "=$view" 2>/dev/null; then
+                # The window is built in a pane of its own — killed once the
+                # runs have theirs — because it has to outlive the building,
+                # and a pane holding a run cannot promise that: a run that
+                # ends takes its pane, and the last pane takes the session.
+                # A run that ended in the second it took to lay the wave out
+                # would otherwise leave the tasks after it unseen. -x/-y
+                # large enough to split the whole wave into: an 80x24 session
+                # has no room left at the fourth pane. A view left standing
+                # by an earlier wave is added to rather than remade — its
+                # panes are runs that are still going.
+                anchor="$(tmux new-session -d -P -F '#{pane_id}' -s "$view" -x 200 -y 50 2>/dev/null || true)"
+            fi
+            for id in $spawned; do
+                tid="$(printf '%s' "$id" | tr '[:upper:]' '[:lower:]')"
+                printf -v pane_cmd 'bash %q %q' "$pane_runner" "keeler-$slug-$tid"
+                # `=name:` and not `=name`: the exact prefix is read off the
+                # session part of a target, and a bare name given where a
+                # pane is expected is looked up as a pane and not found. The
+                # trailing colon is the session's current window, which is
+                # the wave's one window.
+                tmux split-window -t "=$view:" "$pane_cmd" || break
+                # Tiled as each pane arrives, not once at the end: without it
+                # the fourth split has nowhere to go and fails.
+                tmux select-layout -t "=$view:" tiled >/dev/null || true
+                shown="$shown${shown:+ }$id"
+            done
+            if [ -n "$anchor" ] && [ -n "$shown" ]; then
+                tmux kill-pane -t "$anchor" >/dev/null 2>&1 || true
+                tmux select-layout -t "=$view:" tiled >/dev/null || true
+            elif [ -n "$anchor" ]; then
+                # A window over nothing is not a view of anything.
+                tmux kill-session -t "=$view" >/dev/null 2>&1 || true
+            fi
+        fi
+        if [ "$shown" != "$spawned" ]; then
+            # The window is short of the wave — and the wave is unaffected,
+            # so this is said and not counted: every run is in its own
+            # session whether or not anything is watching it.
+            echo "keeler-fan-out: the view holds ${shown:-nothing} of the wave — tmux would go no further. The runs are in their own sessions regardless: tmux attach -t '=keeler-$slug-<task>'." >&2
+            [ -n "$shown" ] || view=""
+        fi
+    fi
+    echo
+    echo "keeler-fan-out: spawned ${spawned:-nothing}"
+    if [ -n "$view" ]; then
+        # Inside tmux an attach fails at once, and the move that does what
+        # the human meant is switch-client.
+        if [ -n "${TMUX:-}" ]; then
+            echo "  wave:     tmux switch-client -t '=$view'   (already inside tmux, where an attach would refuse)"
+        else
+            echo "  wave:     tmux attach -t '=$view'   (one pane per run; closing it kills nothing)"
+        fi
+    fi
+    echo "  board:    just keeler-status $spec"
+    if [ -n "$refused" ]; then
+        # What went out is the line above, and it says `nothing` when the
+        # whole wave refused: this one names what did not, and claims
+        # nothing about the rest that would be untrue then.
+        echo "keeler-fan-out: refused $refused — keeler-spawn said why above." >&2
+        exit 1
+    fi
 
 # Upgrade Keeler itself (KEELER_REF=v0.3.0 just keeler-upgrade to pin a tag)
 keeler-upgrade:
