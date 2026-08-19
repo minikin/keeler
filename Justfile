@@ -936,16 +936,18 @@ keeler-fan-out SPEC:
     # build it is said so and does not touch the exit code below, which
     # answers about the wave and not about the window over it.
     view=""
+    shown=""
     if [ -n "$spawned" ]; then
         view="keeler-$slug-wave"
         runs="$root/.keeler/runs/$slug"
-        mkdir -p "$runs"
         pane_runner="$runs/wave.sh"
         # A runner, the way spawn writes its own, and for one more reason:
         # the pane's command is run by the user's shell, and in zsh a word
         # beginning with `=` is a command to look up rather than a tmux
         # target. Inside a script it is neither.
-        cat > "$pane_runner" <<'WAVE'
+        write_pane_runner() {
+            mkdir -p "$runs" || return 1
+            cat > "$pane_runner" <<'WAVE' || return 1
     #!/usr/bin/env bash
     # Written by 'just keeler-fan-out' — one pane of the wave view:
     #     bash wave.sh keeler-<spec-slug>-<task>
@@ -954,18 +956,29 @@ keeler-fan-out SPEC:
     # this attach is nested by construction — the pane is already in tmux.
     exec env TMUX= tmux attach-session -t "=$1"
     WAVE
-        chmod +x "$pane_runner"
-        shown=""
-        for id in $spawned; do
-            tid="$(printf '%s' "$id" | tr '[:upper:]' '[:lower:]')"
-            printf -v pane_cmd 'bash %q %q' "$pane_runner" "keeler-$slug-$tid"
-            # Detached, and -x/-y large enough to split the whole wave into:
-            # an 80x24 session has no room left at the fourth pane. A view
-            # left standing by an earlier wave is added to rather than
-            # remade — its panes are runs that are still going.
-            if [ -z "$shown" ] && ! tmux has-session -t "=$view" 2>/dev/null; then
-                tmux new-session -d -s "$view" -x 200 -y 50 "$pane_cmd" || break
-            else
+            chmod +x "$pane_runner"
+        }
+        # Tested and not left to set -e, all of it: the spawns have already
+        # gone out, and a disk that will not take a runner must not take the
+        # wave's report down with it.
+        if write_pane_runner; then
+            anchor=""
+            if ! tmux has-session -t "=$view" 2>/dev/null; then
+                # The window is built in a pane of its own — killed once the
+                # runs have theirs — because it has to outlive the building,
+                # and a pane holding a run cannot promise that: a run that
+                # ends takes its pane, and the last pane takes the session.
+                # A run that ended in the second it took to lay the wave out
+                # would otherwise leave the tasks after it unseen. -x/-y
+                # large enough to split the whole wave into: an 80x24 session
+                # has no room left at the fourth pane. A view left standing
+                # by an earlier wave is added to rather than remade — its
+                # panes are runs that are still going.
+                anchor="$(tmux new-session -d -P -F '#{pane_id}' -s "$view" -x 200 -y 50 2>/dev/null || true)"
+            fi
+            for id in $spawned; do
+                tid="$(printf '%s' "$id" | tr '[:upper:]' '[:lower:]')"
+                printf -v pane_cmd 'bash %q %q' "$pane_runner" "keeler-$slug-$tid"
                 # `=name:` and not `=name`: the exact prefix is read off the
                 # session part of a target, and a bare name given where a
                 # pane is expected is looked up as a pane and not found. The
@@ -975,9 +988,16 @@ keeler-fan-out SPEC:
                 # Tiled as each pane arrives, not once at the end: without it
                 # the fourth split has nowhere to go and fails.
                 tmux select-layout -t "=$view:" tiled >/dev/null || true
+                shown="$shown${shown:+ }$id"
+            done
+            if [ -n "$anchor" ] && [ -n "$shown" ]; then
+                tmux kill-pane -t "$anchor" >/dev/null 2>&1 || true
+                tmux select-layout -t "=$view:" tiled >/dev/null || true
+            elif [ -n "$anchor" ]; then
+                # A window over nothing is not a view of anything.
+                tmux kill-session -t "=$view" >/dev/null 2>&1 || true
             fi
-            shown="$shown${shown:+ }$id"
-        done
+        fi
         if [ "$shown" != "$spawned" ]; then
             # The window is short of the wave — and the wave is unaffected,
             # so this is said and not counted: every run is in its own

@@ -63,7 +63,8 @@ mod wave {
     /// Records its argv — one field per `\x1f`, one call per `\x1e` — and
     /// emulates enough of tmux for the recipes: `has-session` answers from
     /// `KEELER_STUB_TMUX_SESSIONS` with tmux's own exact-then-prefix matching,
-    /// and `new-session` runs the command it was given only when asked to.
+    /// `new-session` runs the command it was given only when asked to, and
+    /// `-P` prints a pane id for the caller that keeps one.
     /// A session inherits the environment of whoever started it, so what
     /// `KEELER_FAN_OUT_YES` reads here is what the spawned agent would get:
     /// recorded per `new-session`, one line apiece.
@@ -73,6 +74,13 @@ mod wave {
         printf 'KEELER_FAN_OUT_YES=%s\n' "${KEELER_FAN_OUT_YES-<unset>}" >> "$KEELER_STUB_TMUX_ENV"
     fi
     case "${1:-}" in
+    split-window)
+        if [ "${KEELER_STUB_TMUX_SPLIT_FAIL:-0}" = 1 ]; then
+            echo "can't find pane" >&2
+            exit 1
+        fi
+        exit 0
+        ;;
     has-session)
         want=""
         while [ $# -gt 0 ]; do [ "$1" = -t ] && want="${2:-}"; shift; done
@@ -85,9 +93,17 @@ mod wave {
         exit 1
         ;;
     new-session)
-        dir=""; cmd=""; prev=""
-        for a in "$@"; do [ "$prev" = -c ] && dir="$a"; prev="$a"; cmd="$a"; done
-        if [ "${KEELER_STUB_TMUX_RUN:-0}" = 1 ]; then ( cd "${dir:-.}" && eval "$cmd" ) || true; fi
+        dir=""; cmd=""; prev=""; before=""; printed=""
+        for a in "$@"; do
+            [ "$prev" = -c ] && dir="$a"
+            [ "$a" = -P ] && printed=1
+            before="$prev"; prev="$a"; cmd="$a"
+        done
+        # A session created without a command ends on a flag's value, not on
+        # a command: `-y 50` is not something to run.
+        case "$before" in -*) cmd="" ;; esac
+        if [ "${KEELER_STUB_TMUX_RUN:-0}" = 1 ] && [ -n "$cmd" ]; then ( cd "${dir:-.}" && eval "$cmd" ) || true; fi
+        [ -n "$printed" ] && echo "%0"
         exit 0
         ;;
     esac
@@ -465,6 +481,26 @@ mod wave {
     fn flag<'a>(call: &'a [String], name: &str) -> Option<&'a str> {
         let at = call.iter().position(|arg| arg == name)?;
         call.get(at + 1).map(String::as_str)
+    }
+
+    /// The tmux calls with one of these verbs, in order, each written as what
+    /// it asked for: the verb, and for a layout the target and the layout it
+    /// set. The sequence is how the window was built.
+    fn steps_of(project: &Project, verbs: &[&str]) -> Vec<String> {
+        project
+            .calls("tmux")
+            .into_iter()
+            .filter(|call| verbs.contains(&verb(call)))
+            .map(|call| match verb(&call) {
+                "select-layout" => format!(
+                    "select-layout {} {}",
+                    flag(&call, "-t").unwrap_or_default(),
+                    pane_command(&call)
+                ),
+                "kill-pane" => format!("kill-pane {}", flag(&call, "-t").unwrap_or_default()),
+                other => other.to_string(),
+            })
+            .collect()
     }
 
     /// The command a pane was given, which is tmux's last argument.
@@ -1067,31 +1103,17 @@ mod wave {
         // Then a tmux session named keeler-<spec-slug>-wave holds one pane per
         // task that spawned, each attached to that task's session
         let view = view_session(SLUG);
-        let target = format!("={view}");
         // A pane of that window, exactly: the `=` is read off the session part
         // of a target, so a target-pane says `=session:` — the trailing colon
         // is the session's current window. `=session` alone is looked up as a
         // pane name, and a real tmux does not find one.
-        let pane_of = format!("{target}:");
-        let made = project
-            .new_sessions()
-            .into_iter()
-            .find(|call| flag(call, "-s") == Some(view.as_str()))
-            .unwrap_or_else(|| panic!("no session {view} was created:\n{said}"));
-        // Detached, and sized for the wave rather than for a terminal nobody
-        // is at: an 80x24 session runs out of room part-way through splitting.
+        let pane_of = format!("={view}:");
         assert!(
-            made.iter().any(|arg| arg == "-d"),
-            "the view is not created detached: {made:?}"
+            project.started_sessions().contains(&view),
+            "no session {view} was created:\n{said}"
         );
-        for size in ["-x", "-y"] {
-            assert!(
-                flag(&made, size).is_some_and(|value| value.parse::<u32>().is_ok()),
-                "the view is created without a {size} to split inside: {made:?}"
-            );
-        }
         let splits = project.tmux_calls("split-window");
-        let mut panes = vec![pane_target(&made).to_string()];
+        let mut panes = Vec::new();
         for split in &splits {
             assert_eq!(
                 flag(split, "-t"),
@@ -1116,8 +1138,8 @@ mod wave {
             body.contains("TMUX=") && body.contains("=$1"),
             "the runner does not attach to an exact target with TMUX cleared:\n{body}"
         );
-        for call in std::iter::once(&made).chain(splits.iter()) {
-            let command = pane_command(call);
+        for split in &splits {
+            let command = pane_command(split);
             assert!(
                 command.contains(&runner.display().to_string()),
                 "a pane does not run the wave's runner: {command}"
@@ -1128,39 +1150,31 @@ mod wave {
             );
         }
 
-        // And laid out so all are visible: every split is followed by a tiled
-        // layout, because a detached session runs out of room otherwise
-        let steps: Vec<String> = project
-            .calls("tmux")
-            .into_iter()
-            .filter(|call| matches!(verb(call), "split-window" | "select-layout"))
-            .map(|call| match verb(&call) {
-                "select-layout" => format!(
-                    "select-layout {} {}",
-                    flag(&call, "-t").unwrap_or_default(),
-                    pane_command(&call)
-                ),
-                other => other.to_string(),
-            })
-            .collect();
+        // And laid out so all are visible: every pane is tiled as it arrives,
+        // because a detached window runs out of room otherwise — and once
+        // more at the end, over the room the window's own pane gives back
         let tiled = format!("select-layout {pane_of} tiled");
         assert_eq!(
-            steps,
+            steps_of(&project, &["split-window", "select-layout"]),
             [
                 "split-window",
                 tiled.as_str(),
                 "split-window",
+                tiled.as_str(),
+                "split-window",
+                tiled.as_str(),
                 tiled.as_str()
             ],
             "the panes are not tiled as they are added:\n{said}"
         );
 
         // And every target the view uses is exact: tmux matches a bare name as
-        // a prefix, and keeler-<spec-slug> is a prefix of every task's session
+        // a prefix, and keeler-<spec-slug> is a prefix of every task's session.
+        // A pane id — `%3` — is exact by construction and needs no marker.
         for call in project.calls("tmux") {
             if let Some(given) = flag(&call, "-t") {
                 assert!(
-                    given.starts_with('='),
+                    given.starts_with('=') || given.starts_with('%'),
                     "a tmux target is not exact: {call:?}"
                 );
             }
@@ -1177,6 +1191,138 @@ mod wave {
             refused.new_sessions().is_empty(),
             "a view was built over a wave that never spawned:\n{}",
             both(&output)
+        );
+    }
+
+    /// Not a clause of its own — what makes the first one true when a run is
+    /// short-lived. The window is built in a pane of its own and not in the
+    /// first run's: a pane holding a run closes when that run ends, the last
+    /// pane closing takes the session with it, and a task that fails in the
+    /// second it takes to lay the wave out would leave every task after it
+    /// with nowhere to be shown.
+    #[test]
+    fn the_window_is_built_in_a_pane_of_its_own_which_does_not_stay() {
+        // Given a wave of three tasks spawned by fan-out
+        let project = Project::new("anchor");
+        let output = project.fan_out(SLUG, &Answer::Piped("yes\n"));
+        let said = both(&output);
+        assert!(output.status.success(), "the wave did not spawn:\n{said}");
+
+        // Then the session was created detached, sized to split a wave into,
+        // and holding no run of its own
+        let view = view_session(SLUG);
+        let made = project
+            .new_sessions()
+            .into_iter()
+            .find(|call| flag(call, "-s") == Some(view.as_str()))
+            .unwrap_or_else(|| panic!("no session {view} was created:\n{said}"));
+        assert!(
+            made.iter().any(|arg| arg == "-d"),
+            "the view is not created detached: {made:?}"
+        );
+        for size in ["-x", "-y"] {
+            assert!(
+                flag(&made, size).is_some_and(|value| value.parse::<u32>().is_ok()),
+                "the view is created without a {size} to split inside: {made:?}"
+            );
+        }
+        assert!(
+            !pane_command(&made).contains("wave.sh"),
+            "the window is anchored to one of the runs: {made:?}"
+        );
+
+        // And the pane it was built in is asked for by id and killed once the
+        // runs have theirs — after the last of them, never before
+        assert_eq!(
+            flag(&made, "-F"),
+            Some("#{pane_id}"),
+            "the view's own pane is not asked for by id: {made:?}"
+        );
+        assert_eq!(
+            steps_of(&project, &["split-window", "kill-pane"]),
+            [
+                "split-window",
+                "split-window",
+                "split-window",
+                "kill-pane %0"
+            ],
+            "the pane the window was built in outlived the wave, or took it with it:\n{said}"
+        );
+    }
+
+    /// Not a clause of its own — the invariant the recipe states around the
+    /// view: it is a window over the runs, and the exit code is about the
+    /// runs. A tmux that will not build it may not turn a wave that went out
+    /// into a wave that failed.
+    #[test]
+    fn a_view_tmux_will_not_build_is_said_and_not_counted() {
+        // Given a wave, and a tmux that refuses to split a window
+        let project = Project::new("view-refused");
+
+        // When fan-out spawns it
+        let output = project.fan_out_with(
+            SLUG,
+            &Answer::Piped("yes\n"),
+            &[("KEELER_STUB_TMUX_SPLIT_FAIL", "1")],
+        );
+        let said = both(&output);
+
+        // Then the wave went out all the same, and the run says so and exits
+        // zero: the window is not what the exit code answers about
+        assert!(
+            output.status.success(),
+            "a window that could not be built failed the wave:\n{said}"
+        );
+        assert_eq!(reported(&stdout(&output), "spawned"), ["T2", "T3", "T5"]);
+        assert_eq!(
+            project.task_sessions(),
+            ["T2", "T3", "T5"].map(|id| session(SLUG, id)),
+            "the runs did not spawn:\n{said}"
+        );
+
+        // And it says the view holds nothing, offers no attach to a window
+        // that is not there, and leaves no empty one behind
+        let view = view_session(SLUG);
+        assert!(
+            stderr(&output).contains("the view holds nothing"),
+            "the run does not say the view was not built:\n{said}"
+        );
+        assert!(
+            !stdout(&output).contains(&format!("={view}")),
+            "the run offers an attach to a window it did not build:\n{said}"
+        );
+        assert!(
+            project
+                .tmux_calls("kill-session")
+                .iter()
+                .any(|call| flag(call, "-t") == Some(format!("={view}").as_str())),
+            "the empty window was left standing:\n{said}"
+        );
+
+        // And a runner that cannot be written is the same: a disk that will
+        // not take a file is not a wave that failed
+        let unwritable = Project::new("view-unwritable");
+        let runs = unwritable.runs(SLUG);
+        std::fs::create_dir_all(&runs).unwrap();
+        let runner = runs.join("wave.sh");
+        std::fs::write(&runner, "as it was\n").unwrap();
+        std::fs::set_permissions(&runner, std::fs::Permissions::from_mode(0o444)).unwrap();
+        let output = unwritable.fan_out(SLUG, &Answer::Piped("yes\n"));
+        std::fs::set_permissions(&runner, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let said = both(&output);
+        assert!(
+            output.status.success(),
+            "a runner that could not be written failed the wave:\n{said}"
+        );
+        assert_eq!(reported(&stdout(&output), "spawned"), ["T2", "T3", "T5"]);
+        assert_eq!(
+            std::fs::read_to_string(&runner).unwrap(),
+            "as it was\n",
+            "the runner was written after all — the fixture proves nothing"
+        );
+        assert!(
+            unwritable.tmux_calls("split-window").is_empty(),
+            "panes were built for a runner that does not exist:\n{said}"
         );
     }
 
