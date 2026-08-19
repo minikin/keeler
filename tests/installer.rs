@@ -617,6 +617,62 @@ fn a_command_that_needs_a_script_ships_with_it() {
 }
 
 #[test]
+fn no_shipped_file_carries_an_unresolved_merge() {
+    // A conflict marker is invisible to every gate this project has: the
+    // suite reads these files for content, not for shape, and markdown
+    // renders `<<<<<<< HEAD` as a line of text. So one rode into main and
+    // out to adopters inside .claude/keeler.md — the rules file an agent
+    // is told to read first — and it was a spawned agent in a demo
+    // project that noticed, not us.
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut wounded = Vec::new();
+    let mut stack = vec![root.clone()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.filter_map(Result::ok) {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name == "target" || name == ".git" || name.starts_with("keeler-") {
+                continue;
+            }
+            if path.is_dir() {
+                stack.push(path);
+            } else if matches!(
+                path.extension().and_then(|e| e.to_str()),
+                Some("md" | "rs" | "sh" | "toml" | "yml")
+            ) || name == "Justfile"
+            {
+                let Ok(text) = std::fs::read_to_string(&path) else {
+                    continue;
+                };
+                // At the start of a line and followed by a space or the
+                // end of it: `<<<<<<<` inside prose about conflicts, or a
+                // shell heredoc, does not look like this.
+                for (n, line) in text.lines().enumerate() {
+                    let marked = ["<<<<<<< ", ">>>>>>> "].iter().any(|m| line.starts_with(m))
+                        || line == "=======" && text.contains("<<<<<<< ");
+                    if marked {
+                        wounded.push(format!(
+                            "{}:{}: {}",
+                            path.strip_prefix(&root).unwrap_or(&path).display(),
+                            n + 1,
+                            line.trim()
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        wounded.is_empty(),
+        "these files carry an unresolved merge:\n{}",
+        wounded.join("\n")
+    );
+}
+
+#[test]
 fn what_adopters_receive_describes_their_project_not_ours() {
     // Given a freshly installed project
     let project = TempProject::new("no-talk-about-us", MANIFEST_WITH_PROPTEST);
