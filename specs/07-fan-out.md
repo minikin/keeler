@@ -228,7 +228,7 @@ the one piece the stub tmux cannot stand in for.
       `.claude/commands/` sets KEELER_FAN_OUT_YES. Deliverable: `_spawn-preflight <spec>`,
       lifted out of `keeler-spawn` with `tests/spawn.rs` green throughout,
       and `just keeler-fan-out <spec>` up to and including the yes.
-- [ ] **T3 — Yes spawns the wave.** Needs: T2. Scenarios: _Yes spawns the
+- [x] **T3 — Yes spawns the wave.** Needs: T2. Scenarios: _Yes spawns the
       whole wave through keeler-spawn_, _The next wave is a re-run_.
       Tests: acceptance — with the stub `claude` and `tmux` from
       `tests/spawn.rs`, every task in the wave is handed to
