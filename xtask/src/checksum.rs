@@ -13,10 +13,21 @@ use sha2::{Digest, Sha256};
 #[must_use]
 pub fn checksum_line(bytes: &[u8], path: &str) -> String {
     let digest = Sha256::digest(bytes);
+    // Byte by byte rather than `{digest:x}`: the digest's type stopped
+    // implementing LowerHex in sha2 0.11, and a checksum line is not the
+    // place to care which minor version is resolved. `&[u8]` is what
+    // every version of it derefs to, and always will.
+    let hex = digest
+        .iter()
+        .fold(String::with_capacity(64), |mut hex, byte| {
+            use std::fmt::Write as _;
+            let _ = write!(hex, "{byte:02x}");
+            hex
+        });
     let name = std::path::Path::new(path)
         .file_name()
         .map_or(path, |name| name.to_str().unwrap_or(path));
-    format!("{digest:x}  {name}")
+    format!("{hex}  {name}")
 }
 
 #[cfg(test)]
