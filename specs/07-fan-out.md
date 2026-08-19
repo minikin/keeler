@@ -208,7 +208,7 @@ and T2 are both roots, and this spec is itself a wave of two. Fan-out's
 reading side before its spawning side; the tmux view last, because it is
 the one piece the stub tmux cannot stand in for.
 
-- [ ] **T1 — Approval asks which road, and the graph answer does the
+- [x] **T1 — Approval asks which road, and the graph answer does the
       steps.** Scenarios: _Approval asks which road_, _The graph answer
       cuts the branch and commits the spec_, _A feature branch that already exists is
       used, not remade_, _A feature branch is cut from main and nowhere

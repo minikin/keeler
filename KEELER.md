@@ -99,9 +99,9 @@ meets them.
 
 ```mermaid
 flowchart LR
-    S[Approved spec on<br/><b>feat/&lt;spec-slug&gt;</b><br/>Tasks carry <b>Needs:</b>] --> G["/keeler:graph — which<br/>tasks are unblocked?"]
-    G --> SP1["just keeler-spawn &lt;spec&gt; T2"] --> B1["keeler/&lt;spec&gt;/t2<br/>tdd → qa → review → mutants<br/><b>just keeler-branch</b>"]
-    G --> SP2["just keeler-spawn &lt;spec&gt; T3"] --> B2["keeler/&lt;spec&gt;/t3<br/>tdd → qa → review → mutants<br/><b>just keeler-branch</b>"]
+    S["Approved spec, committed on<br/><b>feat/&lt;spec-slug&gt;</b> by<br/><b>just keeler-feature-branch</b><br/>Tasks carry <b>Needs:</b>"] --> G["<b>just keeler-fan-out &lt;spec&gt;</b><br/>names every ready task —<br/>one <b>yes</b> spawns the wave"]
+    G --> B1["keeler/&lt;spec&gt;/t2<br/>tdd → qa → review → mutants<br/><b>just keeler-branch</b>"]
+    G --> B2["keeler/&lt;spec&gt;/t3<br/>tdd → qa → review → mutants<br/><b>just keeler-branch</b>"]
     B1 --> LF["merge into feat/, then<br/><b>just keeler-land</b> there:<br/>gates, worktrees removed"]
     B2 --> LF
     LF -- "ticks landed —<br/>dependents ready" --> G
@@ -110,14 +110,13 @@ flowchart LR
 
 **A feature, start to finish** — the commands are the parts, this is the day:
 
-1. `/keeler:spec`, iterate to approval, on any branch.
-2. `git checkout -b feat/<spec-slug>` — the one manual step graph mode adds; the name is the spec's file name without `.md`, and `keeler-spawn` checks it. Commit the spec there.
-3. `/keeler:tasks` writes `Needs:` into every task; commit — spawn reads the committed spec.
-4. `just keeler-graph <spec>` shows what is ready.
-5. `just keeler-spawn <spec> T1`, then whatever else is ready, one at a time. Each returns at once; its agent runs the whole per-task pipeline in tmux and ticks its box at the end.
-6. `just keeler-status <spec>` is the board; `tmux attach -t keeler-<spec-slug>-t1` to watch. `died` means the session ended before its gate — its commits and log are what a resume starts from.
-7. Merge each finished task branch into `feat/<spec-slug>`, `just keeler-land` there. The tick has landed, so its dependents are ready: back to 5, until `keeler-land` says the feature is finished.
-8. Pull request to main, merge, `just keeler-land` on main, commit what it staged.
+1. `/keeler:spec`, iterate to approval, on any branch. On approval it asks which road: **linearly** hands off to /keeler:tasks and does nothing else, **graph** starts the day below. Answering "graph" is the human's consent for the one commit step 2 makes, and for nothing else.
+2. `just keeler-feature-branch <spec>` cuts `feat/<spec-slug>` from main, checks it out and commits the approved spec there. /keeler:spec runs it for you on the "graph" answer; by hand it is the same thing. The name is the spec's file name without `.md`, and `keeler-spawn` checks it.
+3. `/keeler:tasks` writes `Needs:` into every task; **commit the graph** — fan-out and spawn read the committed spec, never the working tree.
+4. `just keeler-fan-out <spec>` is the wave: it names every ready task, and one **yes** spawns them all — each on its own branch, all in one tmux window with a pane per run. `just keeler-graph <spec>` is the same reading without the offer, and `just keeler-spawn <spec> T3` still hands out one task at a time.
+5. `just keeler-status <spec>` is the board; `tmux attach -t keeler-<spec-slug>-t1` to watch. `died` means the session ended before its gate — its commits and log are what a resume starts from.
+6. Merge each finished task branch into `feat/<spec-slug>`, `just keeler-land` there. The tick has landed, so its dependents are ready: back to 4, until `keeler-land` says the feature is finished.
+7. Pull request to main, merge, `just keeler-land` on main, commit what it staged.
 
 What makes this more than "several agents at once" is that the two things
 usually missing are already here: the **approved spec is the contract** every
@@ -129,7 +128,9 @@ every task is ready.
 
 | Command                                      | What it does                                                                                                  |
 | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `just keeler-feature-branch <spec>`          | Cuts `feat/<spec-slug>` from main, checks it out and commits the approved spec there — the "graph" answer's one mechanical step, and the same by hand |
 | `/keeler:graph` — `just keeler-graph <spec>` | Ready / blocked / done, read from the spec on the feature's branch **`feat/<spec-slug>`**; a cycle or a dangling `Needs:` is refused by the parser |
+| `just keeler-fan-out <spec>`                 | The wave: every ready task named, and one **yes** spawns them all through `keeler-spawn` — nothing starts that was not said yes to |
 | `just keeler-spawn <spec> <task>`            | Worktree + branch `keeler/<spec-slug>/<task-id>` + a headless agent in a detached tmux session                 |
 | `just keeler-status <spec>`                  | The board: running, passed, incomplete, failed, died mid-pipeline, done, never spawned                                          |
 | `just keeler-resume <spec> <task>`           | Re-runs a task whose session died, in the worktree and branch it already has                                  |
