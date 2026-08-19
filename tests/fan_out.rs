@@ -64,8 +64,14 @@ mod wave {
     /// emulates enough of tmux for the recipes: `has-session` answers from
     /// `KEELER_STUB_TMUX_SESSIONS` with tmux's own exact-then-prefix matching,
     /// and `new-session` runs the command it was given only when asked to.
+    /// A session inherits the environment of whoever started it, so what
+    /// `KEELER_FAN_OUT_YES` reads here is what the spawned agent would get:
+    /// recorded per `new-session`, one line apiece.
     const TMUX_STUB: &str = r#"#!/usr/bin/env bash
     { for a in "$@"; do printf '%s\037' "$a"; done; printf '\036'; } >> "$KEELER_STUB_TMUX_LOG"
+    if [ "${1:-}" = new-session ]; then
+        printf 'KEELER_FAN_OUT_YES=%s\n' "${KEELER_FAN_OUT_YES-<unset>}" >> "$KEELER_STUB_TMUX_ENV"
+    fi
     case "${1:-}" in
     has-session)
         want=""
@@ -160,7 +166,7 @@ mod wave {
             std::fs::write(dir.join("specs").join(format!("{slug}.md")), body).unwrap();
             std::fs::write(
                 dir.join(".gitignore"),
-                "/bin/\n/.keeler/\n/tmux-calls\n/claude-calls\n",
+                "/bin/\n/.keeler/\n/tmux-calls\n/tmux-env\n/claude-calls\n",
             )
             .unwrap();
             for (name, body) in [
@@ -272,6 +278,7 @@ mod wave {
                 .current_dir(&self.dir)
                 .env("PATH", format!("{}:{path}", self.dir.join("bin").display()))
                 .env("KEELER_STUB_TMUX_LOG", self.dir.join("tmux-calls"))
+                .env("KEELER_STUB_TMUX_ENV", self.dir.join("tmux-env"))
                 .env("KEELER_STUB_CLAUDE_LOG", self.dir.join("claude-calls"))
                 .env("KEELER_STUB_TMUX_SESSIONS", &self.sessions)
                 .env(
@@ -364,6 +371,16 @@ mod wave {
                 .collect()
         }
 
+        /// What `KEELER_FAN_OUT_YES` read in the environment each session was
+        /// started with — which is the environment the agent inherits.
+        fn session_environments(&self) -> Vec<String> {
+            std::fs::read_to_string(self.dir.join("tmux-env"))
+                .unwrap_or_default()
+                .lines()
+                .map(str::to_string)
+                .collect()
+        }
+
         fn branch_exists(&self, slug: &str, task: &str) -> bool {
             !self
                 .git(&[
@@ -447,6 +464,22 @@ mod wave {
     /// The question the run asks before it spawns — its prompt line.
     fn asked(said: &str) -> bool {
         said.contains("[yes/no]")
+    }
+
+    /// The ids on one of the run's two outcome lines — what it says spawned,
+    /// and what it says was refused. The whole line after the prefix, so a
+    /// summary that names no task at all reads as empty rather than as
+    /// whatever else the run happened to print.
+    fn reported(said: &str, outcome: &str) -> Vec<String> {
+        said.lines()
+            .find_map(|line| line.strip_prefix(&format!("keeler-fan-out: {outcome} ")))
+            .map(|ids| {
+                ids.split_whitespace()
+                    .take_while(|word| word.starts_with('T'))
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     fn nothing_spawned(project: &Project, said: &str) {
@@ -807,6 +840,18 @@ mod wave {
             );
         }
 
+        // And it reports the wave's outcome in its own words too: all three
+        // spawned, none refused
+        assert_eq!(
+            reported(&stdout(&output), "spawned"),
+            ["T2", "T3", "T5"],
+            "the run does not say what it spawned:\n{said}"
+        );
+        assert!(
+            reported(&stderr(&output), "refused").is_empty(),
+            "the run refused something after spawning everything:\n{said}"
+        );
+
         // And the blocked task is not among them: the wave is what was offered
         assert!(
             !project.worktree(SLUG, "T4").exists() && !project.branch_exists(SLUG, "T4"),
@@ -861,19 +906,45 @@ mod wave {
             );
         }
 
-        // And the run reports each task's outcome and exits non-zero, because
-        // a spawn refused
+        // And the run reports each task's outcome — the two it spawned and the
+        // one it did not, each named on its own line — and exits non-zero,
+        // because a spawn refused
+        assert_eq!(
+            reported(&stdout(&output), "spawned"),
+            ["T2", "T5"],
+            "the run does not say what it spawned:\n{said}"
+        );
+        assert_eq!(
+            reported(&stderr(&output), "refused"),
+            ["T3"],
+            "the run does not say what was refused:\n{said}"
+        );
         assert!(
             !output.status.success(),
             "a refused spawn was reported as a whole wave:\n{said}"
         );
-        for id in ["T2", "T3", "T5"] {
-            assert!(
-                said.lines()
-                    .any(|line| { line.starts_with("keeler-fan-out:") && line.contains(id) }),
-                "the run never says what became of {id}:\n{said}"
-            );
-        }
+    }
+
+    #[test]
+    fn the_yes_does_not_travel_to_the_agents_it_spawned() {
+        // Given a wave and the yes given in advance, the way a caller who has
+        // already decided gives it
+        let project = Project::new("yes-does-not-travel");
+
+        // When fan-out spawns the wave
+        let output = project.fan_out_with(SLUG, &Answer::Nobody, &[("KEELER_FAN_OUT_YES", "1")]);
+        let said = both(&output);
+        assert!(output.status.success(), "{said}");
+        assert_eq!(project.started_sessions().len(), 3, "{said}");
+
+        // Then no session was started carrying the answer: an agent that
+        // inherited it could run a wave of its own with the one question the
+        // human's already answered
+        assert_eq!(
+            project.session_environments(),
+            vec!["KEELER_FAN_OUT_YES=<unset>"; 3],
+            "the yes travelled into the sessions it spawned:\n{said}"
+        );
     }
 
     #[test]

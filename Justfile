@@ -921,7 +921,10 @@ keeler-fan-out SPEC:
     echo "keeler-fan-out: spawned ${spawned:-nothing}"
     echo "  board:    just keeler-status $spec"
     if [ -n "$refused" ]; then
-        echo "keeler-fan-out: refused $refused — keeler-spawn said why above, and the rest of the wave spawned anyway." >&2
+        # What went out is the line above, and it says `nothing` when the
+        # whole wave refused: this one names what did not, and claims
+        # nothing about the rest that would be untrue then.
+        echo "keeler-fan-out: refused $refused — keeler-spawn said why above." >&2
         exit 1
     fi
 
