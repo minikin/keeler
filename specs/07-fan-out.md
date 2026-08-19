@@ -235,7 +235,7 @@ the one piece the stub tmux cannot stand in for.
       `keeler-spawn` in order, a mid-wave refusal is reported and does not
       stop the rest, and a second run after a landing offers the newly
       ready tasks. Deliverable: the spawning half of the recipe.
-- [ ] **T4 — The wave is one window.** Needs: T3. Scenarios: _The wave is
+- [x] **T4 — The wave is one window.** Needs: T3. Scenarios: _The wave is
       one tmux window with a pane per run_. Tests: acceptance — the stub
       tmux records the window and pane commands it was asked for, and the
       per-task sessions are still created; one test marked
