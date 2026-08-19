@@ -70,11 +70,11 @@ Three rules keep parallel branches from lying to each other:
 
 **A feature, start to finish.** The commands above are the parts; this is the day.
 
-1. `/keeler:spec` on any branch, iterate to approval — as always.
-2. `git checkout -b feat/<spec-slug>` — the one manual step graph mode adds. The name must be the spec's file name without `.md`; `keeler-spawn` checks it and refuses anything else. Commit the approved spec there.
-3. `/keeler:tasks` — writes `Needs:` into every task. Commit: spawn reads the committed spec, never the working tree.
-4. `just keeler-graph <spec>` — what is ready.
-5. `just keeler-spawn <spec> T1`, then T3, then whatever else is ready — one at a time, each named by you. Each returns at once; the agent runs the whole per-task pipeline in its tmux session and ticks its box at the end.
+1. `/keeler:spec` on any branch, iterate to approval — as always. On approval it asks which road; **"graph"** is the answer that starts this one, and it runs step 2 for you.
+2. `just keeler-feature-branch <spec>` — cuts `feat/<spec-slug>` from main, checks it out and commits the approved spec there, or reuses the branch when it already exists. Answering **graph** is the consent for that one commit, and the question says so before it is answered — as spawning a task is the consent for the commits on its branch. `/keeler:spec` runs this for you on the **graph** answer; run it by hand if you answered linearly and changed your mind. The name is the spec's file name without `.md`, and `keeler-spawn` refuses to run anywhere else.
+3. `/keeler:tasks` — writes `Needs:` into every task. Then **commit the graph**: the wave and every spawn read the committed spec, never the working tree.
+4. `just keeler-fan-out <spec>` — names every ready task and, on one yes, spawns the wave into a tmux window with a pane per run. `just keeler-graph <spec>` answers the same question without acting on it.
+5. Or `just keeler-spawn <spec> T1` one task at a time, when you want to name each. Each returns at once; the agent runs the whole per-task pipeline in its tmux session and ticks its box at the end.
 6. `just keeler-status <spec>` for the board; `tmux attach -t keeler-<spec-slug>-t1` to watch, `Ctrl-b d` to leave. `died` means the session ended before its gate ran — its commits are on the branch and its log is under `.keeler/runs/`, which is what a resume starts from.
 7. Merge each finished task branch into `feat/<spec-slug>` and run `just keeler-land` there: gates, then the landed worktrees go. The tick has arrived, so its dependents are ready — back to step 5, until `keeler-land` says the feature is finished.
 8. Pull request from `feat/<spec-slug>` to main; merge; on main, `just keeler-land` stages the baseline and `Status: Implemented`; you commit.
