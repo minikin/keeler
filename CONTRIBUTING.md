@@ -79,6 +79,18 @@ something replaces it, the pipeline's commands lead from each stage to the
 next and the discipline is the only mechanism there is. When a review
 happens, add a row here.
 
+## Dependencies
+
+**Nothing bumps a dependency but a hand.** There is no Dependabot here: a
+bot that raises a version it cannot make compile leaves the repository
+red and someone else's afternoon to it — which is what `sha2 0.11` did,
+its digest having dropped `LowerHex`. Check for updates when you have
+reason to (`cargo update --dry-run`, a release you are preparing, a
+security advisory), take them deliberately, and fix what they break in
+the same commit. The same goes for the action pins in `ci.yml` and in
+`templates/keeler.yml` — the second was always a hand bump, because
+Dependabot never scanned it.
+
 ## Conventions
 
 - **Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).**

@@ -1,6 +1,6 @@
 # Spec 06 — Graph mode: parallel agents over a task DAG
 
-**Status:** Implemented
+**Status:** Approved
 **Effort:** Large
 **Module:** `.claude/commands/keeler/` (`graph.md` new; `tasks.md`, `review.md`, `mutants.md`, `feature.md` amended), `.claude/keeler.md`, `templates/keeler.yml`, `Justfile`, `scripts/keeler-graph.sh`, `install.sh`, `specs/TEMPLATE.md`, `tests/graph.rs`
 
@@ -129,8 +129,11 @@ When  its tmux session is gone
 Then  .keeler/runs/<spec-slug>/<task-id>.exit holds the exit code of
       `just keeler-branch`, run after the agent finished — not the agent's
       own, which is zero for a turn that ended in FAIL
-And   .keeler/runs/<spec-slug>/<task-id>.log holds everything the session
-      printed, so the run can be read after the window is gone
+And   .keeler/runs/<spec-slug>/<task-id>.log holds the session's progress
+      as it goes — the agent's tool calls and text, not only its final
+      answer — so a run that has been silent for four minutes can be told
+      from one that has been working for four minutes, and the run can be
+      read after the window is gone
 And   `just keeler-status <spec>` lists each task as running, passed or
       failed, deciding "running" by asking tmux and not by the absence of
       a file
@@ -143,11 +146,44 @@ Given a spawned session that died before its pipeline finished — a usage
       limit, a killed terminal, a reboot
 When  `just keeler-status <spec>` runs
 Then  it distinguishes a task that died mid-pipeline from one that failed
-      its gate: the first has no .exit at all, the second has a non-zero
-      one
+      its gate — the gate runs only when the agent's stream carried a
+      final result record, which is written when a turn ends and by
+      nothing else, so an agent that stopped without one leaves no
+      verdict and the board says `died`
+And   that holds however the process exited: a session that reaches its
+      limit mid-work prints its apology and exits zero, and an exit code
+      cannot tell that from a turn that finished
 And   it names the log and the worktree, which together are what a resume
       reads — the commits already on the branch say how far the pipeline
       got
+```
+
+### Scenario: A task is closed by three things, not one
+
+```
+Given a task whose gate ran green
+When  `just keeler-status <spec>` runs
+Then  it says passed only when all three hold — the gate was green, the
+      branch carries reviews/<spec-slug>/<task-id>.md, and the task's box
+      is ticked
+And   with any of them missing it says incomplete, naming which: a green
+      gate is one stage of four, and a task that reached it with no
+      review record is work nobody has read
+And   `just keeler-land` on the feature branch removes the worktree and
+      branch of a closed task only — a tick without a record is not a
+      landing, and a worktree removed on the strength of one takes the
+      only copy of the work with it
+```
+
+### Scenario: A dead task is resumed by name
+
+```
+Given a task the board reports as died
+When  `just keeler-resume <spec> T1` runs
+Then  it re-runs the task's runner in its existing worktree and branch,
+      whose commits already say how far the pipeline got — creating
+      nothing new, and refusing a task that is running, passed or done
+And   the board offers that command beside every task it reports died
 ```
 
 ### Scenario: Spawning without tmux is refused, and says how to get it
@@ -438,6 +474,22 @@ split it rather than ship a task eight scenarios wide.
       changed and what did not; a red feature branch removes nothing;
       running it on a task branch is refused as before.
 
+- [x] **T11 — A dead task is resumed by name.** Needs: T3. Scenarios:
+      _A dead task is resumed by name_. Deliverable: `just keeler-resume
+      <spec> <task>`, and the board's line for a died task naming it.
+      Tests: acceptance — with the stub tmux, a died fixture is re-run in
+      place and nothing new is created; running, passed and done fixtures
+      are refused by name.
+
+- [ ] **T12 — A task is closed by three things, not one.** Needs: T11.
+      Scenarios: _A task is closed by three things, not one_.
+      Deliverable: `keeler-status` reads the record and the tick beside
+      the verdict and says `incomplete` naming what is missing;
+      `keeler-land` on the feature branch requires all three before it
+      removes anything. Tests: acceptance — fixtures for each of the
+      three missing in turn, on the board and at the landing; the
+      all-three fixture passes and lands.
+
 ---
 
 ## Implementation Notes
@@ -584,19 +636,33 @@ exits zero for any finished turn, including one that ended in FAIL. The
 verdict is the machine's, as everywhere else in this pipeline. Everything
 printed is teed to `<task>.log` beside it, so a run can be read after its
 window is gone; `keeler-status` reads both, and asks `tmux has-session`
-for "running" rather than inferring it from a missing file. The three
-states are not two: a session that is gone with no `.exit` died before
-its gate ever ran, which is a different thing from a gate that failed,
-and a resume starts from the commits already on the branch — this was
-learned the hard way when both agents of the manual dry run died on a
-usage limit and had to be restored by reading their commits by hand. The paths are
-absolute and under the main checkout, and `.keeler/` is added to the
-ignore list the installer already writes. Nothing here decides *what* to spawn:
-every session is one the human named, so the no-scheduler line holds. The
-alternatives — plain background processes with log files and PID
-tracking, or N terminals by hand — are respectively half a scheduler and
-no parallelism; tmux is the thing that is neither. It becomes a
-requirement, checked by `install.sh` the way `just` is.
+for "running" rather than inferring it from a missing file.
+
+**A green gate is one stage of four.** The second live spawn passed its
+gate on real work — eight hundred lines of tests, two hundred and
+thirty-five of them green — having done only the first stage: no review
+record, no tick, its session having reached a limit mid-pipeline. The
+gate cannot know that; it measures the tree, not the pipeline. So closed
+means three things — gate green, record on the branch, box ticked — and
+both the board and the landing ask for all three. A tick without a record
+is not a landing, and `keeler-land` removing a worktree on the strength
+of one would take the only copy of unreviewed work with it.
+
+**Three things the first live spawns taught, all now scenarios.** First,
+`claude -p` prints nothing until its final answer, so without `--verbose`
+a working agent and a hung one leave the same empty log for four minutes.
+Second, the gate must run only after the agent finished its turn: a
+runner that gates unconditionally turns an API death into
+`failed (exit 101)`, which is what the board said about an agent that had
+done four minutes of honest reading and then stopped. Third — and this
+one cost a second try — an exit code cannot tell those apart either. A
+session that reaches its limit prints its apology and exits zero, tidily,
+having finished nothing. So the runner reads `--output-format
+stream-json` into `<task>.stream` and gates only when that stream carries
+a final `result` record, which is written when a turn ends and by nothing
+else. The check is scoped to that record: `is_error` is a field of every
+failed tool result too, and red-then-green means every honest task has
+one — unscoped, it called every finished task dead.
 
 **Readiness is read from the spec on the feature's branch,
 `feat/<spec-slug>`.** A feature gets one branch and its tasks fan out from

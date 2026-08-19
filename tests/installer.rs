@@ -696,10 +696,11 @@ fn an_adopting_project_still_receives_every_gate() {
 
 /// The recipes graph mode adds, as an adopter meets them: the name `just`
 /// lists, and the argument list that follows it in the `Justfile`.
-const GRAPH_MODE_RECIPES: [(&str, &str); 5] = [
+const GRAPH_MODE_RECIPES: [(&str, &str); 6] = [
     ("keeler-graph", "keeler-graph SPEC"),
     ("keeler-spawn", "keeler-spawn SPEC TASK"),
     ("keeler-status", "keeler-status SPEC"),
+    ("keeler-resume", "keeler-resume SPEC TASK"),
     ("keeler-branch", "keeler-branch"),
     ("keeler-land", "keeler-land"),
 ];

@@ -103,7 +103,23 @@ exit 0
 /// cannot be its exit code.
 const CLAUDE_STUB: &str = r#"#!/usr/bin/env bash
 { for a in "$@"; do printf '%s\037' "$a"; done; printf '\036'; } >> "$KEELER_STUB_CLAUDE_LOG"
-echo "claude stub: the turn ended in FAIL"
+if [ "${KEELER_STUB_CLAUDE_EXIT:-0}" != 0 ]; then
+    # An API death that reports itself: the turn never finished.
+    exit "$KEELER_STUB_CLAUDE_EXIT"
+fi
+if [ "${KEELER_STUB_CLAUDE_SILENT_DEATH:-0}" = 1 ]; then
+    # The death this project actually met: a session limit, no result
+    # record in the stream, and exit zero all the same.
+    echo '{"type":"assistant","message":{"content":[{"type":"text","text":"You have hit your session limit"}]}}'
+    exit 0
+fi
+# What the real binary emits for a turn that ran a failing command and
+# then finished: the tool result carries is_error, the result record does
+# not. Red-then-green is every Keeler task, so this is the ordinary shape.
+echo '{"type":"assistant","message":{"content":[{"type":"text","text":"claude stub: running the failing test first"}]}}'
+echo '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"Exit code 1","is_error":true}]}}'
+echo '{"type":"assistant","message":{"content":[{"type":"text","text":"claude stub: the turn ended in FAIL"}]}}'
+echo '{"is_error":false,"type":"result","subtype":"success"}'
 exit 0
 "#;
 
@@ -128,6 +144,10 @@ struct Project {
     run_sessions: bool,
     /// The exit code the stub `just keeler-branch` reports.
     branch_exit: i32,
+    /// Non-zero makes the stub agent die without finishing its turn.
+    claude_exit: i32,
+    /// The death that exits zero: no result record, nothing to complain of.
+    claude_silent_death: bool,
 }
 
 impl Project {
@@ -169,6 +189,8 @@ impl Project {
             sessions: String::new(),
             run_sessions: false,
             branch_exit: 0,
+            claude_exit: 0,
+            claude_silent_death: false,
         };
         project.git(&["init", "-qb", "main"]);
         project.git(&["add", "-A"]);
@@ -241,6 +263,11 @@ impl Project {
                 if self.run_sessions { "1" } else { "0" },
             )
             .env("KEELER_STUB_BRANCH_EXIT", self.branch_exit.to_string())
+            .env("KEELER_STUB_CLAUDE_EXIT", self.claude_exit.to_string())
+            .env(
+                "KEELER_STUB_CLAUDE_SILENT_DEATH",
+                if self.claude_silent_death { "1" } else { "0" },
+            )
             .env(
                 "KEELER_STUB_TMUX_FAIL",
                 if self.dir.join(".stub-tmux-fail").exists() {
@@ -623,6 +650,318 @@ fn a_task_that_landed_after_a_failed_run_reads_as_done() {
         !line.contains("failed"),
         "a landed task reads as a failed gate:\n{listed}"
     );
+}
+
+#[test]
+fn a_death_that_exits_zero_is_still_a_death() {
+    // Given the death this project actually met: a session limit reached
+    // mid-work, no result record in the stream — and exit zero, because
+    // the process ended tidily even though the turn did not
+    let mut project = Project::new("silent-death");
+    project.run_sessions = true;
+    project.claude_silent_death = true;
+    let output = project.spawn(SLUG, "T3");
+    assert!(output.status.success(), "{}", both(&output));
+
+    // Then the gate still did not run. An exit code says how the process
+    // ended, not whether the turn did; the stream's final result record
+    // is the only thing that says the latter, and its absence is the
+    // death — however calmly the process exited.
+    assert!(
+        !project.runs(SLUG).join("t3.exit").exists(),
+        "a turn that never finished was gated and given a verdict"
+    );
+    let listed = stdout(&project.status(SLUG));
+    let line = task_line(&listed, "T3");
+    assert!(
+        line.contains("died"),
+        "a death that exits zero reads as something else:\n{line}"
+    );
+    assert!(
+        !line.contains("passed"),
+        "a death that exits zero reads as a pass:\n{line}"
+    );
+}
+
+#[test]
+fn an_agent_that_never_finished_its_turn_is_died_and_not_failed() {
+    // Given an agent that ends without finishing its turn — an API death
+    // mid-read, which is what five of this project's first six spawns did
+    let mut project = Project::new("api-death");
+    project.run_sessions = true;
+    project.claude_exit = 1;
+    let output = project.spawn(SLUG, "T3");
+    assert!(output.status.success(), "{}", both(&output));
+
+    // Then the gate never ran, so there is no verdict to read — and the
+    // board says died. Gating unconditionally turns the agent's death
+    // into the gate's verdict on an untouched worktree, and the board
+    // then reports `failed` about work nobody did.
+    assert!(
+        !project.runs(SLUG).join("t3.exit").exists(),
+        "a gate ran after an unfinished turn and left a verdict"
+    );
+    let listed = stdout(&project.status(SLUG));
+    let line = task_line(&listed, "T3");
+    assert!(
+        line.contains("died"),
+        "an API death is not named died:\n{listed}"
+    );
+    assert!(
+        !line.contains("failed"),
+        "an API death reads as a failed gate:\n{listed}"
+    );
+}
+
+#[test]
+fn the_runner_is_written_as_it_was_meant_not_as_the_shell_ate_it() {
+    // Given a spawn, and the runner it wrote
+    let project = Project::new("heredoc");
+    let output = project.spawn(SLUG, "T3");
+    assert!(output.status.success(), "{}", both(&output));
+    let runner = std::fs::read_to_string(project.runs(SLUG).join("t3.sh")).unwrap();
+
+    // Then nothing in it was executed on the way. The heredoc is
+    // unquoted, so a backtick in a comment is command substitution: the
+    // spawn printed "command not found", and the comment reached the
+    // runner with its subject silently removed — documentation gutted in
+    // the artifact, and a latent way for any future backticked word to
+    // run at spawn time.
+    assert!(
+        !both(&output).contains("command not found"),
+        "the runner's own text ran commands while being written:\n{}",
+        both(&output)
+    );
+    assert!(
+        !runner.contains("# , because") && !runner.contains("final  record"),
+        "a comment reached the runner with its subject eaten:\n{runner}"
+    );
+}
+
+#[test]
+fn the_log_carries_progress_and_not_only_the_final_answer() {
+    // Given the runner a spawn writes
+    let project = Project::new("verbose-log");
+    let output = project.spawn(SLUG, "T3");
+    assert!(output.status.success(), "{}", both(&output));
+    let runner = std::fs::read_to_string(project.runs(SLUG).join("t3.sh")).unwrap();
+
+    // Then it asks claude for its progress as it goes. Without this the
+    // log stays empty until the final answer, and four minutes of honest
+    // work looks exactly like a hang — which is what it looked like.
+    assert!(
+        runner.contains("--verbose") && runner.contains("stream-json"),
+        "the runner asks for no progress, so the log cannot show any — and \
+         the binary refuses stream-json without --verbose, so dropping \
+         either kills every run:\n{runner}"
+    );
+}
+
+#[test]
+fn a_failing_tool_call_is_not_a_failed_turn() {
+    // Given the ordinary shape of a Keeler task: the agent runs the
+    // failing test first, so its stream carries a tool result with
+    // is_error, and then finishes its turn cleanly
+    let mut project = Project::new("red-then-green");
+    project.run_sessions = true;
+    let output = project.spawn(SLUG, "T3");
+    assert!(output.status.success(), "{}", both(&output));
+
+    // Then the gate ran and the verdict is the gate's. `is_error` is a
+    // field of every failed tool result as well as of the result record,
+    // and red-then-green is what test-first development *is* — so an
+    // unscoped check calls every honest task dead.
+    assert!(
+        project.runs(SLUG).join("t3.exit").exists(),
+        "a turn that finished after a failing tool call was called dead:\n{}",
+        both(&output)
+    );
+    let listed = stdout(&project.status(SLUG));
+    let line = task_line(&listed, "T3");
+    assert!(
+        !line.contains("died"),
+        "red-then-green read as a death:\n{line}"
+    );
+}
+
+#[test]
+fn the_board_succeeds_whatever_it_reports() {
+    // Given a board with a died task among tasks in other states
+    let mut project = Project::new("board-exit");
+    project.run_sessions = true;
+    project.claude_silent_death = true;
+    project.spawn(SLUG, "T3");
+
+    // When it is read
+    let output = project.status(SLUG);
+
+    // Then it exits zero. A board is a report, and a report that says
+    // "one of these died" has not itself failed — a non-zero exit here
+    // stops any script that reads the board, and `just` prints a failure
+    // over a listing that was correct.
+    assert!(
+        output.status.success(),
+        "the board reported a died task and exited non-zero:\n{}",
+        both(&output)
+    );
+    assert!(
+        stdout(&output).contains("keeler-resume"),
+        "the board does not offer the resume:\n{}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn resuming_a_done_task_is_refused() {
+    // Given a task that died, was then finished and ticked — its runner
+    // still on disk, because keeler-land leaves it behind whenever
+    // cleanup is skipped
+    let mut project = Project::new("resume-done");
+    project.run_sessions = true;
+    project.claude_silent_death = true;
+    project.spawn(SLUG, "T3");
+    let spec = project.dir.join("specs").join(format!("{SLUG}.md"));
+    let text = std::fs::read_to_string(&spec).unwrap();
+    std::fs::write(&spec, text.replace("- [ ] **T3", "- [x] **T3")).unwrap();
+    project.git(&["add", "-A"]);
+    project.git(&["commit", "-qm", "land T3"]);
+
+    // When it is resumed
+    let output = project.just(&["keeler-resume", &format!("specs/{SLUG}.md"), "T3"]);
+
+    // Then it is refused. keeler-spawn asks the graph and refuses a done
+    // task; resume must ask the same graph, or a landed task gets rebuilt
+    // on top of itself.
+    let said = both(&output);
+    assert!(!output.status.success(), "a done task was resumed:\n{said}");
+    assert!(
+        said.contains("done"),
+        "the refusal does not say why:\n{said}"
+    );
+}
+
+#[test]
+fn resuming_a_task_whose_worktree_is_gone_is_refused() {
+    // Given a died task whose worktree was removed by hand
+    let mut project = Project::new("resume-no-worktree");
+    project.run_sessions = true;
+    project.claude_silent_death = true;
+    project.spawn(SLUG, "T3");
+    let worktree = project.worktree(SLUG, "T3");
+    project.git(&["worktree", "remove", "--force", worktree.to_str().unwrap()]);
+
+    // When it is resumed
+    let output = project.just(&["keeler-resume", &format!("specs/{SLUG}.md"), "T3"]);
+
+    // Then it refuses naming the path, rather than starting a session
+    // whose first act is to fail its `cd` where nobody will read it — a
+    // resume that reports success having run nothing wedges the task,
+    // since spawn refuses the branch and resume no-ops forever.
+    let said = both(&output);
+    assert!(
+        !output.status.success(),
+        "a resume ran without a worktree:\n{said}"
+    );
+    assert!(
+        said.contains(worktree.to_str().unwrap()),
+        "the refusal does not name the missing worktree:\n{said}"
+    );
+}
+
+#[test]
+fn a_resume_runs_the_runner_in_the_worktree_whatever_the_path() {
+    // Given a project whose path holds a space — a Desktop, a Dropbox
+    let mut project = Project::new("resume path with space");
+    project.run_sessions = true;
+    project.claude_silent_death = true;
+    project.spawn(SLUG, "T3");
+    let before = project.calls("tmux").len();
+
+    // When it is resumed
+    let output = project.just(&["keeler-resume", &format!("specs/{SLUG}.md"), "T3"]);
+    assert!(output.status.success(), "{}", both(&output));
+
+    // Then tmux was handed a command it can actually run, and the session
+    // starts in the worktree. Unquoted, the runner path splits at the
+    // space and the session exits at once — resume printing success
+    // having run nothing.
+    let started: Vec<Vec<String>> = project
+        .calls("tmux")
+        .into_iter()
+        .skip(before)
+        .filter(|c| c.first().is_some_and(|v| v == "new-session"))
+        .collect();
+    assert_eq!(
+        started.len(),
+        1,
+        "the resume started no session: {started:?}"
+    );
+    let call = &started[0];
+    // Escaped, not bare: `printf %q` is what makes the shell tmux runs it
+    // in see one path rather than three words.
+    assert!(
+        call.iter()
+            .any(|a| a.contains(".sh") && a.contains("path\\ with\\ space")),
+        "the runner path was not escaped for the shell that runs it: {call:?}"
+    );
+    assert!(
+        call.windows(2)
+            .any(|w| w[0] == "-c" && w[1] == project.worktree(SLUG, "T3").to_str().unwrap()),
+        "the session does not start in the task's worktree: {call:?}"
+    );
+}
+
+#[test]
+fn a_dead_task_is_resumed_by_name() {
+    // Given a task the board reports as died
+    let mut project = Project::new("resume");
+    project.run_sessions = true;
+    project.claude_exit = 1;
+    project.spawn(SLUG, "T3");
+    let worktree = project.worktree(SLUG, "T3");
+    assert!(task_line(&stdout(&project.status(SLUG)), "T3").contains("died"));
+
+    // And the board offers the command beside it
+    assert!(
+        stdout(&project.status(SLUG)).contains("keeler-resume"),
+        "the board does not offer a resume for a died task:\n{}",
+        stdout(&project.status(SLUG))
+    );
+
+    // When it is resumed
+    project.claude_exit = 0;
+    let output = project.just(&["keeler-resume", &format!("specs/{SLUG}.md"), "T3"]);
+
+    // Then the run happens in the worktree and branch it already had —
+    // whose commits say how far the pipeline got — and nothing new is made
+    assert!(
+        output.status.success(),
+        "a died task would not resume:\n{}",
+        both(&output)
+    );
+    assert_eq!(project.worktree(SLUG, "T3"), worktree, "the worktree moved");
+    assert_eq!(
+        project
+            .git(&["worktree", "list", "--porcelain"])
+            .matches("worktree ")
+            .count(),
+        2,
+        "resuming created a second worktree"
+    );
+
+    // And a task that is not died is refused by name
+    for (task, why) in [("T1", "done"), ("T2", "not spawned")] {
+        let output = project.just(&["keeler-resume", &format!("specs/{SLUG}.md"), task]);
+        let said = both(&output);
+        assert!(
+            !output.status.success(),
+            "{task} ({why}) was resumed:\n{said}"
+        );
+        assert!(
+            said.contains(task),
+            "the refusal does not name {task}:\n{said}"
+        );
+    }
 }
 
 #[test]
