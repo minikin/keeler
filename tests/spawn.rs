@@ -1075,6 +1075,53 @@ fn a_task_is_closed_by_three_things_not_one() {
 }
 
 #[test]
+fn a_resume_re_runs_the_task_not_the_file() {
+    // Given a died task whose runner was written by an older version of
+    // the recipe — which is what any runner on disk is, the moment the
+    // recipe changes
+    let mut project = Project::new("stale-runner");
+    project.run_sessions = true;
+    project.claude_silent_death = true;
+    project.spawn(SLUG, "T3");
+    let runner = project.runs(SLUG).join("t3.sh");
+    std::fs::write(
+        &runner,
+        "#!/usr/bin/env bash\n# written by a recipe that is gone\nexit 0\n",
+    )
+    .unwrap();
+
+    // When it is resumed
+    let output = project.just(&["keeler-resume", &format!("specs/{SLUG}.md"), "T3"]);
+    assert!(output.status.success(), "{}", both(&output));
+
+    // Then what runs is what the recipe writes today. A runner is
+    // generated code, not a record of the run: kept from an earlier
+    // version it carries every defect that version had — this project
+    // resumed a task into a runner with no --verbose and no check for a
+    // finished turn, both of which had been fixed hours before.
+    let now = std::fs::read_to_string(&runner).unwrap();
+    assert!(
+        !now.contains("a recipe that is gone"),
+        "the resume ran a runner from an older recipe:\n{now}"
+    );
+    assert!(
+        now.contains("--verbose") && now.contains("stream-json"),
+        "the regenerated runner lacks what the recipe emits today:\n{now}"
+    );
+
+    // And the worktree, the branch and the log are the ones it had —
+    // that is what a resume is for
+    assert!(
+        project.worktree(SLUG, "T3").exists(),
+        "the worktree was remade"
+    );
+    assert!(
+        project.runs(SLUG).join("t3.log").exists(),
+        "the log was lost"
+    );
+}
+
+#[test]
 fn a_verdict_nobody_can_trust_says_how_to_be_rid_of_it() {
     // Given a task whose verdict came from a run nobody believes — an
     // earlier tooling, a gate that measured an untouched tree. This

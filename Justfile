@@ -237,6 +237,88 @@ keeler-graph SPEC:
             }
         }'
 
+# One generator for the runner, called by keeler-spawn when it cuts a
+# worktree and by keeler-resume before it re-runs one. A runner is
+# generated code and not a record of the run: kept from an earlier
+# version it carries every defect that version had, so a resume writes it
+# afresh rather than executing whatever is on disk.
+_write-runner SPEC TASK BRANCH WORKTREE RUNNER EXIT_FILE LOG_FILE STREAM_FILE:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    rel="{{SPEC}}"
+    task="{{TASK}}"
+    branch="{{BRANCH}}"
+    worktree="{{WORKTREE}}"
+    runner="{{RUNNER}}"
+    exit_file="{{EXIT_FILE}}"
+    log_file="{{LOG_FILE}}"
+    stream_file="{{STREAM_FILE}}"
+    prompt="Implement task $task of $rel, and nothing else.
+
+    Read $rel in full first, then .claude/keeler.md.
+
+    Run the whole per-task pipeline for this one task, in order and without
+    stopping between stages: /keeler:tdd, then /keeler:qa, then
+    /keeler:review, then /keeler:mutants. The gate is 'just keeler-branch';
+    it must be green before the task is done.
+
+    You are on branch $branch, in the worktree $worktree. Commit there as
+    each stage finishes: the human ran keeler-spawn for this task, and that
+    was the consent for those commits. Commit nowhere else, never push, and
+    never open a pull request."
+    # Enough to edit, test and commit inside the worktree, and no more. Not
+    # bypassPermissions: a headless agent with an unrestricted shell is not
+    # a decision a recipe should make by default.
+    tools='Bash(cargo:*),Bash(just:*),Bash(git:*)'
+    # Bash(git:*) grants push. "Nothing is pushed" has to be a permission,
+    # not a sentence in a prompt: take it back explicitly. The match is on
+    # the command prefix, so this stops the ordinary `git push` and not a
+    # determined `git -C … push` or a recipe that pushes — it is a guard
+    # against the accident, and the guarantee that nothing reaches the
+    # remote remains the human owning the push.
+    blocked='Bash(git push:*)'
+    cat > "$runner" <<RUNNER
+    #!/usr/bin/env bash
+    # Written by 'just keeler-spawn' for $branch. Re-runnable by hand:
+    #     bash "$runner"
+    cd "$worktree" || exit 1
+    prompt=\$(cat <<'KEELER_PROMPT'
+    $prompt
+    KEELER_PROMPT
+    )
+    # Everything the session prints is teed to the log as it goes —
+    # '--verbose', because without it claude -p prints nothing until its
+    # final answer, and four minutes of honest work looks exactly like a
+    # hang to anyone watching.
+    {
+        # stream-json, because the exit code cannot answer the question
+        # that matters. A session that hits its limit mid-work prints its
+        # apology and exits zero, tidily, having finished nothing — this
+        # project met exactly that. The stream's final 'result' record is
+        # written only when the turn ends, so its presence is the signal
+        # and its absence is the death, however calm the exit.
+        claude -p "\$prompt" --verbose --output-format stream-json \
+            --permission-mode acceptEdits --allowedTools '$tools' --disallowedTools '$blocked' \
+            | tee "$stream_file"
+        if ! grep -q '"type":"result"' "$stream_file" 2>/dev/null; then
+            echo "keeler: the agent ended without finishing its turn — the gate did not run, and there is no verdict to mistake for one" >&2
+            exit 1
+        fi
+        # Scoped to the result record: is_error is a field of every failed
+        # tool result too, and red-then-green means every Keeler task has
+        # one. Unscoped, this reported 'died' for every task that did its
+        # job — a false death, which is worse than the false pass it
+        # replaced, because it also invites resuming finished work.
+        if grep '"type":"result"' "$stream_file" 2>/dev/null | grep -q '"is_error":true'; then
+            echo "keeler: the agent finished its turn with an error — the gate did not run" >&2
+            exit 1
+        fi
+        just keeler-branch
+        echo \$? > "$exit_file"
+    } 2>&1 | tee -a "$log_file"
+    RUNNER
+    chmod +x "$runner"
+
 # It refuses before creating anything when tmux is missing, when the spec
 # differs from HEAD or is not Approved (the worktree is cut from HEAD, so an
 # uncommitted graph is one the agent would never see), when the graph script
@@ -360,70 +442,7 @@ keeler-spawn SPEC TASK:
     runner="$runs/$tid.sh"
     # A verdict left by an earlier run of this task is not this run's.
     rm -f "$exit_file"
-    prompt="Implement task $task of $rel, and nothing else.
-
-    Read $rel in full first, then .claude/keeler.md.
-
-    Run the whole per-task pipeline for this one task, in order and without
-    stopping between stages: /keeler:tdd, then /keeler:qa, then
-    /keeler:review, then /keeler:mutants. The gate is 'just keeler-branch';
-    it must be green before the task is done.
-
-    You are on branch $branch, in the worktree $worktree. Commit there as
-    each stage finishes: the human ran keeler-spawn for this task, and that
-    was the consent for those commits. Commit nowhere else, never push, and
-    never open a pull request."
-    # Enough to edit, test and commit inside the worktree, and no more. Not
-    # bypassPermissions: a headless agent with an unrestricted shell is not
-    # a decision a recipe should make by default.
-    tools='Bash(cargo:*),Bash(just:*),Bash(git:*)'
-    # Bash(git:*) grants push. "Nothing is pushed" has to be a permission,
-    # not a sentence in a prompt: take it back explicitly. The match is on
-    # the command prefix, so this stops the ordinary `git push` and not a
-    # determined `git -C … push` or a recipe that pushes — it is a guard
-    # against the accident, and the guarantee that nothing reaches the
-    # remote remains the human owning the push.
-    blocked='Bash(git push:*)'
-    cat > "$runner" <<RUNNER
-    #!/usr/bin/env bash
-    # Written by 'just keeler-spawn' for $branch. Re-runnable by hand:
-    #     bash "$runner"
-    cd "$worktree" || exit 1
-    prompt=\$(cat <<'KEELER_PROMPT'
-    $prompt
-    KEELER_PROMPT
-    )
-    # Everything the session prints is teed to the log as it goes —
-    # '--verbose', because without it claude -p prints nothing until its
-    # final answer, and four minutes of honest work looks exactly like a
-    # hang to anyone watching.
-    {
-        # stream-json, because the exit code cannot answer the question
-        # that matters. A session that hits its limit mid-work prints its
-        # apology and exits zero, tidily, having finished nothing — this
-        # project met exactly that. The stream's final 'result' record is
-        # written only when the turn ends, so its presence is the signal
-        # and its absence is the death, however calm the exit.
-        claude -p "\$prompt" --verbose --output-format stream-json \
-            --permission-mode acceptEdits --allowedTools '$tools' --disallowedTools '$blocked' \
-            | tee "$stream_file"
-        if ! grep -q '"type":"result"' "$stream_file" 2>/dev/null; then
-            echo "keeler: the agent ended without finishing its turn — the gate did not run, and there is no verdict to mistake for one" >&2
-            exit 1
-        fi
-        # Scoped to the result record: is_error is a field of every failed
-        # tool result too, and red-then-green means every Keeler task has
-        # one. Unscoped, this reported 'died' for every task that did its
-        # job — a false death, which is worse than the false pass it
-        # replaced, because it also invites resuming finished work.
-        if grep '"type":"result"' "$stream_file" 2>/dev/null | grep -q '"is_error":true'; then
-            echo "keeler: the agent finished its turn with an error — the gate did not run" >&2
-            exit 1
-        fi
-        just keeler-branch
-        echo \$? > "$exit_file"
-    } 2>&1 | tee -a "$log_file"
-    RUNNER
+    just _write-runner "$rel" "$task" "$branch" "$worktree" "$runner" "$exit_file" "$log_file" "$stream_file"
     printf -v run_cmd 'bash %q' "$runner"
     # If the session will not start, the branch and worktree must not
     # survive it: every retry would then refuse with "already spawned" for
@@ -592,6 +611,7 @@ keeler-resume SPEC TASK:
     tid="$(printf '%s' "$task" | tr '[:upper:]' '[:lower:]')"
     runner="$root/.keeler/runs/$slug/$tid.sh"
     session="keeler-$slug-$tid"
+    branch="keeler/$slug/$tid"
     worktree="$(dirname "$root")/$(basename "$root")-$slug-$tid"
     if [ ! -f "$runner" ]; then
         echo "keeler-resume: $task was never spawned — there is no run to resume; use just keeler-spawn $spec $task" >&2
@@ -621,6 +641,14 @@ keeler-resume SPEC TASK:
         exit 1
     fi
     echo "keeler-resume: re-running $task in the worktree and branch it already has"
+    # Written afresh: a runner is generated code, and one kept from an
+    # earlier recipe carries every defect that recipe had. The worktree,
+    # the branch and the log are what a resume keeps.
+    rel="${spec_abs#"$root/"}"
+    just _write-runner "$rel" "$task" "$branch" "$worktree" "$runner" \
+        "$root/.keeler/runs/$slug/$tid.exit" \
+        "$root/.keeler/runs/$slug/$tid.log" \
+        "$root/.keeler/runs/$slug/$tid.stream"
     printf -v run_cmd 'bash %q' "$runner"
     tmux new-session -d -s "$session" -c "$worktree" "$run_cmd"
     echo "  worktree: $worktree"

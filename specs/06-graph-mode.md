@@ -194,9 +194,12 @@ And   `just keeler-resume` still refuses while the verdict is there:
 ```
 Given a task the board reports as died
 When  `just keeler-resume <spec> T1` runs
-Then  it re-runs the task's runner in its existing worktree and branch,
-      whose commits already say how far the pipeline got — creating
-      nothing new, and refusing a task that is running, passed or done
+Then  it re-runs the task in its existing worktree and branch, whose
+      commits already say how far the pipeline got — creating nothing
+      new, and refusing a task that is running, passed or done
+And   the runner it re-runs is written afresh by the recipe as it stands
+      now: a runner is generated code, not a record of the run, and one
+      kept from an earlier version carries every defect that version had
 And   the board offers that command beside every task it reports died
 ```
 
@@ -511,6 +514,13 @@ split it rather than ship a task eight scenarios wide.
       Tests: acceptance — a failed fixture's board line names the path;
       `keeler-resume` still refuses; removing the file makes the resume
       run.
+
+- [x] **T14 — A resume re-runs the task, not the file.** Needs: T13.
+      Scenarios: _A dead task is resumed by name_. Deliverable:
+      `keeler-resume` regenerates the runner from the current recipe
+      before starting it, keeping the worktree, the branch and the log.
+      Tests: acceptance — a stale runner on disk is replaced, and what
+      runs carries the flags the recipe emits today.
 
 ---
 
