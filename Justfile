@@ -210,6 +210,106 @@ keeler-branch:
     fi
     just mutants-diff
 
+# The fork after approval, as a recipe. /keeler:spec asks which road once
+# it has set `Status: Approved`, and the "graph" answer runs this — so the
+# branch, the checkout and the one commit are a thing a human can also run
+# by hand, after answering "linearly" and changing their mind. Three lines
+# in a command file would behave one way for the agent and another for the
+# human, and only one of them would be tested.
+#
+# Cut from main and nowhere else, found through `_main-ref` as every other
+# recipe finds it: a feature cut from another feature's branch, or from a
+# task branch, is a feature nested where nothing else in graph mode expects
+# one. The branch's own name is the exception — re-approving an amended
+# spec happens there, and checking out the branch you are already on is
+# the same branch either way.
+#
+# The commit is of one path. An unrelated change in the working tree, or
+# staged beside it, is not this commit's and stays exactly where it was:
+# the human's consent was for the spec, and the spec is what is committed.
+#
+# Graph mode: cut feat/<spec-slug> from main and commit the approved spec there — `just keeler-feature-branch specs/01-foo.md`.
+keeler-feature-branch SPEC:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    spec="{{SPEC}}"
+    [ -f "$spec" ] || { echo "keeler-feature-branch: $spec is not a file" >&2; exit 1; }
+    root="$(git rev-parse --show-toplevel)"
+    spec_abs="$(cd "$(dirname "$spec")" && pwd)/$(basename "$spec")"
+    case "$spec_abs" in
+        "$root"/*) ;;
+        *)
+            echo "keeler-feature-branch: $spec_abs is not inside $root — a feature branch is cut in the repository the spec lives in." >&2
+            exit 1
+            ;;
+    esac
+    rel="${spec_abs#"$root"/}"
+    slug="$(basename "$spec_abs" .md)"
+    feature="feat/$slug"
+    if ! git check-ref-format --branch "$feature" >/dev/null 2>&1; then
+        echo "keeler-feature-branch: $rel would need the branch $feature, which git will not accept — rename the spec file." >&2
+        exit 1
+    fi
+    # Where main is, is `_main-ref`'s answer and no one else's.
+    main_ref="$(just _main-ref)"
+    main_branch="${main_ref##*/}"
+    here="$(git symbolic-ref --quiet --short HEAD || true)"
+    if [ "$here" != "$main_branch" ] && [ "$here" != "$feature" ]; then
+        echo "keeler-feature-branch: on ${here:-a detached HEAD} — a feature branch is cut from $main_branch, and a feature nested inside another feature's branch, or inside a task's, is a shape nothing else in graph mode expects. Check out $main_branch and run this again." >&2
+        exit 1
+    fi
+    # The working tree's copy is the one the human just approved, so it is
+    # the one that must end up on the branch — whatever the branch already
+    # holds. Held aside first, because the switch below puts the spec back
+    # to what *this* branch committed: git refuses to carry a modified file
+    # across to a branch holding a different copy of it, and an approval
+    # that ends in "your local changes would be overwritten" is an approval
+    # that ends nowhere.
+    approved="$(mktemp)"
+    branch_copy="$(mktemp)"
+    trap 'rm -f "$approved" "$branch_copy"' EXIT
+    cp "$spec_abs" "$approved"
+    existed=no
+    if git show-ref --verify --quiet "refs/heads/$feature"; then existed=yes; fi
+    if [ "$here" != "$feature" ]; then
+        if git ls-files --error-unmatch -- "$spec_abs" >/dev/null 2>&1; then
+            git checkout -q HEAD -- "$spec_abs"
+        else
+            rm -f "$spec_abs"
+        fi
+        if [ "$existed" = yes ]; then
+            switch=(checkout -q "$feature")
+        else
+            switch=(checkout -q -b "$feature")
+        fi
+        if ! git "${switch[@]}"; then
+            # Whatever stopped the switch, the approved spec is the one
+            # thing here that exists nowhere else — put it back before
+            # saying so.
+            cp "$approved" "$spec_abs"
+            echo "keeler-feature-branch: could not check out $feature — $rel is as it was; commit or stash the rest of the working tree and run this again." >&2
+            exit 1
+        fi
+        cp "$approved" "$spec_abs"
+    fi
+    if [ "$existed" = yes ]; then
+        did="checked out $feature, which already existed"
+    else
+        did="cut $feature from $main_branch"
+    fi
+    # A spec that has not changed is not a commit. Re-approving an
+    # untouched spec — or running this twice — leaves the branch alone.
+    if git show "$feature:$rel" > "$branch_copy" 2>/dev/null && cmp -s "$branch_copy" "$spec_abs"; then
+        echo "keeler-feature-branch: $did — $rel is already the copy it holds, so nothing was committed."
+        exit 0
+    fi
+    git add -- "$spec_abs"
+    # The pathspec is the point: `git commit -- <path>` commits that path
+    # from the working tree and leaves everything else, staged or not,
+    # exactly as it was.
+    git commit -q -m "docs($slug): the approved spec" -- "$spec_abs"
+    echo "keeler-feature-branch: $did — committed $rel there."
+
 # The script's report is the machine's, one `<id> <state> [needs...]` line
 # per task, and the spawn recipe reads it as such; this is the human's view
 # of the same lines, where a blocked task shows only what it is still
