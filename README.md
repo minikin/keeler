@@ -39,6 +39,7 @@ bash install.sh .
 |              | What lands in your project                                                                                                 |
 | ------------ | -------------------------------------------------------------------------------------------------------------------------- |
 | **Workflow** | slash commands under `.claude/commands/keeler/`, two skills, a spec template, `Justfile`, gate configs                     |
+| **Graph mode** | the recipes that fan a spec's tasks out to parallel agents — `keeler-fan-out`, `keeler-spawn`, `keeler-status`, `keeler-resume`, `keeler-branch`, `keeler-land` — plus `scripts/keeler-graph.sh` |
 | **Rules**    | `.claude/keeler.md`, imported by `CLAUDE.md` with one line — your `CLAUDE.md` is otherwise untouched                       |
 | **CI**       | `.github/workflows/keeler.yml` — the gates and nothing else, beside your own workflows                                     |
 | **Manifest** | `proptest` as a dev-dependency, `[profile.mutants]`, `[lints.clippy]` — each only if missing                               |
@@ -74,6 +75,32 @@ full mutation testing on a legacy tree. Set the coverage threshold in the
 `cov` recipe to today's number and ratchet it up. The gates guard the delta,
 not the past.
 
+## Graph mode
+
+A feature's tasks can run in parallel — one agent per task, each on its own
+branch in its own worktree, each through the whole pipeline. The graph lives
+in the spec: `/keeler:tasks` writes `Needs: T1.` on each task, so approving
+the spec is approving the graph.
+
+```
+$ just keeler-fan-out specs/07-fan-out.md
+  T1 done
+  T2 ready
+  T3 ready
+  T4 blocked (waiting on T2)
+wave: T2 T3
+spawn 2 tasks? [yes/no] yes
+```
+
+One yes spawns them all, into one tmux window with a pane per run.
+`just keeler-status <spec>` is the board afterwards, and `just keeler-land`
+merges the finished ones back.
+
+It is opt-in and changes nothing on the linear road: a project that never
+runs these recipes never meets them. Its one extra requirement is **tmux**.
+[KEELER.md](KEELER.md#graph-mode-the-same-pipeline-in-parallel) has the day,
+start to finish.
+
 ## What Keeler is not
 
 - **Not for other agents.** It installs Claude Code's slash commands and
@@ -82,6 +109,11 @@ not the past.
 - **Not a substitute for review.** Every gate leaves evidence except
   review, so nothing notices when review is skipped. The commands lead from
   each stage to the next; following them is on you.
+- **Not able to write its own instructions.** A spawned agent may not edit
+  files under `.claude/` — a headless session has nobody to ask for that
+  consent — so a task whose deliverable is a command file or the rules file
+  is the human's to do. Found the hard way, by a spawned agent that reported
+  it rather than routing around it.
 - **Not Windows-native.** The installer is a shell script — WSL or Git
   Bash — and the shipped gates have no Windows CI job behind them.
 
