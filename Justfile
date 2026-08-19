@@ -823,6 +823,13 @@ keeler-resume SPEC TASK:
 # did not, and exits non-zero when anything was refused — one wave, one
 # yes, one exit code that says whether it all went out.
 #
+# Then the wave is shown as one thing: a detached session
+# keeler-<spec-slug>-wave holding a pane per run, each attached to that
+# run's own session, tiled as they are added. The per-task sessions are
+# the source of truth and outlive the view — the board reads them,
+# `tmux attach` on one still works, closing the view kills nothing — so a
+# view that cannot be built is reported and leaves the exit code alone.
+#
 # Graph mode: name every ready, unspawned task and ask for the one yes that spawns the wave — `just keeler-fan-out specs/01-foo.md`.
 keeler-fan-out SPEC:
     #!/usr/bin/env bash
@@ -836,6 +843,11 @@ keeler-fan-out SPEC:
     # it waits on.
     just="{{just_executable()}}"
     "$just" -q _spawn-preflight "$spec" >/dev/null
+    # One name for the wave's own things, derived the way every other name
+    # in graph mode is: the spec's file name, which the preflight has just
+    # established is a file inside this repository.
+    root="$(git rev-parse --show-toplevel)"
+    slug="$(basename "$spec" .md)"
     graph="$("$just" keeler-graph "$spec")"
     board="$("$just" keeler-status "$spec")"
     echo "keeler-fan-out: $spec on $(git symbolic-ref --quiet --short HEAD)"
@@ -917,8 +929,74 @@ keeler-fan-out SPEC:
             refused="$refused${refused:+ }$id"
         fi
     done
+    # The view, built after the spawns and out of the sessions they made:
+    # one window, one pane per run, so the wave is watched together instead
+    # of one attach at a time. The per-task sessions are the real thing and
+    # outlive it — closing the view kills nothing, and a tmux that will not
+    # build it is said so and does not touch the exit code below, which
+    # answers about the wave and not about the window over it.
+    view=""
+    if [ -n "$spawned" ]; then
+        view="keeler-$slug-wave"
+        runs="$root/.keeler/runs/$slug"
+        mkdir -p "$runs"
+        pane_runner="$runs/wave.sh"
+        # A runner, the way spawn writes its own, and for one more reason:
+        # the pane's command is run by the user's shell, and in zsh a word
+        # beginning with `=` is a command to look up rather than a tmux
+        # target. Inside a script it is neither.
+        cat > "$pane_runner" <<'WAVE'
+    #!/usr/bin/env bash
+    # Written by 'just keeler-fan-out' — one pane of the wave view:
+    #     bash wave.sh keeler-<spec-slug>-<task>
+    # The target is exact: tmux matches a bare name as a prefix, and
+    # keeler-<spec-slug> is a prefix of every task's session. TMUX= because
+    # this attach is nested by construction — the pane is already in tmux.
+    exec env TMUX= tmux attach-session -t "=$1"
+    WAVE
+        chmod +x "$pane_runner"
+        shown=""
+        for id in $spawned; do
+            tid="$(printf '%s' "$id" | tr '[:upper:]' '[:lower:]')"
+            printf -v pane_cmd 'bash %q %q' "$pane_runner" "keeler-$slug-$tid"
+            # Detached, and -x/-y large enough to split the whole wave into:
+            # an 80x24 session has no room left at the fourth pane. A view
+            # left standing by an earlier wave is added to rather than
+            # remade — its panes are runs that are still going.
+            if [ -z "$shown" ] && ! tmux has-session -t "=$view" 2>/dev/null; then
+                tmux new-session -d -s "$view" -x 200 -y 50 "$pane_cmd" || break
+            else
+                # `=name:` and not `=name`: the exact prefix is read off the
+                # session part of a target, and a bare name given where a
+                # pane is expected is looked up as a pane and not found. The
+                # trailing colon is the session's current window, which is
+                # the wave's one window.
+                tmux split-window -t "=$view:" "$pane_cmd" || break
+                # Tiled as each pane arrives, not once at the end: without it
+                # the fourth split has nowhere to go and fails.
+                tmux select-layout -t "=$view:" tiled >/dev/null || true
+            fi
+            shown="$shown${shown:+ }$id"
+        done
+        if [ "$shown" != "$spawned" ]; then
+            # The window is short of the wave — and the wave is unaffected,
+            # so this is said and not counted: every run is in its own
+            # session whether or not anything is watching it.
+            echo "keeler-fan-out: the view holds ${shown:-nothing} of the wave — tmux would go no further. The runs are in their own sessions regardless: tmux attach -t '=keeler-$slug-<task>'." >&2
+            [ -n "$shown" ] || view=""
+        fi
+    fi
     echo
     echo "keeler-fan-out: spawned ${spawned:-nothing}"
+    if [ -n "$view" ]; then
+        # Inside tmux an attach fails at once, and the move that does what
+        # the human meant is switch-client.
+        if [ -n "${TMUX:-}" ]; then
+            echo "  wave:     tmux switch-client -t '=$view'   (already inside tmux, where an attach would refuse)"
+        else
+            echo "  wave:     tmux attach -t '=$view'   (one pane per run; closing it kills nothing)"
+        fi
+    fi
     echo "  board:    just keeler-status $spec"
     if [ -n "$refused" ]; then
         # What went out is the line above, and it says `nothing` when the

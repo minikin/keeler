@@ -99,8 +99,14 @@ mod wave {
     /// two-line stub predated that check and made every stubbed run die
     /// before its gate — which is how a test came to assert `passed`
     /// against a board that said `died`.
+    ///
+    /// `KEELER_STUB_CLAUDE_HOLD` keeps the turn open for that many seconds,
+    /// which is the only way a session started by a real tmux is still
+    /// running when the test looks at it: a stub that returns at once takes
+    /// its session down with it before the view is even built.
     const CLAUDE_STUB: &str = r#"#!/usr/bin/env bash
     { for a in "$@"; do printf '%s\037' "$a"; done; printf '\036'; } >> "$KEELER_STUB_CLAUDE_LOG"
+    if [ -n "${KEELER_STUB_CLAUDE_HOLD:-}" ]; then sleep "$KEELER_STUB_CLAUDE_HOLD"; fi
     echo '{"type":"assistant","message":{"content":[{"type":"text","text":"claude stub: the turn ended"}]}}'
     echo '{"is_error":false,"type":"result","subtype":"success"}'
     exit 0
@@ -195,6 +201,13 @@ mod wave {
             self.dir.join(spec_path(slug))
         }
 
+        /// Takes the stub tmux off the project's PATH, so the recipes reach
+        /// the real one. Everything else — `claude`, the branch gate — is
+        /// still stubbed: what is under test is tmux and nothing besides.
+        fn use_real_tmux(&self) {
+            std::fs::remove_file(self.dir.join("bin/tmux")).unwrap();
+        }
+
         /// Closes a task on its own branch: the review record and the
         /// tick, committed there. Without both the board says
         /// `incomplete`, which is right and is a different clause.
@@ -269,7 +282,9 @@ mod wave {
 
         /// A recipe invocation with the stubs first on PATH and nothing
         /// answered in advance — the harness's own environment must not leak
-        /// a yes into a run that is meant to ask.
+        /// a yes into a run that is meant to ask, nor a `TMUX` into a run
+        /// whose output says whether it thinks it is inside one. (It does:
+        /// this suite is often run from a tmux pane.)
         fn just_command(&self, args: &[&str]) -> Command {
             let path = std::env::var("PATH").unwrap();
             let mut command = Command::new(real_just());
@@ -289,7 +304,8 @@ mod wave {
                 .env("KEELER_REAL_JUST", real_just())
                 .env("GIT_CONFIG_GLOBAL", "/dev/null")
                 .env("GIT_CONFIG_SYSTEM", "/dev/null")
-                .env_remove("KEELER_FAN_OUT_YES");
+                .env_remove("KEELER_FAN_OUT_YES")
+                .env_remove("TMUX");
             command
         }
 
@@ -351,23 +367,36 @@ mod wave {
                 .collect()
         }
 
-        fn new_sessions(&self) -> Vec<Vec<String>> {
+        /// Every recorded call to the stub tmux whose verb is `verb`, in the
+        /// order it was made.
+        fn tmux_calls(&self, verb: &str) -> Vec<Vec<String>> {
             self.calls("tmux")
                 .into_iter()
-                .filter(|call| call.first().is_some_and(|verb| verb == "new-session"))
+                .filter(|call| call.first().is_some_and(|first| first == verb))
                 .collect()
         }
 
+        fn new_sessions(&self) -> Vec<Vec<String>> {
+            self.tmux_calls("new-session")
+        }
+
         /// The sessions the stub tmux was asked to start, in the order it was
-        /// asked — which is the order the wave was spawned in, since one
-        /// `keeler-spawn` starts exactly one.
+        /// asked — the wave's runs, and the view fan-out builds over them.
         fn started_sessions(&self) -> Vec<String> {
             self.new_sessions()
                 .iter()
-                .filter_map(|call| {
-                    let at = call.iter().position(|arg| arg == "-s")?;
-                    call.get(at + 1).cloned()
-                })
+                .filter_map(|call| flag(call, "-s").map(str::to_string))
+                .collect()
+        }
+
+        /// The task sessions alone, in the order they were started — which is
+        /// the order the wave was spawned in, since one `keeler-spawn` starts
+        /// exactly one. The view is a session too, and it is not a run.
+        fn task_sessions(&self) -> Vec<String> {
+            let view = view_session(SLUG);
+            self.started_sessions()
+                .into_iter()
+                .filter(|name| *name != view)
                 .collect()
         }
 
@@ -419,6 +448,37 @@ mod wave {
     /// and a single attach use.
     fn session(slug: &str, task: &str) -> String {
         format!("keeler-{slug}-{}", task.to_lowercase())
+    }
+
+    /// The session holding the view fan-out builds over a wave — a name that
+    /// is not a prefix of any task's, and that no task's is a prefix of.
+    fn view_session(slug: &str) -> String {
+        format!("keeler-{slug}-wave")
+    }
+
+    /// What one recorded call asked tmux to do.
+    fn verb(call: &[String]) -> &str {
+        call.first().map_or("", String::as_str)
+    }
+
+    /// The value tmux was given for a flag — `-s`, `-t`, `-x` — in one call.
+    fn flag<'a>(call: &'a [String], name: &str) -> Option<&'a str> {
+        let at = call.iter().position(|arg| arg == name)?;
+        call.get(at + 1).map(String::as_str)
+    }
+
+    /// The command a pane was given, which is tmux's last argument.
+    fn pane_command(call: &[String]) -> &str {
+        call.last().map_or("", String::as_str)
+    }
+
+    /// The session a pane's command attaches to: the last word of it, since
+    /// the runner takes the session as its one argument.
+    fn pane_target(call: &[String]) -> &str {
+        pane_command(call)
+            .split_whitespace()
+            .last()
+            .unwrap_or_default()
     }
 
     fn stdout(output: &Output) -> String {
@@ -812,7 +872,7 @@ mod wave {
         // order — one session apiece, started in the wave's order
         assert_eq!(wave_of(&stdout(&output)), ["T2", "T3", "T5"], "{said}");
         assert_eq!(
-            project.started_sessions(),
+            project.task_sessions(),
             ["T2", "T3", "T5"].map(|id| session(SLUG, id)),
             "the wave was not spawned in order:\n{said}"
         );
@@ -895,7 +955,7 @@ mod wave {
 
         // And the rest of the wave still spawns, in order
         assert_eq!(
-            project.started_sessions(),
+            project.task_sessions(),
             ["T2", "T5"].map(|id| session(SLUG, id)),
             "the refusal took the rest of the wave with it:\n{said}"
         );
@@ -935,14 +995,15 @@ mod wave {
         let output = project.fan_out_with(SLUG, &Answer::Nobody, &[("KEELER_FAN_OUT_YES", "1")]);
         let said = both(&output);
         assert!(output.status.success(), "{said}");
-        assert_eq!(project.started_sessions().len(), 3, "{said}");
+        assert_eq!(project.task_sessions().len(), 3, "{said}");
 
         // Then no session was started carrying the answer: an agent that
         // inherited it could run a wave of its own with the one question the
-        // human's already answered
+        // human's already answered. Four sessions, because the view over the
+        // wave is one too, and the panes it holds inherit its environment.
         assert_eq!(
             project.session_environments(),
-            vec!["KEELER_FAN_OUT_YES=<unset>"; 3],
+            vec!["KEELER_FAN_OUT_YES=<unset>"; 4],
             "the yes travelled into the sessions it spawned:\n{said}"
         );
     }
@@ -993,6 +1054,294 @@ mod wave {
                 "{id} is not listed in the board's words:\n{said}"
             );
         }
+    }
+
+    #[test]
+    fn the_wave_is_one_tmux_window_with_a_pane_per_run() {
+        // Given a wave of three tasks spawned by fan-out
+        let project = Project::new("one-window");
+        let output = project.fan_out(SLUG, &Answer::Piped("yes\n"));
+        let said = both(&output);
+        assert!(output.status.success(), "the wave did not spawn:\n{said}");
+
+        // Then a tmux session named keeler-<spec-slug>-wave holds one pane per
+        // task that spawned, each attached to that task's session
+        let view = view_session(SLUG);
+        let target = format!("={view}");
+        // A pane of that window, exactly: the `=` is read off the session part
+        // of a target, so a target-pane says `=session:` — the trailing colon
+        // is the session's current window. `=session` alone is looked up as a
+        // pane name, and a real tmux does not find one.
+        let pane_of = format!("{target}:");
+        let made = project
+            .new_sessions()
+            .into_iter()
+            .find(|call| flag(call, "-s") == Some(view.as_str()))
+            .unwrap_or_else(|| panic!("no session {view} was created:\n{said}"));
+        // Detached, and sized for the wave rather than for a terminal nobody
+        // is at: an 80x24 session runs out of room part-way through splitting.
+        assert!(
+            made.iter().any(|arg| arg == "-d"),
+            "the view is not created detached: {made:?}"
+        );
+        for size in ["-x", "-y"] {
+            assert!(
+                flag(&made, size).is_some_and(|value| value.parse::<u32>().is_ok()),
+                "the view is created without a {size} to split inside: {made:?}"
+            );
+        }
+        let splits = project.tmux_calls("split-window");
+        let mut panes = vec![pane_target(&made).to_string()];
+        for split in &splits {
+            assert_eq!(
+                flag(split, "-t"),
+                Some(pane_of.as_str()),
+                "a pane was split into some other window: {split:?}"
+            );
+            panes.push(pane_target(split).to_string());
+        }
+        assert_eq!(
+            panes,
+            ["T2", "T3", "T5"].map(|id| session(SLUG, id)),
+            "the view is not one pane per run, each attached to that run:\n{said}"
+        );
+
+        // And each pane runs the attach through a runner, not inline: the pane
+        // is run by the user's shell, and in zsh a word starting with `=` is a
+        // command to look up rather than a tmux target
+        let runner = project.runs(SLUG).join("wave.sh");
+        assert!(runner.is_file(), "the wave has no runner at {runner:?}");
+        let body = std::fs::read_to_string(&runner).unwrap();
+        assert!(
+            body.contains("TMUX=") && body.contains("=$1"),
+            "the runner does not attach to an exact target with TMUX cleared:\n{body}"
+        );
+        for call in std::iter::once(&made).chain(splits.iter()) {
+            let command = pane_command(call);
+            assert!(
+                command.contains(&runner.display().to_string()),
+                "a pane does not run the wave's runner: {command}"
+            );
+            assert!(
+                !command.contains('='),
+                "a pane carries the exact target on its command line: {command}"
+            );
+        }
+
+        // And laid out so all are visible: every split is followed by a tiled
+        // layout, because a detached session runs out of room otherwise
+        let steps: Vec<String> = project
+            .calls("tmux")
+            .into_iter()
+            .filter(|call| matches!(verb(call), "split-window" | "select-layout"))
+            .map(|call| match verb(&call) {
+                "select-layout" => format!(
+                    "select-layout {} {}",
+                    flag(&call, "-t").unwrap_or_default(),
+                    pane_command(&call)
+                ),
+                other => other.to_string(),
+            })
+            .collect();
+        let tiled = format!("select-layout {pane_of} tiled");
+        assert_eq!(
+            steps,
+            [
+                "split-window",
+                tiled.as_str(),
+                "split-window",
+                tiled.as_str()
+            ],
+            "the panes are not tiled as they are added:\n{said}"
+        );
+
+        // And every target the view uses is exact: tmux matches a bare name as
+        // a prefix, and keeler-<spec-slug> is a prefix of every task's session
+        for call in project.calls("tmux") {
+            if let Some(given) = flag(&call, "-t") {
+                assert!(
+                    given.starts_with('='),
+                    "a tmux target is not exact: {call:?}"
+                );
+            }
+        }
+
+        // And a wave that spawned nothing is nothing to show: no view is built
+        let refused = Project::new("one-window-refused");
+        for id in ["t2", "t3", "t5"] {
+            refused.git(&["branch", &format!("keeler/{SLUG}/{id}")]);
+        }
+        let output = refused.fan_out(SLUG, &Answer::Piped("yes\n"));
+        assert!(!output.status.success(), "{}", both(&output));
+        assert!(
+            refused.new_sessions().is_empty(),
+            "a view was built over a wave that never spawned:\n{}",
+            both(&output)
+        );
+    }
+
+    /// The second clause of _The wave is one tmux window with a pane per run_:
+    /// the run says how to get to the window it built.
+    #[test]
+    fn the_run_prints_the_command_that_shows_the_wave() {
+        // Given a wave of three tasks spawned by fan-out
+        let project = Project::new("shows-the-wave");
+        let target = format!("={}", view_session(SLUG));
+
+        // When it runs from outside tmux
+        let output = project.fan_out(SLUG, &Answer::Piped("yes\n"));
+        let said = both(&output);
+        assert!(output.status.success(), "the wave did not spawn:\n{said}");
+
+        // Then it prints the attach that shows the wave, exact target and all
+        assert!(
+            stdout(&output)
+                .lines()
+                .any(|line| line.contains("tmux attach") && line.contains(&target)),
+            "the run does not print the attach that shows the wave:\n{said}"
+        );
+
+        // And `switch-client` when it is already inside tmux, where a nested
+        // attach fails at once
+        let inside = Project::new("shows-the-wave-inside-tmux");
+        let nested =
+            inside.fan_out_with(SLUG, &Answer::Piped("yes\n"), &[("TMUX", "/tmp/none,1,0")]);
+        let said = both(&nested);
+        assert!(nested.status.success(), "{said}");
+        assert!(
+            stdout(&nested)
+                .lines()
+                .any(|line| line.contains("switch-client") && line.contains(&target)),
+            "inside tmux the run still prints an attach that would fail:\n{said}"
+        );
+    }
+
+    /// The third clause of _The wave is one tmux window with a pane per run_:
+    /// the view is over the runs and not instead of them.
+    #[test]
+    fn the_per_task_sessions_outlive_the_view_and_the_board_still_reads_them() {
+        // Given a wave of three tasks spawned by fan-out
+        let mut project = Project::new("sessions-remain");
+        let output = project.fan_out(SLUG, &Answer::Piped("yes\n"));
+        let said = both(&output);
+        assert!(output.status.success(), "the wave did not spawn:\n{said}");
+
+        // Then the per-task sessions keeler-<spec-slug>-<task> still exist, so
+        // a single attach works exactly as before
+        assert_eq!(
+            project.task_sessions(),
+            ["T2", "T3", "T5"].map(|id| session(SLUG, id)),
+            "the view swallowed the sessions the runs are in:\n{said}"
+        );
+
+        // And keeler-status does too: with the three alive, the board says so
+        project.sessions = ["T2", "T3", "T5"].map(|id| session(SLUG, id)).join(" ");
+        let board = stdout(&project.just(&["keeler-status", &spec_path(SLUG)]));
+        for id in ["T2", "T3", "T5"] {
+            assert_eq!(
+                state_of(&board, id),
+                "running",
+                "the board no longer finds {id}'s own session:\n{board}"
+            );
+        }
+
+        // And the view is not mistaken for a run: with only it alive, no task
+        // is running — its name is nobody's prefix, and the board asks exactly
+        project.sessions = view_session(SLUG);
+        let board = stdout(&project.just(&["keeler-status", &spec_path(SLUG)]));
+        for id in ["T2", "T3", "T5"] {
+            assert_ne!(
+                state_of(&board, id),
+                "running",
+                "the view was taken for {id}'s session:\n{board}"
+            );
+        }
+    }
+
+    /// The stub tmux records what it was asked for and answers nothing, so
+    /// only a real server can say whether what was asked for is a window with
+    /// a client on every run. Ignored by default — it starts a tmux server and
+    /// holds three sessions open — and run with
+    /// `cargo nextest run --run-ignored all -E 'test(real_tmux)'`.
+    #[test]
+    #[ignore = "starts a real tmux server; run with --run-ignored all"]
+    fn a_real_tmux_wave_is_a_window_with_a_client_on_every_run() {
+        if Command::new("sh")
+            .args(["-c", "command -v tmux"])
+            .output()
+            .is_ok_and(|out| !out.status.success())
+        {
+            return;
+        }
+        // Given a wave of three tasks, spawned with the real tmux — on a
+        // server of the fixture's own, so the developer's sessions are neither
+        // touched nor collided with
+        let project = Project::new("real-tmux");
+        project.use_real_tmux();
+        // Not under the fixture: a unix socket's path is capped near 104
+        // bytes, and the temporary directory a fixture lives in already
+        // spends most of that on macOS.
+        let socket = PathBuf::from("/tmp").join(format!("keeler-wave-{}", std::process::id()));
+        std::fs::create_dir_all(&socket).unwrap();
+        let socket = socket.display().to_string();
+        let tmux = |args: &[&str]| -> Output {
+            Command::new("tmux")
+                .args(args)
+                .env("TMUX_TMPDIR", &socket)
+                .env_remove("TMUX")
+                .output()
+                .expect("failed to run tmux")
+        };
+
+        // When the spawns have started — each holding its turn open, so the
+        // wave is still running when the view over it is looked at
+        let output = project.fan_out_with(
+            SLUG,
+            &Answer::Piped("yes\n"),
+            &[("TMUX_TMPDIR", &socket), ("KEELER_STUB_CLAUDE_HOLD", "20")],
+        );
+        let said = both(&output);
+        assert!(output.status.success(), "the wave did not spawn:\n{said}");
+
+        // Then the view holds one pane per run, each with a client on that
+        // run's own session — which is what "attached to that task's session"
+        // is, in tmux's own words
+        let view = view_session(SLUG);
+        let runs: Vec<String> = ["T2", "T3", "T5"].map(|id| session(SLUG, id)).to_vec();
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let sessions = loop {
+            let sessions = String::from_utf8_lossy(
+                &tmux(&["list-sessions", "-F", "#{session_name} #{session_attached}"]).stdout,
+            )
+            .into_owned();
+            let all_attached = runs
+                .iter()
+                .all(|run| sessions.lines().any(|line| line == format!("{run} 1")));
+            if all_attached || Instant::now() > deadline {
+                break sessions;
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        };
+        let panes = String::from_utf8_lossy(
+            &tmux(&["list-panes", "-t", &format!("={view}"), "-F", "#{pane_id}"]).stdout,
+        )
+        .lines()
+        .count();
+        // Everything is read before anything is asserted, so a failure takes
+        // the server and its socket down with it rather than leaving three
+        // sessions of somebody else's making behind.
+        let _ = tmux(&["kill-server"]);
+        let _ = std::fs::remove_dir_all(&socket);
+        for run in &runs {
+            assert!(
+                sessions.lines().any(|line| line == format!("{run} 1")),
+                "{run} has no client of its own from the view:\n{sessions}\n{said}"
+            );
+        }
+        assert_eq!(
+            panes, 3,
+            "the view is not one window of three panes:\n{said}"
+        );
     }
 
     #[test]
