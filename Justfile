@@ -555,6 +555,18 @@ keeler-status SPEC:
         if [ "$state" = died ]; then
             printf '       resume with: just keeler-resume %s %s\n' "$rel" "$id"
         fi
+        case "$state" in
+            failed*)
+                # A verdict is a run's record, and a run can turn out not
+                # to be believable — an earlier tooling, a gate that
+                # measured a tree the agent never touched. Nothing here
+                # takes it back: that is the human's judgement. But the
+                # way out should not be a path the tool never mentions,
+                # because without it the task is locked — the board says
+                # failed and the resume refuses, for ever.
+                printf '       verdict from an earlier run? rm %s to make it resumable\n' "$exit_file"
+                ;;
+        esac
     done <<< "$report"
 
 # A spawned session that ended before its pipeline finished left its
