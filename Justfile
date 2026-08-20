@@ -411,8 +411,29 @@ _write-runner SPEC TASK BRANCH WORKTREE RUNNER EXIT_FILE LOG_FILE STREAM_FILE:
             --permission-mode acceptEdits --allowedTools '$tools' --disallowedTools '$blocked' \
             | tee "$stream_file"
         if ! grep -q '"type":"result"' "$stream_file" 2>/dev/null; then
-            echo "keeler: the agent ended without finishing its turn — the gate did not run, and there is no verdict to mistake for one" >&2
-            exit 1
+            # The record is missing, which says the process stopped. It
+            # does not say the work did. So ask the branch before giving
+            # up: a run killed mid-write after committing everything is
+            # finished work with no verdict, and calling that dead leaves
+            # a task whose board line contradicts its own branch and whose
+            # only route onward redoes what is already done.
+            # Everything here is derived from the branch name, which is
+            # keeler/<slug>/<id> — the runner knows that and little else.
+            k_rest="${branch#keeler/}"
+            k_slug="\${k_rest%%/*}"
+            k_id="\${k_rest##*/}"
+            finished=yes
+            [ -n "\$(git log --oneline "feat/\$k_slug".."$branch" 2>/dev/null)" ] || finished=no
+            [ -f "reviews/\$k_slug/\$k_id.md" ] || finished=no
+            [ -z "\$(git status --porcelain 2>/dev/null)" ] || finished=no
+            k_state="\$(bash scripts/keeler-graph.sh "specs/\$k_slug.md" 2>/dev/null \
+                | awk -v t="$task" '\$1 == t { print \$2 }')"
+            [ "\$k_state" = done ] || finished=no
+            if [ "\$finished" != yes ]; then
+                echo "keeler: the agent ended without finishing its turn — the gate did not run, and there is no verdict to mistake for one" >&2
+                exit 1
+            fi
+            echo "keeler: the agent was cut off after its work — commits, record and tick are on the branch, so the gate runs" >&2
         fi
         # Scoped to the result record: is_error is a field of every failed
         # tool result too, and red-then-green means every Keeler task has
