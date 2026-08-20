@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/minikin/keeler/security/advisories/new
+    about: Report privately, never in a public issue — see SECURITY.md.
+  - name: How the workflow is meant to work
+    url: https://github.com/minikin/keeler/blob/main/KEELER.md
+    about: Why each stage and gate exists, before filing against one.

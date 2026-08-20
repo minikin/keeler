@@ -54,9 +54,18 @@ The road above is one agent, one branch, stages in sequence. **Graph mode is tha
 
 The approved spec is what every spawned agent reads, so the graph lives in the spec and nowhere else. `/keeler:tasks` writes each task's dependencies into the Tasks section as `Needs: T1, T2.` — approving the spec is approving the graph. A task with no `Needs:` is a root, so a spec written before graph mode existed reads as a graph whose every task is ready.
 
+The stages are slash commands; these recipes deliberately are not —
+spawning, watching and landing are the human's levers, and the consent
+each one grants cannot be given by the agent to itself. When the user asks
+in-session ("fan out spec 07", "show the board", "land it"), run the
+matching recipe below; what you may not do is run `keeler-spawn`,
+`keeler-fan-out` or `keeler-land` unasked.
+
 | Command                                       | What it does                                                                                                                                                                                                          |
 | --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `just keeler-feature-branch <spec>`           | Cuts `feat/<spec-slug>` from main, checks it out and commits the approved spec there — the "graph" answer's one mechanical step, and the same by hand. Reuses the branch when it already exists. |
 | `/keeler:graph` — `just keeler-graph <spec>`  | Reads the graph: which tasks are ready, blocked (naming what they wait on) or done. A cycle or a `Needs:` naming no task is refused by the parser, naming the line. Readiness is read from the spec on the feature's own branch, **`feat/<spec-slug>`** — a tick on a task branch unblocks nothing until it lands there. |
+| `just keeler-fan-out <spec>`                  | The wave: names every ready, unspawned task and asks once; one **yes** spawns them all through `keeler-spawn`, into one tmux window with a pane per run — nothing starts that was not said yes to. |
 | `just keeler-spawn <spec> <task>`             | Cuts the worktree and branch `keeler/<spec-slug>/<task-id>` and hands the task to a headless agent in a detached tmux session, returning at once. Runs only from the feature's branch, **`feat/<spec-slug>`**, and refuses anywhere else. Also refuses a blocked, done or already-spawned task, a spec that differs from HEAD or is not `Approved`, and a machine without tmux. |
 | `just keeler-status <spec>`                   | The board: running, passed, `incomplete` (naming which of the three a task still lacks), failed, died mid-pipeline, done, or never spawned — with each run's log and worktree, which are what a resume reads.                                                                             |
 | `just keeler-resume <spec> <task>`            | Re-runs a task whose session ended before its gate, in the worktree and branch it already has — the commits on it are how far the pipeline got. Refuses a task still running, one that reached its gate, one that is done, and one never spawned. |
@@ -150,11 +159,14 @@ just mutants-diff         # mutation tests on files changed vs HEAD
 just dev-full   # dev + all mutants (slow)
 
 # Graph mode (opt-in; see the section above)
-just keeler-graph specs/01-foo.md      # ready / blocked / done
-just keeler-spawn specs/01-foo.md T3   # hand a ready task to an agent on its own branch
-just keeler-status specs/01-foo.md     # what each task is doing right now
-just keeler-branch                     # the gate a task branch runs
-just keeler-land                       # fan-in: worktrees on the feature branch, baseline and Status: on main
+just keeler-feature-branch specs/01-foo.md  # cut feat/01-foo and commit the approved spec there
+just keeler-graph specs/01-foo.md           # ready / blocked / done
+just keeler-fan-out specs/01-foo.md         # name every ready task; one yes spawns the wave
+just keeler-spawn specs/01-foo.md T3        # hand one ready task to an agent on its own branch
+just keeler-status specs/01-foo.md          # what each task is doing right now
+just keeler-resume specs/01-foo.md T3       # re-run a task whose session died before its gate
+just keeler-branch                          # the gate a task branch runs
+just keeler-land                            # fan-in: worktrees on the feature branch, baseline and Status: on main
 ```
 
 ## Skills
@@ -171,6 +183,7 @@ Add new skills the same way: a folder under `.claude/skills/`, frontmatter with 
 - **rust-best-practices** — idiomatic Rust: borrowing vs cloning, `Result` error handling, API design; consult while writing or refactoring any Rust code.
 - **clean-code** — naming, function size, structure; the go-to during the REFACTOR step of /keeler:tdd.
 - **rust-async-patterns** — Tokio, async traits, concurrency; the moment the project grows async code.
+- **bulletproof-rust-web** — Axum/Tokio/SQLx/Tower architecture, error handling and production hardening; optional, and only when the project is a web service.
 
 ## Testing conventions
 

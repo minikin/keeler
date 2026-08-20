@@ -1,38 +1,33 @@
 ---
 name: Bug report
-about: Create a report to help us improve
+about: Something Keeler does is wrong
 title: ''
-labels: ''
+labels: bug
 assignees: ''
-
 ---
 
-**Describe the bug**
-A clear and concise description of what the bug is.
+**What happened, and what you expected instead**
+One or two sentences. If a gate or a recipe reported something, paste what it
+said rather than paraphrasing it.
 
-**To Reproduce**
-Steps to reproduce the behavior:
-1. Go to '...'
-2. Click on '....'
-3. Scroll down to '....'
-4. See error
+**How to reproduce**
+The shortest sequence that shows it — ideally starting from a throwaway
+project, since that is how the test harness will pin it:
 
-**Expected behavior**
-A clear and concise description of what you expected to happen.
+```bash
+cargo new --lib /tmp/probe
+./install.sh /tmp/probe --no-tools
+# then …
+```
 
-**Screenshots**
-If applicable, add screenshots to help explain your problem.
+**Environment**
 
-**Desktop (please complete the following information):**
- - OS: [e.g. iOS]
- - Browser [e.g. chrome, safari]
- - Version [e.g. 22]
+- Keeler version: <!-- the keeler-version marker at the top of .claude/keeler.md, or the tag you installed -->
+- OS: <!-- macOS 15, Ubuntu 24.04, WSL2, … -->
+- Shell: <!-- bash 5.2, zsh 5.9, … -->
+- `just --version`, `cargo --version`:
+- Graph mode involved? <!-- yes/no; if yes, `tmux -V` and the output of `just keeler-status <spec>` -->
 
-**Smartphone (please complete the following information):**
- - Device: [e.g. iPhone6]
- - OS: [e.g. iOS8.1]
- - Browser [e.g. stock browser, safari]
- - Version [e.g. 22]
-
-**Additional context**
-Add any other context about the problem here.
+**Anything else**
+Logs under `.keeler/runs/`, the branch you were on, a link to the failing CI
+run — whatever you have.

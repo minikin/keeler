@@ -82,6 +82,18 @@ something its own branches contradicted.
 - The README describes graph mode, and says plainly what a spawned agent
   cannot do: write files under `.claude/`, because a headless session has
   nobody to ask for that consent.
+- The docs match what ships. README's install table names both roads and
+  every recipe in each, the fan-out example is the recipe's real output,
+  and the section `templates/keeler.yml` points adopters at — "Adopting it
+  in an existing codebase" — exists under that name. Each document says
+  which questions it answers; the rules' command list carries all eight
+  graph recipes; every worked example pins the released tag, and cutting a
+  release now includes checking that they do. `bulletproof-rust-web`
+  joins the recommended skills, for projects that are web services.
+- Issue and PR templates fit a CLI project: the bug report asks for the
+  Keeler version marker, OS, shell and graph-mode state instead of browser
+  and smartphone; a feature request asks for the problem and a
+  Given/When/Then; a PR template carries the road taken and the gates.
 
 ## [0.3.0] — 2026-08-16
 

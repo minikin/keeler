@@ -7,6 +7,10 @@ without touching your project's instructions:
 
 @.claude/keeler.md
 
+Those rules are the law. [KEELER.md](KEELER.md) says why they are shaped
+that way, and [README.md](README.md) is the front door — install, first day,
+and what Keeler is not. What follows here is this repository only.
+
 <!-- Add project-specific instructions below this line. -->
 
 ## How this repository diverges from the rules it ships
