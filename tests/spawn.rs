@@ -1481,6 +1481,34 @@ fn spawning_from_an_uncommitted_or_unapproved_spec_is_refused() {
 }
 
 #[test]
+fn a_spec_whose_name_holds_a_dot_is_refused_by_name() {
+    // Given a spec whose file name carries a dot — `06.1-amendment.md`,
+    // the ordinary way of numbering a follow-up
+    let project = Project::with_spec("dotted", "06.1-foo", &spec_body("Approved", TASKS));
+
+    // When a task is spawned from it
+    let output = project.spawn("06.1-foo", "T3");
+
+    // Then it refuses, naming the dot. A session called
+    // keeler-06.1-foo-t3 cannot be addressed: tmux reads the dot as the
+    // separator between a window and a pane, so `has-session -t
+    // =keeler-06.1-foo-t3` answers "can't find pane: 1-foo-t3" — even
+    // with the exact-match prefix. The board would never say running,
+    // spawn would never see the task already spawned, and the session
+    // would outlive every attempt to clean it up.
+    let said = both(&output);
+    assert!(!output.status.success(), "a dotted slug spawned:\n{said}");
+    assert!(
+        said.contains("dot") || said.contains('.'),
+        "the refusal does not name what is wrong:\n{said}"
+    );
+    assert!(
+        !project.worktree("06.1-foo", "T3").exists(),
+        "a worktree was created for an unaddressable session"
+    );
+}
+
+#[test]
 fn spawning_a_task_that_is_already_spawned_is_refused() {
     // Given a worktree for T3 that already exists, and a run that reached
     // its gate — the state a second spawn must not destroy

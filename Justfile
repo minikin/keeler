@@ -486,6 +486,18 @@ _spawn-preflight SPEC:
     # from racing each other's dependencies — while a tick on the feature
     # branch does, because arriving there is the landing. Which branch that
     # is, is a name a machine checks rather than one someone remembers.
+    # tmux reads a dot as the separator between a window and a pane, so a
+    # session named keeler-06.1-foo-t3 cannot be addressed at all — not
+    # even with the exact-match `=`, which answers "can't find pane:
+    # 1-foo-t3". The board would never say running, a second spawn would
+    # not see the first, and nothing could ever clean the session up. Git
+    # accepts the branch name happily, so this is ours to refuse.
+    case "$(basename "$spec_abs" .md)" in
+        *.*)
+            echo "keeler-spawn: $rel — a spec whose name holds a dot cannot be spawned: tmux reads the dot in keeler-$(basename "$spec_abs" .md)-<task> as a pane separator and the session becomes unaddressable. Rename the spec." >&2
+            exit 1
+            ;;
+    esac
     feature="feat/$(basename "$spec_abs" .md)"
     if ! git check-ref-format --branch "$feature" >/dev/null 2>&1; then
         echo "keeler-spawn: $rel would need the branch $feature, which git will not accept — rename the spec file." >&2
