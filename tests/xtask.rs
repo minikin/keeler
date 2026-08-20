@@ -178,6 +178,45 @@ fn no_workflow_calls_a_script_that_is_not_there() {
 }
 
 #[test]
+fn every_claude_stub_ends_a_turn_the_way_the_binary_does() {
+    // A stub is a claim about what the real binary does, and the runner
+    // gates on exactly one part of that claim: a final `result` record,
+    // written when a turn ends and by nothing else. A stub that omits it
+    // makes every run in its file die before its gate — which happened,
+    // and a test asserting `passed` passed anyway, on a substring of its
+    // own fixture path.
+    //
+    // The stubs are deliberately not shared: the one that drives a wave
+    // needs split-window and an inherited-environment probe, the one that
+    // drives a single spawn needs several ways to die. Merging them would
+    // invent a third stub neither file tested against. What they must
+    // share is this one agreement with the binary.
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests");
+    let mut silent = Vec::new();
+    for entry in std::fs::read_dir(&root).unwrap().filter_map(Result::ok) {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).unwrap();
+        // A declaration, not a mention: this test names the constant in
+        // its own prose, and would otherwise report itself.
+        let Some(at) = text.find("const CLAUDE_STUB: &str = r#\"") else {
+            continue;
+        };
+        let body = &text[at..text[at..].find("\"#;").map_or(text.len(), |e| at + e)];
+        if !body.contains(r#""type":"result""#) {
+            silent.push(path.file_name().unwrap().to_string_lossy().into_owned());
+        }
+    }
+    assert!(
+        silent.is_empty(),
+        "these claude stubs never end a turn, so every run they drive dies before its gate:\n{}",
+        silent.join("\n")
+    );
+}
+
+#[test]
 fn the_shell_gate_covers_exactly_the_shell_that_remains() {
     // Given the repository after the migration
     let mut scripts: Vec<String> = Vec::new();
