@@ -107,6 +107,35 @@ if [ "${KEELER_STUB_CLAUDE_EXIT:-0}" != 0 ]; then
     # An API death that reports itself: the turn never finished.
     exit "$KEELER_STUB_CLAUDE_EXIT"
 fi
+# The work a finished agent leaves on its branch, done here because the
+# worktree does not exist until the spawn cuts it: commits, the review
+# record, the tick. `commits` stops short of the tick, which is the shape
+# of a pipeline that stopped before its last stage.
+case "${KEELER_STUB_CLAUDE_WORK:-none}" in
+    commits|all|dirty|no-record|wandered)
+        printf 'the work\n' > work.txt
+        if [ "${KEELER_STUB_CLAUDE_WORK}" != no-record ]; then
+            mkdir -p "reviews/$KEELER_STUB_SLUG"
+            printf 'Spec: %s\nTask: %s\nCommit: pending\nVerdict: pass\n' \
+                "$KEELER_STUB_SLUG" "$KEELER_STUB_TID" > "reviews/$KEELER_STUB_SLUG/$KEELER_STUB_TID.md"
+        fi
+        # Everything but `commits` ticks: `no-record` must fail on the
+        # record alone, or it pins two clauses at once and neither.
+        if [ "${KEELER_STUB_CLAUDE_WORK}" != commits ]; then
+            spec="specs/$KEELER_STUB_SLUG.md"
+            sed "s/- \[ \] \*\*T3/- [x] **T3/" "$spec" > "$spec.new" && mv "$spec.new" "$spec"
+        fi
+        git add -A >/dev/null 2>&1
+        git -c user.email=stub@keeler -c user.name=stub commit -qm "the stub's work" >/dev/null 2>&1
+        # A tree left dirty is work the agent had not decided about yet:
+        # the gate would measure it, and its verdict would be about
+        # something nobody claimed was ready.
+        [ "${KEELER_STUB_CLAUDE_WORK}" = dirty ] && printf 'half a thought\n' > scratch.txt
+        # Allowed by Bash(git:*), and it makes the worktree answer for a
+        # branch that is no longer this task's.
+        [ "${KEELER_STUB_CLAUDE_WORK}" = wandered ] && git checkout -qb somewhere-else 2>/dev/null
+        ;;
+esac
 if [ "${KEELER_STUB_CLAUDE_SILENT_DEATH:-0}" = 1 ]; then
     # The death this project actually met: a session limit, no result
     # record in the stream, and exit zero all the same.
@@ -148,6 +177,9 @@ struct Project {
     claude_exit: i32,
     /// The death that exits zero: no result record, nothing to complain of.
     claude_silent_death: bool,
+    /// What the stub agent leaves on its branch before dying: nothing,
+    /// commits and a record, or all of that plus the tick.
+    claude_work: &'static str,
 }
 
 impl Project {
@@ -191,6 +223,7 @@ impl Project {
             branch_exit: 0,
             claude_exit: 0,
             claude_silent_death: false,
+            claude_work: "none",
         };
         project.git(&["init", "-qb", "main"]);
         project.git(&["add", "-A"]);
@@ -290,6 +323,9 @@ impl Project {
             )
             .env("KEELER_STUB_BRANCH_EXIT", self.branch_exit.to_string())
             .env("KEELER_STUB_CLAUDE_EXIT", self.claude_exit.to_string())
+            .env("KEELER_STUB_CLAUDE_WORK", self.claude_work)
+            .env("KEELER_STUB_SLUG", SLUG)
+            .env("KEELER_STUB_TID", "t3")
             .env(
                 "KEELER_STUB_CLAUDE_SILENT_DEATH",
                 if self.claude_silent_death { "1" } else { "0" },
@@ -693,6 +729,87 @@ fn a_task_that_landed_after_a_failed_run_reads_as_done() {
         !line.contains("failed"),
         "a landed task reads as a failed gate:\n{listed}"
     );
+}
+
+#[test]
+fn a_run_cut_off_after_its_work_is_gated_not_called_dead() {
+    // Given a session killed after the agent did everything — committed
+    // its work, wrote its review record, ticked its box, left the tree
+    // clean — and before the stream carried a result record. This
+    // happened on the first use of graph mode on another project: the
+    // board said `died` about a task whose own branch says it finished.
+    let mut project = Project::new("cut-off-after-work");
+    project.run_sessions = true;
+    project.claude_silent_death = true;
+    project.claude_work = "all";
+    let output = project.spawn(SLUG, "T3");
+    assert!(output.status.success(), "{}", both(&output));
+
+    // Then the gate ran anyway, because everything the decision needs is
+    // on the branch. The absence of a result record says the process
+    // stopped; it does not say the work did.
+    assert!(
+        project.runs(SLUG).join("t3.exit").exists(),
+        "finished work with a clean tree was left without a verdict:\n{}",
+        both(&output)
+    );
+    let listed = stdout(&project.status(SLUG));
+    assert!(
+        !task_line(&listed, "T3").contains("died"),
+        "a task whose branch says it finished reads as dead:\n{listed}"
+    );
+
+    // And the verdict is the gate's, as on every other path: a red gate
+    // over finished work is a failure, not a resurrection.
+    let mut red = Project::new("cut-off-red-gate");
+    red.run_sessions = true;
+    red.claude_silent_death = true;
+    red.claude_work = "all";
+    red.branch_exit = 1;
+    assert!(red.spawn(SLUG, "T3").status.success());
+    assert!(
+        task_line(&stdout(&red.status(SLUG)), "T3").contains("failed (exit 1)"),
+        "the verdict was not the gate's:\n{}",
+        stdout(&red.status(SLUG))
+    );
+}
+
+#[test]
+fn a_run_cut_off_before_its_work_is_still_dead() {
+    // Given the two shapes that must keep their death: an untouched
+    // worktree — the case the result-record check was written for — and
+    // work half done with the box unticked
+    for (name, work) in [
+        ("untouched", "none"),
+        ("half-done", "commits"),
+        ("dirty-tree", "dirty"),
+        ("no-record", "no-record"),
+        ("wandered-off", "wandered"),
+    ] {
+        let mut project = Project::new(&format!("cut-off-{name}"));
+        project.run_sessions = true;
+        project.claude_silent_death = true;
+        // untouched: nothing at all. half-done: commits and a record but
+        // no tick, a pipeline stopped before its last stage. dirty-tree:
+        // all three, and something still uncommitted — work the agent had
+        // not decided about, which a gate would measure anyway.
+        project.claude_work = work;
+        let output = project.spawn(SLUG, "T3");
+        assert!(output.status.success(), "{}", both(&output));
+
+        // Then there is no verdict and the board says died. A gate run on
+        // a half-finished tree would measure something nobody claimed was
+        // ready, and its verdict would be about that.
+        assert!(
+            !project.runs(SLUG).join("t3.exit").exists(),
+            "{name}: a gate ran on work that was not finished"
+        );
+        let listed = stdout(&project.status(SLUG));
+        assert!(
+            task_line(&listed, "T3").contains("died"),
+            "{name}: an unfinished run was not called dead:\n{listed}"
+        );
+    }
 }
 
 #[test]
