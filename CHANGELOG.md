@@ -9,6 +9,80 @@ Installations pin a version with `KEELER_REF` and record it at the top of
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-08-20
+
+Graph mode: a spec's tasks run in parallel, one agent each, and the tools
+that watch them learned to tell the truth. Six of the eight fixes below
+were found by running Keeler rather than testing it — five spawned agents
+died mid-work over three days, and each death showed the board saying
+something its own branches contradicted.
+
+### Added
+
+- **Graph mode.** `/keeler:tasks` writes `Needs: T1.` into each task, so
+  approving a spec approves its graph. `just keeler-fan-out <spec>` names
+  every ready task and, on one yes, spawns them all — each on its own
+  branch in its own worktree, running the whole per-task pipeline, in one
+  tmux window with a pane per run. `just keeler-graph`, `keeler-spawn`,
+  `keeler-status`, `keeler-branch`, `keeler-land` and `keeler-resume`
+  round it out. Entirely opt-in: the linear road is unchanged, and a
+  project that never runs these recipes never meets them.
+- **The fork after approval.** `/keeler:spec` asks whether to develop the
+  feature linearly or as a graph, and says what each answer does before it
+  is answered — the "graph" answer is the consent for the one commit it
+  makes.
+- **A task is closed by three things, not one:** the gate green, the
+  review record on the branch, the box ticked. The board says `incomplete`
+  and names what is missing; `keeler-land` removes a worktree only for a
+  task that is closed by all three.
+- **`just keeler-resume`** re-runs a task whose session died, in the
+  worktree and branch it already has. It regenerates the runner first: a
+  runner is generated code, and one kept from an earlier version carries
+  every defect that version had.
+
+### Fixed
+
+- **The board no longer lies about a dead agent.** A runner that gated
+  unconditionally turned an API death into `failed (exit 101)` about a
+  worktree nobody had touched. The gate runs only when the agent's stream
+  carried a final result record — and an exit code cannot stand in for
+  that, because a session that reaches its limit prints its apology and
+  exits zero.
+- **A run cut off *after* its work is gated, not called dead.** The
+  missing record says the process stopped; it does not say the work did.
+  The runner asks the branch — record committed, box ticked, tree clean —
+  and gates when all of it holds.
+- **The log shows progress.** Without `--verbose` and `stream-json`,
+  `claude -p` printed nothing until its final answer: forty minutes of
+  honest work and a hang left the same empty file.
+- **A stuck verdict says how to be rid of it.** A verdict from a run
+  nobody believes left a task locked — board `failed`, resume refused, no
+  route onward the tool ever mentioned.
+- **A spec's file name is an argument, never a command.** `just` splices a
+  recipe's parameters into its body as text, so a spec named
+  `a$(touch pwned)b.md` ran that substitution when the recipe was parsed,
+  before any guard could refuse it.
+- **A spec whose name holds a dot cannot be spawned.** tmux reads the dot
+  as a pane separator, so `keeler-06.1-foo-t1` is unaddressable even with
+  the exact-match prefix — the board would never say `running`, and
+  nothing could ever clean the session up.
+- **The rules file shipped with an unresolved merge in it.** Conflict
+  markers rode into `main` and out to adopters inside `.claude/keeler.md`,
+  invisible to every gate: they read these files for content, and a marker
+  answers no question and breaks none. A gate walks every shipped file for
+  them now.
+- **`sha2` 0.11**, taken by hand rather than by a bot that raised the
+  version and left the repository red.
+
+### Changed
+
+- Dependabot is gone. A bot that bumps a version it cannot make compile
+  hands the afternoon to someone else; `CONTRIBUTING.md` says what
+  replaces it.
+- The README describes graph mode, and says plainly what a spawned agent
+  cannot do: write files under `.claude/`, because a headless session has
+  nobody to ask for that consent.
+
 ## [0.3.0] — 2026-08-16
 
 Everything Keeler had never reviewed, reviewed. Three areas — the
@@ -279,6 +353,7 @@ repository that holds itself to the same standard it installs.
   now goes through the `just` recipes, so CI runs what `just dev` runs.
 
 [Unreleased]: https://github.com/minikin/keeler/compare/v0.3.0...HEAD
+[0.4.0]: https://github.com/minikin/keeler/releases/tag/v0.4.0
 [0.3.0]: https://github.com/minikin/keeler/releases/tag/v0.3.0
 [0.2.0]: https://github.com/minikin/keeler/releases/tag/v0.2.0
 [0.1.0]: https://github.com/minikin/keeler/releases/tag/v0.1.0
