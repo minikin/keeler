@@ -1081,7 +1081,7 @@ keeler-fan-out SPEC:
         exit 1
     fi
 
-# Upgrade Keeler itself (KEELER_REF=v0.3.0 just keeler-upgrade to pin a tag)
+# Upgrade Keeler itself (KEELER_REF=v0.4.0 just keeler-upgrade to pin a tag)
 keeler-upgrade:
     curl -fsSL https://raw.githubusercontent.com/minikin/keeler/main/install.sh | bash -s .
 

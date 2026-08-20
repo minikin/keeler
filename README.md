@@ -1,6 +1,7 @@
 # Keeler
 
 [![CI](https://github.com/minikin/keeler/actions/workflows/ci.yml/badge.svg)](https://github.com/minikin/keeler/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/minikin/keeler)](https://github.com/minikin/keeler/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 Keeler is a quality workflow for **Rust** projects built with
@@ -9,19 +10,26 @@ you approved, no bugfix without a failing test first, and no change is done
 until it passes a set of gates that check each other. It doesn't ask the
 agent to be careful — it makes carelessness fail the build.
 
->It is named after [Leonarde Keeler](https://en.wikipedia.org/wiki/Leonarde_Keeler),
-builder of the first practical polygraph. 
+> Named after [Leonarde Keeler](https://en.wikipedia.org/wiki/Leonarde_Keeler),
+> who built the first practical polygraph. A polygraph does not detect lies;
+> it records several independent channels at once, on the theory that you can
+> fool one but not all of them.
 
-**[KEELER.md](KEELER.md)** explains
-why the workflow is shaped the way it is.
+**[KEELER.md](KEELER.md)** explains why the workflow is shaped this way. The
+installer ships it into your project, so the reasoning arrives with the rules.
 
 ## Install
+
+**You need** a Rust toolchain, `bash`, `curl` and `tar` (plus `git` — the
+workflow lives on branches); graph mode also needs `tmux`. macOS and Linux —
+on Windows, WSL or Git Bash. The gate tools themselves the installer puts in
+for you, unless you pass `--no-tools`.
 
 From inside any Rust project — existing or freshly `cargo new`-ed:
 
 ```bash
 # pin a release
-KEELER_REF=v0.3.0 curl -fsSL https://raw.githubusercontent.com/minikin/keeler/main/install.sh | bash -s .
+KEELER_REF=v0.4.0 curl -fsSL https://raw.githubusercontent.com/minikin/keeler/main/install.sh | bash -s .
 
 # or take main
 curl -fsSL https://raw.githubusercontent.com/minikin/keeler/main/install.sh | bash -s .
@@ -31,17 +39,19 @@ Prefer to verify before running? Every release ships `install.sh` with its
 SHA256:
 
 ```bash
-gh release download v0.3.0 --repo minikin/keeler --pattern 'install.sh*'
+gh release download v0.4.0 --repo minikin/keeler --pattern 'install.sh*'
 sha256sum -c install.sh.sha256    # shasum -a 256 -c on macOS
 bash install.sh .
 ```
 
 |              | What lands in your project                                                                                                 |
 | ------------ | -------------------------------------------------------------------------------------------------------------------------- |
-| **Workflow** | slash commands under `.claude/commands/keeler/`, two skills, a spec template, `Justfile`, gate configs                     |
-| **Graph mode** | the recipes that fan a spec's tasks out to parallel agents — `keeler-fan-out`, `keeler-spawn`, `keeler-status`, `keeler-resume`, `keeler-branch`, `keeler-land` — plus `scripts/keeler-graph.sh` |
+| **Commands** | the nine slash commands under `.claude/commands/keeler/` — `/keeler:feature`, `:spec`, `:tasks`, `:tdd`, `:qa`, `:review`, `:mutants`, `:fix`, `:graph` — plus two skills and `specs/TEMPLATE.md` |
+| **Gates**    | a `Justfile` and the configs behind it: `just dev`, `test`, `lint`, `cov`, `crap`, `crap-baseline`, `crap-delta`, `mutants-diff` — the linear road, and what CI runs |
+| **Graph mode** | in the same `Justfile`, the recipes for the parallel road — `keeler-feature-branch`, `keeler-graph`, `keeler-fan-out`, `keeler-spawn`, `keeler-status`, `keeler-resume`, `keeler-branch`, `keeler-land` — plus `scripts/keeler-graph.sh`. Opt-in: unused, they cost nothing |
 | **Rules**    | `.claude/keeler.md`, imported by `CLAUDE.md` with one line — your `CLAUDE.md` is otherwise untouched                       |
-| **CI**       | `.github/workflows/keeler.yml` — the gates and nothing else, beside your own workflows                                     |
+| **Guide**    | `KEELER.md` — the same workflow explained for humans: why each gate exists, and the graph-mode day start to finish          |
+| **CI**       | `.github/workflows/keeler.yml` — the gates, plus two checks that fire only on `keeler/*` pull requests: the baseline was not moved, the review record names a commit of the branch |
 | **Manifest** | `proptest` as a dev-dependency, `[profile.mutants]`, `[lints.clippy]` — each only if missing                               |
 | **Ignores**  | the gates' artifacts, appended to `.gitignore`; equivalent spellings are not duplicated                                    |
 | **Tools**    | `cargo-nextest`, `cargo-llvm-cov`, `cargo-mutants`, `cargo-crap`, `just` — only the ones you lack; `--no-tools` skips this |
@@ -67,6 +77,8 @@ Three roads, by weight of the change:
 
 `just dev` runs every gate locally; `just` lists the rest.
 
+### Adopting it in an existing codebase
+
 **Legacy code will not pass on day one — that's expected.** Run
 `just crap-baseline` and **commit `crap-baseline.json`**: from then on
 `just crap-delta` fails only on *regressions*, and CI enforces the same on
@@ -84,17 +96,19 @@ the spec is approving the graph.
 
 ```
 $ just keeler-fan-out specs/07-fan-out.md
+keeler-fan-out: specs/07-fan-out.md on feat/07-fan-out
   T1 done
   T2 ready
   T3 ready
   T4 blocked (waiting on T2)
 wave: T2 T3
-spawn 2 tasks? [yes/no] yes
+spawn T2 T3? [yes/no] yes
 ```
 
 One yes spawns them all, into one tmux window with a pane per run.
-`just keeler-status <spec>` is the board afterwards, and `just keeler-land`
-merges the finished ones back.
+`just keeler-status <spec>` is the board afterwards; you merge the finished
+branches into the feature branch, and `just keeler-land` runs the gates and
+clears the landed worktrees.
 
 It is opt-in and changes nothing on the linear road: a project that never
 runs these recipes never meets them. Its one extra requirement is **tmux**.
@@ -126,6 +140,23 @@ start to finish.
 - [cargo-mutants](https://mutants.rs) — mutation testing
 - [proptest](https://proptest-rs.github.io/proptest/) — property-based tests
 
+## Documentation
+
+Each file says one thing once, and points at the others rather than
+repeating them:
+
+| File                                       | Written for                       | What it answers                                                                       |
+| ------------------------------------------ | --------------------------------- | ------------------------------------------------------------------------------------- |
+| **README.md**                              | you, right now                    | What is this, how do I install it, what do I type first                               |
+| **[KEELER.md](KEELER.md)**                 | your team                         | *Why* each stage and gate exists, what AI failure mode each one catches, the graph-mode day start to finish |
+| **[.claude/keeler.md](.claude/keeler.md)** | the agent                         | The workflow as law: the pipeline, the change classes, the commit rule, the gate table |
+| **[CONTRIBUTING.md](CONTRIBUTING.md)**     | contributors to Keeler itself     | Which road a change takes here, the release checklist, the standing review debt        |
+| **[SECURITY.md](SECURITY.md)**             | anyone about to pipe curl to bash | What the installer trusts, what it never overwrites, how to report a hole              |
+| **[CHANGELOG.md](CHANGELOG.md)**           | upgraders                         | What each release changed, and what it broke                                           |
+
+`KEELER.md` and `.claude/keeler.md` are installed into your project — the
+reasoning and the rules travel with the workflow. The rest stay here.
+
 ## This repository
 
 Both the product and its test bench:
@@ -137,4 +168,8 @@ Both the product and its test bench:
 - `xtask/` — the release tooling: `cargo xtask release-guard`, `release-notes`, `checksum`
 - `scripts/integration-check.sh` — the contract checker CI runs against pinned clones of anyhow, serde and ripgrep
 - `tests/` — the harness that drives `install.sh` against generated projects, offline
-- [CONTRIBUTING.md](CONTRIBUTING.md) — the roads, the release checklist, and the review debt
+
+## License
+
+MIT — see [LICENSE](LICENSE). Contributions follow Keeler's own workflow;
+[CONTRIBUTING.md](CONTRIBUTING.md) says which road yours takes.

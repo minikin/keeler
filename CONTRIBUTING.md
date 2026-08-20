@@ -17,7 +17,7 @@ The full rules live in [.claude/keeler.md](.claude/keeler.md) and
 ## Before you push
 
 ```bash
-just dev    # fmt, clippy (pedantic), shellcheck, the test suite
+just dev    # fmt, clippy (pedantic), shellcheck, tests, coverage, CRAP
 ```
 
 The deliverable is `install.sh` and the files it ships — its tests live in
@@ -25,6 +25,23 @@ The deliverable is `install.sh` and the files it ships — its tests live in
 offline. If you change installer behavior, add a test there; if you add a
 workflow file (a command, a skill), `install.sh` must ship it — a test will
 remind you.
+
+## Docs that have to keep up
+
+Each doc has one job, and a change that outgrows its doc is not finished:
+
+- **`CHANGELOG.md`** — every user-visible change, under `[Unreleased]`.
+- **`README.md`** — only if the change alters what the installer puts in a
+  project, what you need to run it, or the first commands you type.
+- **`KEELER.md`** — only if the *reasoning* changed: a new stage, a new gate,
+  a new failure mode one of them defends against.
+- **`.claude/keeler.md`** — only if the rules the agent obeys changed. It
+  carries the version marker, so a release bumps it either way.
+- **`SECURITY.md`** — if the change moves what the installer trusts.
+
+Several of these are gate-checked: tests assert that the README explains
+verification, that the rules and `KEELER.md` both walk through a graph-mode
+day, and that `VERSION`, the rules marker and `CHANGELOG.md` agree.
 
 ## What CI checks
 
@@ -42,8 +59,12 @@ including the forced source-compile fallback), and version consistency
    `.claude/keeler.md`, and the `version` in every manifest — the root
    `Cargo.toml` and each workspace member. `cargo xtask release-guard`
    holds all of them in agreement and names every one that disagrees.
-3. `cargo check` to refresh `Cargo.lock`, which CI verifies is in step.
-4. Open the release PR, merge it, then `git tag vX.Y.Z && git push origin
+3. Bump the pinned tag in the worked examples — README's install section,
+   `install.sh`'s usage text, the `keeler-upgrade` comment in the
+   `Justfile`. Nothing mechanical checks these; `grep -rn vX.Y.Z` for the
+   old tag is the check.
+4. `cargo check` to refresh `Cargo.lock`, which CI verifies is in step.
+5. Open the release PR, merge it, then `git tag vX.Y.Z && git push origin
    vX.Y.Z`.
 
 The tag push is what cuts the release: the guard runs, then `just ci`, then
