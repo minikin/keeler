@@ -1,6 +1,6 @@
 # Spec 07 — Fan-out: one answer, one wave
 
-**Status:** Approved
+**Status:** Implemented
 **Effort:** Medium
 **Module:** `.claude/commands/keeler/spec.md`, `.claude/commands/keeler/tasks.md`, `.claude/commands/keeler/feature.md`, `Justfile`, `.claude/keeler.md`, `KEELER.md`, `tests/fan_out.rs`
 
