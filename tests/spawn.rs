@@ -112,12 +112,16 @@ fi
 # record, the tick. `commits` stops short of the tick, which is the shape
 # of a pipeline that stopped before its last stage.
 case "${KEELER_STUB_CLAUDE_WORK:-none}" in
-    commits|all|dirty)
+    commits|all|dirty|no-record|wandered)
         printf 'the work\n' > work.txt
-        mkdir -p "reviews/$KEELER_STUB_SLUG"
-        printf 'Spec: %s\nTask: %s\nCommit: pending\nVerdict: pass\n' \
-            "$KEELER_STUB_SLUG" "$KEELER_STUB_TID" > "reviews/$KEELER_STUB_SLUG/$KEELER_STUB_TID.md"
-        if [ "${KEELER_STUB_CLAUDE_WORK}" = all ] || [ "${KEELER_STUB_CLAUDE_WORK}" = dirty ]; then
+        if [ "${KEELER_STUB_CLAUDE_WORK}" != no-record ]; then
+            mkdir -p "reviews/$KEELER_STUB_SLUG"
+            printf 'Spec: %s\nTask: %s\nCommit: pending\nVerdict: pass\n' \
+                "$KEELER_STUB_SLUG" "$KEELER_STUB_TID" > "reviews/$KEELER_STUB_SLUG/$KEELER_STUB_TID.md"
+        fi
+        # Everything but `commits` ticks: `no-record` must fail on the
+        # record alone, or it pins two clauses at once and neither.
+        if [ "${KEELER_STUB_CLAUDE_WORK}" != commits ]; then
             spec="specs/$KEELER_STUB_SLUG.md"
             sed "s/- \[ \] \*\*T3/- [x] **T3/" "$spec" > "$spec.new" && mv "$spec.new" "$spec"
         fi
@@ -127,6 +131,9 @@ case "${KEELER_STUB_CLAUDE_WORK:-none}" in
         # the gate would measure it, and its verdict would be about
         # something nobody claimed was ready.
         [ "${KEELER_STUB_CLAUDE_WORK}" = dirty ] && printf 'half a thought\n' > scratch.txt
+        # Allowed by Bash(git:*), and it makes the worktree answer for a
+        # branch that is no longer this task's.
+        [ "${KEELER_STUB_CLAUDE_WORK}" = wandered ] && git checkout -qb somewhere-else 2>/dev/null
         ;;
 esac
 if [ "${KEELER_STUB_CLAUDE_SILENT_DEATH:-0}" = 1 ]; then
@@ -751,6 +758,20 @@ fn a_run_cut_off_after_its_work_is_gated_not_called_dead() {
         !task_line(&listed, "T3").contains("died"),
         "a task whose branch says it finished reads as dead:\n{listed}"
     );
+
+    // And the verdict is the gate's, as on every other path: a red gate
+    // over finished work is a failure, not a resurrection.
+    let mut red = Project::new("cut-off-red-gate");
+    red.run_sessions = true;
+    red.claude_silent_death = true;
+    red.claude_work = "all";
+    red.branch_exit = 1;
+    assert!(red.spawn(SLUG, "T3").status.success());
+    assert!(
+        task_line(&stdout(&red.status(SLUG)), "T3").contains("failed (exit 1)"),
+        "the verdict was not the gate's:\n{}",
+        stdout(&red.status(SLUG))
+    );
 }
 
 #[test]
@@ -762,6 +783,8 @@ fn a_run_cut_off_before_its_work_is_still_dead() {
         ("untouched", "none"),
         ("half-done", "commits"),
         ("dirty-tree", "dirty"),
+        ("no-record", "no-record"),
+        ("wandered-off", "wandered"),
     ] {
         let mut project = Project::new(&format!("cut-off-{name}"));
         project.run_sessions = true;

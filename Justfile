@@ -357,6 +357,12 @@ _write-runner SPEC TASK BRANCH WORKTREE RUNNER EXIT_FILE LOG_FILE STREAM_FILE:
     set -euo pipefail
     rel="{{SPEC}}"
     task="{{TASK}}"
+    # Derived here, in the main checkout, and baked into the runner: the
+    # runner executes in the task's worktree, where the parser it needs is
+    # the branch's own copy rather than this one.
+    root="$(git rev-parse --show-toplevel)"
+    slug="$(basename "$rel" .md)"
+    tid="$(printf '%s' "$task" | tr '[:upper:]' '[:lower:]')"
     branch="{{BRANCH}}"
     worktree="{{WORKTREE}}"
     runner="{{RUNNER}}"
@@ -411,29 +417,38 @@ _write-runner SPEC TASK BRANCH WORKTREE RUNNER EXIT_FILE LOG_FILE STREAM_FILE:
             --permission-mode acceptEdits --allowedTools '$tools' --disallowedTools '$blocked' \
             | tee "$stream_file"
         if ! grep -q '"type":"result"' "$stream_file" 2>/dev/null; then
-            # The record is missing, which says the process stopped. It
-            # does not say the work did. So ask the branch before giving
-            # up: a run killed mid-write after committing everything is
-            # finished work with no verdict, and calling that dead leaves
-            # a task whose board line contradicts its own branch and whose
-            # only route onward redoes what is already done.
-            # Everything here is derived from the branch name, which is
-            # keeler/<slug>/<id> — the runner knows that and little else.
-            k_rest="${branch#keeler/}"
-            k_slug="\${k_rest%%/*}"
-            k_id="\${k_rest##*/}"
-            finished=yes
-            [ -n "\$(git log --oneline "feat/\$k_slug".."$branch" 2>/dev/null)" ] || finished=no
-            [ -f "reviews/\$k_slug/\$k_id.md" ] || finished=no
-            [ -z "\$(git status --porcelain 2>/dev/null)" ] || finished=no
-            k_state="\$(bash scripts/keeler-graph.sh "specs/\$k_slug.md" 2>/dev/null \
-                | awk -v t="$task" '\$1 == t { print \$2 }')"
-            [ "\$k_state" = done ] || finished=no
-            if [ "\$finished" != yes ]; then
-                echo "keeler: the agent ended without finishing its turn — the gate did not run, and there is no verdict to mistake for one" >&2
+            # The missing record says the process stopped. It does not say
+            # the work did. So ask before giving up: a run killed
+            # mid-write after committing everything is finished work with
+            # no verdict, and calling that dead leaves a task whose board
+            # line contradicts its own branch and whose only route onward
+            # redoes what is already done.
+            #
+            # Everything is asked of the branch, not of the worktree, so
+            # the sentence below is literally true and a tree that walked
+            # off to another branch cannot answer for this one. The parser
+            # is the main checkout's: a task branch editing that script —
+            # which this project's own tasks do — would otherwise decide
+            # whether its own box is ticked.
+            k_why=""
+            [ "\$(git symbolic-ref --quiet --short HEAD 2>/dev/null)" = "$branch" ] \
+                || k_why="the worktree is no longer on $branch"
+            [ -z "\$k_why" ] && [ -n "\$(git status --porcelain 2>/dev/null)" ] \
+                && k_why="the worktree has uncommitted changes"
+            [ -z "\$k_why" ] && ! git cat-file -e "$branch:reviews/$slug/$tid.md" 2>/dev/null \
+                && k_why="reviews/$slug/$tid.md is not committed on the branch"
+            if [ -z "\$k_why" ]; then
+                k_state="\$(git show "$branch:$rel" 2>/dev/null > "$stream_file.spec" \
+                    && bash "$root/scripts/keeler-graph.sh" "$stream_file.spec" 2>/dev/null \
+                    | awk -v t="$task" 'tolower(\$1) == tolower(t) { print \$2 }')"
+                rm -f "$stream_file.spec"
+                [ "\$k_state" = done ] || k_why="$task is not ticked on the branch"
+            fi
+            if [ -n "\$k_why" ]; then
+                echo "keeler: the agent ended without finishing its turn, and \$k_why — the gate did not run, and there is no verdict to mistake for one" >&2
                 exit 1
             fi
-            echo "keeler: the agent was cut off after its work — commits, record and tick are on the branch, so the gate runs" >&2
+            echo "keeler: the agent was cut off after its work — the record and the tick are committed on $branch and the tree is clean, so the gate runs" >&2
         fi
         # Scoped to the result record: is_error is a field of every failed
         # tool result too, and red-then-green means every Keeler task has
