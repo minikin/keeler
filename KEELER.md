@@ -159,7 +159,7 @@ Why these are `just` recipes and not slash commands: the pipeline's *stages*
 are conversations with the agent, so they are slash commands — but spawning
 agents, watching them and landing their work are the human's levers, and a
 lever the agent could pull itself would be no consent at all. Inside a
-Claude Code session you rarely type them: say "fan out spec 07" or "what's
+Claude Code session you rarely type them: say "fan out the spec" or "what's
 the board?" and the agent runs the same recipe — the recipe is what happens
 either way, and the **yes** it asks for is yours.
 

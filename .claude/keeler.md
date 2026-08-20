@@ -57,7 +57,7 @@ The approved spec is what every spawned agent reads, so the graph lives in the s
 The stages are slash commands; these recipes deliberately are not —
 spawning, watching and landing are the human's levers, and the consent
 each one grants cannot be given by the agent to itself. When the user asks
-in-session ("fan out spec 07", "show the board", "land it"), run the
+in-session ("fan out the spec", "show the board", "land it"), run the
 matching recipe below; what you may not do is run `keeler-spawn`,
 `keeler-fan-out` or `keeler-land` unasked.
 
