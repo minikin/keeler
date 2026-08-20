@@ -139,6 +139,22 @@ And   `just keeler-status <spec>` lists each task as running, passed or
       a file
 ```
 
+### Scenario: A run cut off after its work is gated, not called dead
+
+```
+Given a session killed after the agent committed its work, ticked its
+      box and left a clean worktree — so the stream carries no final
+      result record, because the process died mid-write
+When  the runner reaches the point where it decides
+Then  it runs the gate anyway, because everything the decision needs is
+      on the branch: commits since the feature branch, a review record,
+      a ticked box, and nothing uncommitted
+And   the verdict it writes is the gate's, as it always is
+And   a session cut off with an untouched worktree, or with the work half
+      done and the box unticked, is still `died` and still gated by
+      nothing
+```
+
 ### Scenario: A dead session is resumable, and says so
 
 ```
@@ -522,6 +538,15 @@ split it rather than ship a task eight scenarios wide.
       Tests: acceptance — a stale runner on disk is replaced, and what
       runs carries the flags the recipe emits today.
 
+- [ ] **T15 — A run cut off after its work is gated.** Needs: T14.
+      Scenarios: _A run cut off after its work is gated, not called
+      dead_. Deliverable: the runner, finding no result record, asks the
+      branch before giving up — commits since the feature branch, a
+      review record, a ticked box, a clean worktree — and gates when all
+      four hold. Tests: acceptance — a fixture whose stream ends
+      mid-record with the work done is gated and gets a verdict; one with
+      an untouched worktree, and one with the box unticked, stay `died`.
+
 ---
 
 ## Implementation Notes
@@ -695,6 +720,17 @@ a final `result` record, which is written when a turn ends and by nothing
 else. The check is scoped to that record: `is_error` is a field of every
 failed tool result too, and red-then-green means every honest task has
 one — unscoped, it called every finished task dead.
+
+A fourth, taught by the first use on a project that was not this one: the
+absence of a result record says the process stopped, not that the work
+did. A run whose agent committed everything, wrote its review record and
+ticked its box, and was then killed mid-write, is finished work with no
+verdict — and calling it `died` leaves a task whose board line
+contradicts its own branch, and whose only route onward is a resume that
+redoes what is already done. So the runner asks the branch before giving
+up: commits, record, tick, clean tree. All four, and it gates. Anything
+missing, and the death stands — an untouched worktree is exactly the case
+the result-record check was written for.
 
 **Readiness is read from the spec on the feature's branch,
 `feat/<spec-slug>`.** A feature gets one branch and its tasks fan out from
