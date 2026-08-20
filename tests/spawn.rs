@@ -1598,6 +1598,41 @@ fn spawning_from_an_uncommitted_or_unapproved_spec_is_refused() {
 }
 
 #[test]
+fn a_spec_name_is_an_argument_and_never_a_command() {
+    // Given a spec whose file name holds a command substitution. `just`
+    // splices a recipe's parameters into its body as text unless told
+    // otherwise, so this ran when the recipe was parsed — before any
+    // guard inside the body could look at it.
+    let project = Project::new("injection");
+    let target = project.dir.join("pwned");
+    let name = format!("42-a$(touch {})b", target.display());
+
+    // When it is handed to every recipe that takes a spec
+    for recipe in [
+        "keeler-spawn",
+        "keeler-graph",
+        "keeler-status",
+        "keeler-fan-out",
+    ] {
+        let spec = format!("specs/{name}.md");
+        let mut args = vec![recipe, spec.as_str()];
+        if recipe == "keeler-spawn" {
+            args.push("T3");
+        }
+        let output = project.just(&args);
+
+        // Then nothing runs. Refusing is fine and expected — the spec
+        // does not exist — but the refusal must come from the recipe
+        // reading a name, not from the shell having obeyed it.
+        assert!(
+            !target.exists(),
+            "{recipe} executed the spec's file name:\n{}",
+            both(&output)
+        );
+    }
+}
+
+#[test]
 fn a_spec_whose_name_holds_a_dot_is_refused_by_name() {
     // Given a spec whose file name carries a dot — `06.1-amendment.md`,
     // the ordinary way of numbering a follow-up

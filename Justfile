@@ -2,6 +2,13 @@
 default:
     @just --list
 
+# Parameters reach a recipe through the environment, under their own
+# names, rather than as text spliced into its body. Without this, `just`
+# interpolates {{SPEC}} literally, so a spec whose file name holds $( … )
+# runs it when the recipe is parsed — before any guard inside the body
+# can refuse it. `$SPEC` reads as `{{SPEC}}` did and cannot.
+set export
+
 # Run all tests (doc tests only when a package has a library target).
 # --workspace, not the default: in a project whose root manifest is itself a
 # package, cargo tests only that package and a member crate's tests never
@@ -101,7 +108,7 @@ dev: fmt lint test crap
 #
 # Mutation tests for one file — `just mutants src/lib.rs`.
 mutants FILE:
-    cargo mutants --workspace --file {{FILE}}
+    cargo mutants --workspace --file $1
 
 # Mutation tests on every member (slow)
 mutants-all:
@@ -232,7 +239,7 @@ keeler-branch:
 keeler-feature-branch SPEC:
     #!/usr/bin/env bash
     set -euo pipefail
-    spec="{{SPEC}}"
+    spec="$SPEC"
     [ -f "$spec" ] || { echo "keeler-feature-branch: $spec is not a file" >&2; exit 1; }
     root="$(git rev-parse --show-toplevel)"
     # `pwd -P`, because `--show-toplevel` answers physically: a repository
@@ -331,7 +338,7 @@ keeler-feature-branch SPEC:
 keeler-graph SPEC:
     #!/usr/bin/env bash
     set -euo pipefail
-    report=$(bash scripts/keeler-graph.sh "{{SPEC}}")
+    report=$(bash scripts/keeler-graph.sh "$SPEC")
     printf '%s\n' "$report" | awk '
         NF { row[++n] = $0; if ($2 == "done") done_[$1] = 1 }
         END {
@@ -355,20 +362,20 @@ keeler-graph SPEC:
 _write-runner SPEC TASK BRANCH WORKTREE RUNNER EXIT_FILE LOG_FILE STREAM_FILE:
     #!/usr/bin/env bash
     set -euo pipefail
-    rel="{{SPEC}}"
-    task="{{TASK}}"
+    rel="$SPEC"
+    task="$TASK"
     # Derived here, in the main checkout, and baked into the runner: the
     # runner executes in the task's worktree, where the parser it needs is
     # the branch's own copy rather than this one.
     root="$(git rev-parse --show-toplevel)"
     slug="$(basename "$rel" .md)"
     tid="$(printf '%s' "$task" | tr '[:upper:]' '[:lower:]')"
-    branch="{{BRANCH}}"
-    worktree="{{WORKTREE}}"
-    runner="{{RUNNER}}"
-    exit_file="{{EXIT_FILE}}"
-    log_file="{{LOG_FILE}}"
-    stream_file="{{STREAM_FILE}}"
+    branch="$BRANCH"
+    worktree="$WORKTREE"
+    runner="$RUNNER"
+    exit_file="$EXIT_FILE"
+    log_file="$LOG_FILE"
+    stream_file="$STREAM_FILE"
     prompt="Implement task $task of $rel, and nothing else.
 
     Read $rel in full first, then .claude/keeler.md.
@@ -488,7 +495,7 @@ _spawn-preflight SPEC:
         echo "  Debian/Ubuntu: sudo apt-get install tmux" >&2
         exit 1
     fi
-    spec="{{SPEC}}"
+    spec="$SPEC"
     [ -f "$spec" ] || { echo "keeler-spawn: $spec is not a file" >&2; exit 1; }
     root="$(git rev-parse --show-toplevel)"
     spec_abs="$(cd "$(dirname "$spec")" && pwd)/$(basename "$spec")"
@@ -565,8 +572,8 @@ _spawn-preflight SPEC:
 keeler-spawn SPEC TASK:
     #!/usr/bin/env bash
     set -euo pipefail
-    spec="{{SPEC}}"
-    task="{{TASK}}"
+    spec="$SPEC"
+    task="$TASK"
     # The just that is running this recipe runs its helper — not whichever
     # `just` PATH holds, which on a PATH stripped to the shell is none, and
     # would turn "tmux is required" into "just: command not found". `-q`: a
@@ -655,7 +662,7 @@ keeler-spawn SPEC TASK:
 keeler-status SPEC:
     #!/usr/bin/env bash
     set -euo pipefail
-    spec="{{SPEC}}"
+    spec="$SPEC"
     [ -f "$spec" ] || { echo "keeler-status: $spec is not a file" >&2; exit 1; }
     root="$(git rev-parse --show-toplevel)"
     spec_abs="$(cd "$(dirname "$spec")" && pwd)/$(basename "$spec")"
@@ -784,8 +791,8 @@ keeler-status SPEC:
 keeler-resume SPEC TASK:
     #!/usr/bin/env bash
     set -euo pipefail
-    spec="{{SPEC}}"
-    task="{{TASK}}"
+    spec="$SPEC"
+    task="$TASK"
     command -v tmux >/dev/null 2>&1 || {
         echo "keeler-resume: tmux is not installed — a resume runs where a spawn ran, in a detached session. brew install tmux, or apt install tmux." >&2
         exit 1
@@ -882,7 +889,7 @@ keeler-resume SPEC TASK:
 keeler-fan-out SPEC:
     #!/usr/bin/env bash
     set -euo pipefail
-    spec="{{SPEC}}"
+    spec="$SPEC"
     # The same guards keeler-spawn fires, before a wave is printed — run
     # by the just that is running this recipe, as keeler-spawn runs them.
     # The preflight's report is discarded: once it passes, the working
