@@ -538,7 +538,7 @@ split it rather than ship a task eight scenarios wide.
       Tests: acceptance — a stale runner on disk is replaced, and what
       runs carries the flags the recipe emits today.
 
-- [ ] **T15 — A run cut off after its work is gated.** Needs: T14.
+- [x] **T15 — A run cut off after its work is gated.** Needs: T14.
       Scenarios: _A run cut off after its work is gated, not called
       dead_. Deliverable: the runner, finding no result record, asks the
       branch before giving up — commits since the feature branch, a
