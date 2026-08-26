@@ -903,6 +903,165 @@ fn a_branch_that_renames_or_duplicates_the_justfile_is_refused() {
     );
 }
 
+/// The graph-mode recipes, each with arguments that get it as far as the
+/// repository lookup and no further, and the name its refusal must carry.
+/// Two speak as `keeler-spawn`: `_spawn-preflight`, which is private and
+/// speaks as the command the human typed, and `keeler-fan-out`, which
+/// fires those same guards before it prints a wave — so every preflight
+/// refusal reads alike wherever it was reached from.
+const GRAPH_RECIPES: [(&[&str], &str); 8] = [
+    (
+        &["keeler-feature-branch", "specs/99-fixture.md"],
+        "keeler-feature-branch",
+    ),
+    (&["keeler-graph", "specs/99-fixture.md"], "keeler-graph"),
+    (
+        &["keeler-spawn", "specs/99-fixture.md", "T1"],
+        "keeler-spawn",
+    ),
+    (&["_spawn-preflight", "specs/99-fixture.md"], "keeler-spawn"),
+    (&["keeler-status", "specs/99-fixture.md"], "keeler-status"),
+    (
+        &["keeler-resume", "specs/99-fixture.md", "T1"],
+        "keeler-resume",
+    ),
+    (&["keeler-fan-out", "specs/99-fixture.md"], "keeler-spawn"),
+    (&["keeler-land"], "keeler-land"),
+];
+
+#[test]
+fn a_graph_mode_recipe_outside_a_git_repository_refuses_in_its_own_voice() {
+    // Given a directory that is not inside a git repository
+    let dir = std::env::temp_dir().join(format!("keeler-no-repo-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("specs")).unwrap();
+    std::fs::create_dir_all(dir.join("scripts")).unwrap();
+    std::fs::copy(repo_root().join("Justfile"), dir.join("Justfile")).unwrap();
+    std::fs::copy(
+        repo_root().join("scripts/keeler-graph.sh"),
+        dir.join("scripts/keeler-graph.sh"),
+    )
+    .unwrap();
+    std::fs::write(dir.join(SPEC), fixture_spec(false)).unwrap();
+    // Four of these check for tmux before they look for the repository,
+    // so without one on PATH the test would fail about that guard instead
+    // — on any machine where tmux is not installed, CI's included.
+    std::fs::create_dir_all(dir.join("bin")).unwrap();
+    let tmux = dir.join("bin/tmux");
+    std::fs::write(&tmux, "#!/usr/bin/env bash\nexit 0\n").unwrap();
+    std::fs::set_permissions(&tmux, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = format!(
+        "{}:{}",
+        dir.join("bin").display(),
+        std::env::var("PATH").unwrap()
+    );
+
+    for (recipe, name) in GRAPH_RECIPES {
+        // When a graph-mode recipe runs there
+        let out = Command::new(real_just())
+            .args(recipe)
+            .current_dir(&dir)
+            .env("PATH", &path)
+            .output()
+            .expect("failed to run just");
+        let said = said(&out);
+
+        // Then it fails naming itself and saying graph mode needs a
+        // repository, and not in git's voice — "fatal: not a git
+        // repository" names no recipe and offers the reader nothing.
+        // just prints its own `error: recipe <name> failed` tail, which
+        // names the recipe whatever the body did — so the refusal is read
+        // without it, or every one of these passes on just's words.
+        let refusal: String = said
+            .lines()
+            .filter(|line| !line.starts_with("error: recipe"))
+            .collect::<Vec<&str>>()
+            .join("\n");
+        assert!(
+            !out.status.success(),
+            "`{name}` succeeded outside a repository"
+        );
+        assert!(
+            refusal.contains(name),
+            "`{name}` refuses without naming itself:\n{said}"
+        );
+        assert!(
+            refusal.contains("git repository"),
+            "`{name}` does not say a repository is what is missing:\n{said}"
+        );
+        // And git's own reason is relayed rather than swallowed: the
+        // failure may be one git can explain — a checkout owned by
+        // another user — and that message is what carries the fix.
+        assert!(
+            refusal.contains("fatal:"),
+            "`{name}` swallows git's reason, so a refusal git could explain arrives blank:\n{said}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn every_recipe_that_resolves_the_repository_is_covered() {
+    // Given the shipped Justfile. Whether a lookup needs a guard of its
+    // own depends on what its callers already did, which no reading of a
+    // single line can tell — so what is pinned here is coverage: a recipe
+    // that asks where the repository is must be answered for by the check
+    // above, which runs each of them and reads what it says.
+    let justfile = std::fs::read_to_string(repo_root().join("Justfile")).unwrap();
+    let covered: Vec<&str> = GRAPH_RECIPES.iter().map(|(argv, _)| argv[0]).collect();
+
+    // Then every one of them is in that list, or is private and reached
+    // only through a recipe that is.
+    let mut recipe = "";
+    let mut uncovered: Vec<&str> = Vec::new();
+    for line in justfile.lines() {
+        if !line.starts_with(char::is_whitespace) && line.trim_end().ends_with(':') {
+            recipe = line.split([' ', ':']).next().unwrap_or("");
+        }
+        let resolves = line.contains("git rev-parse --show-toplevel")
+            || line.contains("git rev-parse --git-dir");
+        if resolves && !recipe.starts_with('_') && !covered.contains(&recipe) {
+            uncovered.push(recipe);
+        }
+    }
+    uncovered.sort_unstable();
+    uncovered.dedup();
+    assert!(
+        uncovered.is_empty(),
+        "these resolve the repository but the no-repository check never runs them: {uncovered:?}"
+    );
+}
+
+#[test]
+fn an_uncommitted_spec_is_refused_naming_the_ref_it_was_sought_on() {
+    // Given a spec that exists in the working tree and on no branch —
+    // the state /keeler:tasks leaves behind, before the graph is committed
+    for recipe in ["keeler-graph", "keeler-status"] {
+        let repo = graph_project("uncommitted");
+        repo.write(SPEC, &fixture_spec(false));
+
+        // When the recipe runs against it
+        let out = Command::new(real_just())
+            .args([recipe, SPEC])
+            .current_dir(repo.path())
+            .output()
+            .expect("failed to run just");
+
+        // Then it refuses, naming the ref it looked on — which is what
+        // tells the reader the file in front of them is not the answer
+        assert!(
+            !out.status.success(),
+            "`{recipe}` read a graph no ref carries:\n{}",
+            said(&out)
+        );
+        assert!(
+            said(&out).contains("is not committed on HEAD"),
+            "`{recipe}` does not name the ref it sought the spec on:\n{}",
+            said(&out)
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 
 proptest::proptest! {

@@ -123,6 +123,13 @@ mutants-all:
 _main-ref:
     #!/usr/bin/env bash
     set -euo pipefail
+    # Asked first, because outside a repository every ref below is
+    # missing and "no main branch here" would name the wrong absence.
+    if ! probe="$(git rev-parse --git-dir 2>&1)"; then
+        echo "keeler: $probe" >&2
+        echo "keeler: graph mode needs a git repository — its branches, worktrees and refs all live in one." >&2
+        exit 1
+    fi
     for ref in origin/main origin/master main master; do
         if git rev-parse --verify --quiet "$ref" >/dev/null 2>&1; then
             echo "$ref"
@@ -241,7 +248,13 @@ keeler-feature-branch SPEC:
     set -euo pipefail
     spec="$SPEC"
     [ -f "$spec" ] || { echo "keeler-feature-branch: $spec is not a file" >&2; exit 1; }
-    root="$(git rev-parse --show-toplevel)"
+    # git's own reason, relayed: a checkout owned by another user
+    # fails here too, and its message is the one carrying the fix.
+    if ! root="$(git rev-parse --show-toplevel 2>&1)"; then
+        echo "keeler-feature-branch: $root" >&2
+        echo "keeler-feature-branch: graph mode needs a git repository — its branches, worktrees and refs all live in one." >&2
+        exit 1
+    fi
     # `pwd -P`, because `--show-toplevel` answers physically: a repository
     # reached through a symlink — /tmp on macOS is one — has a logical path
     # that is not a prefix of git's, and the guard below would refuse a
@@ -339,7 +352,13 @@ keeler-graph SPEC:
     #!/usr/bin/env bash
     set -euo pipefail
     spec="$SPEC"
-    root="$(git rev-parse --show-toplevel)"
+    # git's own reason, relayed: a checkout owned by another user
+    # fails here too, and its message is the one carrying the fix.
+    if ! root="$(git rev-parse --show-toplevel 2>&1)"; then
+        echo "keeler-graph: $root" >&2
+        echo "keeler-graph: graph mode needs a git repository — its branches, worktrees and refs all live in one." >&2
+        exit 1
+    fi
     # Made absolute without touching the filesystem, because the answer
     # comes from a ref: on main after the spec was committed to its
     # feature branch, neither the file nor `specs/` is in this tree, and
@@ -528,7 +547,13 @@ _spawn-preflight SPEC:
     fi
     spec="$SPEC"
     [ -f "$spec" ] || { echo "keeler-spawn: $spec is not a file" >&2; exit 1; }
-    root="$(git rev-parse --show-toplevel)"
+    # git's own reason, relayed: a checkout owned by another user
+    # fails here too, and its message is the one carrying the fix.
+    if ! root="$(git rev-parse --show-toplevel 2>&1)"; then
+        echo "keeler-spawn: $root" >&2
+        echo "keeler-spawn: graph mode needs a git repository — its branches, worktrees and refs all live in one." >&2
+        exit 1
+    fi
     spec_abs="$(cd "$(dirname "$spec")" && pwd -P)/$(basename "$spec")"
     case "$spec_abs" in
         "$root"/*) ;;
@@ -694,7 +719,13 @@ keeler-status SPEC:
     #!/usr/bin/env bash
     set -euo pipefail
     spec="$SPEC"
-    root="$(git rev-parse --show-toplevel)"
+    # git's own reason, relayed: a checkout owned by another user
+    # fails here too, and its message is the one carrying the fix.
+    if ! root="$(git rev-parse --show-toplevel 2>&1)"; then
+        echo "keeler-status: $root" >&2
+        echo "keeler-status: graph mode needs a git repository — its branches, worktrees and refs all live in one." >&2
+        exit 1
+    fi
     # As `keeler-graph`: physical, and no working-tree gate on an answer
     # that comes from a ref.
     case "$spec" in
@@ -833,7 +864,13 @@ keeler-resume SPEC TASK:
         exit 1
     }
     [ -f "$spec" ] || { echo "keeler-resume: $spec is not a file" >&2; exit 1; }
-    root="$(git rev-parse --show-toplevel)"
+    # git's own reason, relayed: a checkout owned by another user
+    # fails here too, and its message is the one carrying the fix.
+    if ! root="$(git rev-parse --show-toplevel 2>&1)"; then
+        echo "keeler-resume: $root" >&2
+        echo "keeler-resume: graph mode needs a git repository — its branches, worktrees and refs all live in one." >&2
+        exit 1
+    fi
     spec_abs="$(cd "$(dirname "$spec")" && pwd -P)/$(basename "$spec")"
     slug="$(basename "$spec_abs" .md)"
     tid="$(printf '%s' "$task" | tr '[:upper:]' '[:lower:]')"
@@ -1157,6 +1194,14 @@ keeler-land:
     # a dependency runs before this body, and so before the refusal below —
     # a branch would have paid for the whole gate suite to be told it was
     # on the wrong branch.
+    # Before `_main-ref`, which speaks for whoever called it: outside a
+    # repository its answer would name the missing main branch instead of
+    # the missing repository, and this recipe would not name itself.
+    if ! probe="$(git rev-parse --git-dir 2>&1)"; then
+        echo "keeler-land: $probe" >&2
+        echo "keeler-land: graph mode needs a git repository — its branches, worktrees and refs all live in one." >&2
+        exit 1
+    fi
     main_ref="$(just _main-ref)"
     main_branch="${main_ref##*/}"
     current="$(git symbolic-ref --quiet --short HEAD || echo 'a detached HEAD')"
@@ -1197,7 +1242,13 @@ keeler-land:
     # answer here as it is everywhere else — one parser reads the format,
     # so this recipe and `just keeler-graph` cannot disagree about which
     # tasks are done.
-    root="$(git rev-parse --show-toplevel)"
+    # git's own reason, relayed: a checkout owned by another user
+    # fails here too, and its message is the one carrying the fix.
+    if ! root="$(git rev-parse --show-toplevel 2>&1)"; then
+        echo "keeler-land: $root" >&2
+        echo "keeler-land: graph mode needs a git repository — its branches, worktrees and refs all live in one." >&2
+        exit 1
+    fi
     for spec in "$root"/specs/*.md; do
         [ -f "$spec" ] || continue
         rel="${spec#"$root"/}"

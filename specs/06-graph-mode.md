@@ -241,6 +241,25 @@ And   the runner it re-runs is written afresh by the recipe as it stands
 And   the board offers that command beside every task it reports died
 ```
 
+### Scenario: A graph-mode recipe outside a git repository refuses in its own voice
+
+```
+Given a directory that is not inside a git repository
+When  a graph-mode recipe runs there
+Then  it fails naming itself and saying graph mode needs a repository
+And   it relays git's own reason, so a refusal git can explain — a
+      checkout owned by another user, say — carries the fix with it
+```
+
+### Scenario: A spec no branch carries is refused naming the ref
+
+```
+Given a spec in the working tree that no branch carries — the state
+      /keeler:tasks leaves behind, before the graph is committed
+When  `just keeler-graph` or `just keeler-status` runs against it
+Then  it refuses naming the ref it sought the spec on
+```
+
 ### Scenario: Spawning without tmux is refused, and says how to get it
 
 ```
