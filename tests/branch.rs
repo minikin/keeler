@@ -486,6 +486,78 @@ fn a_branch_that_moved_the_baseline_is_refused_by_ci() {
     );
 }
 
+#[test]
+fn the_branch_check_reads_the_projects_justfile_whatever_it_is_spelled() {
+    // Given a project whose justfile is tracked as `justfile` — just's own
+    // primary name, and the name the installer leaves on a project that
+    // already had one
+    let workflow = shipped_workflow();
+    let script = run_script(&job_block(&workflow, BASELINE_JOB));
+    let lowercase = |name: &str| {
+        let repo = Repo::new("branch-baseline", name);
+        repo.commit("crap-baseline.json", BASELINE, "baseline");
+        repo.commit("justfile", &justfile("90", ""), "justfile");
+        repo.git(&["checkout", "-qb", BRANCH]);
+        repo
+    };
+
+    // When a branch that moved neither the baseline nor the bar is checked
+    let repo = lowercase("lowercase-additive");
+    repo.commit("src/lib.rs", "pub fn t4() {}\n", "feat: t4");
+    let out = check(&repo, &script);
+
+    // Then it passes. Reading a name the project does not use found
+    // nothing, and that is what the guard refuses on — so every keeler/*
+    // pull request in such a project failed this gate permanently.
+    assert!(
+        out.status.success(),
+        "a branch that moved nothing was refused over the justfile's spelling:\n{}",
+        said(&out)
+    );
+
+    // And a branch that did lower the bar in that file is still refused
+    let repo = lowercase("lowercase-moved-cov");
+    repo.commit("justfile", &justfile("80", ""), "lower the bar");
+    let out = check(&repo, &script);
+    assert!(
+        !out.status.success(),
+        "a lowered bar passed because the check read the wrong name:\n{}",
+        said(&out)
+    );
+    assert!(
+        said(&out).contains("cov recipe"),
+        "the refusal does not name the recipe:\n{}",
+        said(&out)
+    );
+}
+
+#[test]
+fn a_check_with_no_justfile_at_all_says_so_rather_than_blaming_the_recipe() {
+    // Given a project with no justfile under any spelling
+    let workflow = shipped_workflow();
+    let script = run_script(&job_block(&workflow, BASELINE_JOB));
+    let repo = Repo::new("branch-baseline", "no-justfile");
+    repo.commit("crap-baseline.json", BASELINE, "baseline");
+    repo.git(&["checkout", "-qb", BRANCH]);
+    repo.commit("src/lib.rs", "pub fn t4() {}\n", "feat: t4");
+
+    // When the check runs
+    let out = check(&repo, &script);
+
+    // Then it still refuses — a gate that looked at nothing has not
+    // passed — but it names the missing file rather than the recipe
+    assert!(
+        !out.status.success(),
+        "the check passed a project it could not read a justfile from:\n{}",
+        said(&out)
+    );
+    assert!(
+        said(&out).contains("no justfile at"),
+        "the refusal blames the recipe rather than the missing file:\n{}",
+        said(&out)
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Scenario: A branch ticks its task and nothing else
 // ---------------------------------------------------------------------------
@@ -612,24 +684,222 @@ fn a_branch_ticks_its_task_and_nothing_else() {
         "the branch rewrote the spec's Status: line"
     );
 
-    // And `just keeler-graph` on the feature branch still reports T2 as
-    // not done, because readiness is read from there and not from an
-    // unlanded task branch
-    let on_branch = keeler_graph(&repo, SPEC);
-    assert_eq!(state_of(&on_branch, "T2"), "done", "{}", said(&on_branch));
-    repo.git(&["checkout", "-q", &feature]);
-    let on_feature = keeler_graph(&repo, SPEC);
+    // And `just keeler-graph` still reports T2 as not done — from the task
+    // branch as much as from the feature branch, because it reads the
+    // feature branch either way and a tick on an unlanded task branch is
+    // not a landing
+    for standing_on in [TICK_BRANCH, feature.as_str()] {
+        repo.git(&["checkout", "-q", standing_on]);
+        let graph = keeler_graph(&repo, SPEC);
+        assert_eq!(
+            state_of(&graph, "T2"),
+            "ready",
+            "on {standing_on}, a tick on an unlanded task branch was read as done:\n{}",
+            said(&graph)
+        );
+        assert_eq!(
+            state_of(&graph, "T3"),
+            "blocked",
+            "on {standing_on}, a tick on an unlanded task branch unblocked the task after it:\n{}",
+            said(&graph)
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Scenario: The graph answers from the feature's branch
+// ---------------------------------------------------------------------------
+
+/// A fixture project holding the shipped `Justfile` and graph parser.
+fn graph_project(name: &str) -> Repo {
+    let repo = Repo::new("graph-ref", name);
+    std::fs::create_dir_all(repo.path().join("scripts")).unwrap();
+    std::fs::copy(repo_root().join("Justfile"), repo.path().join("Justfile")).unwrap();
+    std::fs::copy(
+        repo_root().join("scripts/keeler-graph.sh"),
+        repo.path().join("scripts/keeler-graph.sh"),
+    )
+    .unwrap();
+    repo.git(&["add", "-A"]);
+    repo.git(&["commit", "-qm", "keeler"]);
+    repo
+}
+
+#[test]
+fn the_graph_answers_from_the_features_branch() {
+    // Given a spec whose tasks are ticked differently in the working tree
+    // and on feat/<spec-slug>
+    let repo = graph_project("working-tree");
+    repo.commit(SPEC, &fixture_spec(false), "spec");
+    let feature = "feat/99-fixture";
+    repo.git(&["checkout", "-qb", feature]);
+    repo.write(SPEC, &fixture_spec(true));
+
+    // When `just keeler-graph` runs against the spec
+    let out = keeler_graph(&repo, SPEC);
+    assert!(out.status.success(), "{}", said(&out));
+
+    // Then it reports readiness from the spec as committed on
+    // feat/<spec-slug>: an uncommitted tick is one nothing else in graph
+    // mode counts
     assert_eq!(
-        state_of(&on_feature, "T2"),
+        state_of(&out, "T2"),
         "ready",
-        "a tick on an unlanded task branch was read as done on the feature branch:\n{}",
-        said(&on_feature)
+        "an uncommitted tick was read as done:\n{}",
+        said(&out)
     );
     assert_eq!(
-        state_of(&on_feature, "T3"),
+        state_of(&out, "T3"),
         "blocked",
-        "a tick on an unlanded task branch unblocked the task after it:\n{}",
-        said(&on_feature)
+        "an uncommitted tick unblocked the task after it:\n{}",
+        said(&out)
+    );
+
+    // And it names the ref it read
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains(&format!("graph: {SPEC} on {feature}")),
+        "the recipe does not say which ref it answered from:\n{}",
+        said(&out)
+    );
+
+    // And it falls back to HEAD when the feature branch does not exist,
+    // which is where a landed feature leaves it
+    let landed = graph_project("no-feature-branch");
+    landed.commit(SPEC, &fixture_spec(true), "spec, landed");
+    let out = keeler_graph(&landed, SPEC);
+    assert!(out.status.success(), "{}", said(&out));
+    assert_eq!(
+        state_of(&out, "T2"),
+        "done",
+        "the fallback to HEAD did not read the landed tick:\n{}",
+        said(&out)
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains(&format!("graph: {SPEC} on HEAD")),
+        "the fallback does not say it read HEAD:\n{}",
+        said(&out)
+    );
+}
+
+#[test]
+fn a_committed_spec_reads_through_a_symlinked_path() {
+    // Given a repository reached through a symlink — which is every repo
+    // under $TMPDIR on macOS, and any symlinked home or mount
+    let repo = graph_project("symlinked");
+    repo.commit(SPEC, &fixture_spec(false), "spec");
+    let link = std::env::temp_dir().join(format!("keeler-symlink-{}", std::process::id()));
+    let _ = std::fs::remove_file(&link);
+    std::os::unix::fs::symlink(repo.path(), &link).unwrap();
+
+    // When `just keeler-graph` runs against the spec through that path
+    // PWD as an interactive shell leaves it: the logical path it was
+    // reached by. Without it bash resets PWD to the physical path and the
+    // mismatch this test is about never arises.
+    let out = Command::new(real_just())
+        .args(["keeler-graph", SPEC])
+        .current_dir(&link)
+        .env("PWD", &link)
+        .output()
+        .expect("failed to run just keeler-graph");
+    let _ = std::fs::remove_file(&link);
+
+    // Then it reads the graph. `git rev-parse --show-toplevel` answers
+    // with the physical path while bash's `pwd` answers with the logical
+    // one, so a spec path built from the latter strips nothing and the
+    // recipe reports a committed spec as uncommitted.
+    assert!(
+        out.status.success(),
+        "a committed spec read as uncommitted through a symlinked path:\n{}",
+        said(&out)
+    );
+    assert_eq!(state_of(&out, "T2"), "ready", "{}", said(&out));
+}
+
+#[test]
+fn every_spec_path_is_resolved_physically() {
+    // Given the shipped Justfile. `git rev-parse --show-toplevel` answers
+    // with the physical path, so any recipe that builds a spec's absolute
+    // path logically strips nothing from it and reports a committed spec
+    // as uncommitted. One recipe carried `pwd -P` and the rest did not;
+    // this is the guard that keeps them together.
+    let justfile = std::fs::read_to_string(repo_root().join("Justfile")).unwrap();
+
+    // Then no line asks for a working directory logically
+    let logical: Vec<&str> = justfile
+        .lines()
+        .filter(|line| line.contains("pwd)") || line.contains("pwd "))
+        .filter(|line| !line.contains("pwd -P"))
+        .collect();
+    assert!(
+        logical.is_empty(),
+        "these resolve a path logically, and git will not agree with them: {logical:?}"
+    );
+}
+
+#[test]
+fn the_graph_reads_a_spec_the_working_tree_does_not_hold() {
+    // Given a spec committed on its feature branch, with main checked out
+    // — where the file is not in the working tree at all
+    let repo = graph_project("absent-from-tree");
+    repo.git(&["checkout", "-qb", "feat/99-fixture"]);
+    repo.commit(SPEC, &fixture_spec(false), "spec");
+    repo.git(&["checkout", "-q", "main"]);
+    assert!(
+        !repo.path().join(SPEC).exists(),
+        "the fixture still holds the spec in its working tree"
+    );
+
+    // When `just keeler-graph` runs against it
+    let out = keeler_graph(&repo, SPEC);
+
+    // Then it answers from the branch. The working tree does not gate a
+    // reading that comes from a ref.
+    assert!(
+        out.status.success(),
+        "the recipe refused a spec its own ref carries:\n{}",
+        said(&out)
+    );
+    assert_eq!(state_of(&out, "T2"), "ready", "{}", said(&out));
+}
+
+#[test]
+fn a_branch_that_renames_or_duplicates_the_justfile_is_refused() {
+    // Given a keeler/* branch that renamed the justfile, content
+    // untouched — the cov recipe is byte-identical, so only the name moved
+    let workflow = shipped_workflow();
+    let script = run_script(&job_block(&workflow, BASELINE_JOB));
+    let repo = task_branch("renamed-justfile");
+    repo.git(&["mv", "Justfile", "justfile"]);
+    repo.git(&["commit", "-qm", "rename the justfile"]);
+
+    // When the check runs
+    let out = check(&repo, &script);
+
+    // Then it is refused naming both spellings: the file the whole
+    // repository is measured through is as much the shared reference as
+    // the bar inside it
+    assert!(
+        !out.status.success(),
+        "a renamed justfile passed:\n{}",
+        said(&out)
+    );
+    assert!(
+        said(&out).contains("Justfile") && said(&out).contains("justfile"),
+        "the refusal does not name what moved:\n{}",
+        said(&out)
+    );
+
+    // And so does a branch that leaves the base's file alone but adds a
+    // second candidate beside it — the state just refuses to run in.
+    // `.justfile` rather than `justfile`, so the fixture is the same on a
+    // case-insensitive filesystem as on a case-sensitive one.
+    let repo = task_branch("added-justfile");
+    repo.commit(".justfile", &justfile("90", ""), "add a second candidate");
+    let out = check(&repo, &script);
+    assert!(
+        !out.status.success(),
+        "a branch that added a second justfile candidate passed:\n{}",
+        said(&out)
     );
 }
 

@@ -84,6 +84,28 @@ Then  it reports T2 and T3 as ready and T4 as blocked with its unmet needs
 And   it reports nothing as ready when the graph is complete
 ```
 
+### Scenario: The graph answers from the feature's branch
+
+```
+Given a spec whose tasks are ticked differently in the working tree and on
+      feat/<spec-slug>
+When  `just keeler-graph` runs against the spec
+Then  it reports readiness from the spec as committed on feat/<spec-slug>
+And   it names the ref it read
+And   it falls back to HEAD when the feature branch does not exist
+```
+
+### Scenario: The graph reads a spec the working tree does not hold
+
+```
+Given a spec committed on feat/<spec-slug> and a working tree that does
+      not hold it — main, before the feature lands
+When  `just keeler-graph` runs against the spec
+Then  it reports the graph from that branch
+And   a spec path is resolved physically, so a repository reached through
+      a symlink reads the same as one reached directly
+```
+
 ### Scenario: A cycle is refused loudly
 
 ```
@@ -315,6 +337,26 @@ Given a keeler/* branch whose diff against main touches crap-baseline.json
       or the Justfile's cov recipe
 When  the shipped CI workflow runs on its pull request
 Then  it fails naming the file — baselines move only at land time, on main
+```
+
+### Scenario: The branch check reads the project's justfile, whatever it is spelled
+
+```
+Given a keeler/* branch in a project whose justfile is tracked under any
+      spelling just accepts
+When  the shipped CI workflow runs on its pull request
+Then  the branch check compares that file's cov recipe
+And   a branch with no justfile at all is refused naming the missing file,
+      not the recipe
+```
+
+### Scenario: A branch that renames or duplicates the justfile is refused
+
+```
+Given a keeler/* branch whose justfile is not the one the base tracked —
+      renamed, removed, or joined by a second candidate
+When  the shipped CI workflow runs on its pull request
+Then  it fails naming what moved, even when the cov recipe is byte-identical
 ```
 
 ### Scenario: A branch that was green alone can still redden main

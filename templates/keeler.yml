@@ -138,26 +138,55 @@ jobs:
           if ! git diff --quiet "$merge_base" HEAD -- crap-baseline.json; then
             fail "crap-baseline.json changed on this branch — $moved"
           fi
-          # The cov recipe, not the whole Justfile: every task branch adds
+          # The justfile by the name the project tracks it under: `just`
+          # accepts any ASCII-case spelling of `justfile` and `.justfile`,
+          # so a hard-coded `Justfile` reads nothing in a project that has
+          # its own, and this check would then refuse every branch over a
+          # recipe that is present. No early `exit` in the awk — it would
+          # close the pipe under `pipefail` and fail the read.
+          justfiles_at() {
+            git ls-tree --name-only "$1" | awk '
+              tolower($0) == "justfile" || tolower($0) == ".justfile" { print }
+            '
+          }
+          # The cov recipe, not the whole justfile: every task branch adds
           # its own recipe and git merges those cleanly. What may not move
           # is the coverage bar the whole repository is measured against.
           cov_recipe() {
             # `[^ \t]` rather than `[^[:space:]]`: Ubuntu's default awk is
             # mawk, which only learned POSIX character classes in 1.3.4.
-            git show "$1:Justfile" 2>/dev/null | awk '
+            git show "$1:$2" 2>/dev/null | awk '
               /^cov:/ { inside = 1 }
               inside && NF && /^[^ \t]/ && $0 !~ /^cov:/ { inside = 0 }
               inside { print }
             '
           }
-          base_cov=$(cov_recipe "$merge_base") || fail "cannot read the Justfile at $base_ref"
+          base_justfiles=$(justfiles_at "$merge_base") || fail "cannot read the tree at $base_ref"
+          # Blaming the recipe for a file that is not there sends the
+          # reader looking in the wrong place.
+          [ -n "$base_justfiles" ] || fail "no justfile at $base_ref — this check reads the project's justfile to tell whether the coverage bar moved"
+          head_justfiles=$(justfiles_at HEAD) || fail "cannot read the tree at HEAD"
+          [ -n "$head_justfiles" ] || fail "the justfile is gone on this branch — $moved"
+          # The file the repository is measured through is as much the
+          # shared reference as the bar inside it: renaming it, or adding
+          # a second candidate beside it, moves the bar without touching a
+          # byte of the recipe — and a second candidate is the state just
+          # refuses to run in at all.
+          if [ "$base_justfiles" != "$head_justfiles" ]; then
+            fail "the justfile changed on this branch ($(echo $base_justfiles) → $(echo $head_justfiles)) — $moved"
+          fi
+          # The list is equal at both refs by now, so its first line is
+          # the name at either. awk rather than `head`, which would close
+          # the pipe under `pipefail`.
+          base_justfile=$(printf '%s' "$base_justfiles" | awk 'NR == 1')
+          base_cov=$(cov_recipe "$merge_base" "$base_justfile") || fail "cannot read $base_justfile at $base_ref"
           # Finding nothing is not the same as finding no change. If the
           # recipe is absent or spelled otherwise at the base, this check
           # cannot tell whether the coverage bar moved — and a gate that
           # reports success having looked at nothing is worse than no gate.
-          [ -n "$base_cov" ] || fail "no \`cov:\` recipe in the Justfile at $base_ref — this check cannot tell whether the coverage bar moved"
-          if [ "$base_cov" != "$(cov_recipe HEAD)" ]; then
-            fail "the Justfile's cov recipe changed on this branch — $moved"
+          [ -n "$base_cov" ] || fail "no \`cov:\` recipe in $base_justfile at $base_ref — this check cannot tell whether the coverage bar moved"
+          if [ "$base_cov" != "$(cov_recipe HEAD "$base_justfile")" ]; then
+            fail "the justfile's cov recipe changed on this branch — $moved"
           fi
           echo "crap-baseline.json and the cov recipe are as $base_ref left them"
 
