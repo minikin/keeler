@@ -27,6 +27,16 @@ Installations pin a version with `KEELER_REF` and record it at the top of
   permanently, blaming a `cov:` recipe that was present. It now resolves
   the tracked name, and says "no justfile at `<ref>`" when there is
   genuinely none rather than blaming the recipe for a missing file.
+- **Graph mode refuses in its own voice outside a repository.** Every
+  recipe asked git for the repository root unguarded, so running one
+  anywhere else aborted with `fatal: not a git repository` and exit 128 —
+  git's message, naming no recipe. Each entry point now refuses by name
+  and relays git's own reason with it, so a failure git can explain — a
+  checkout owned by another user, and the `safe.directory` line that
+  fixes it — arrives intact rather than flattened into "not a
+  repository". `_main-ref` asks first too, because outside one its own
+  answer would have blamed a missing main branch for a missing
+  repository.
 - **`just keeler-graph` answers from the feature branch.** It read the
   working tree while the rules and `/keeler:graph` both said it read
   `feat/<spec-slug>`, so an uncommitted tick made it report a task
