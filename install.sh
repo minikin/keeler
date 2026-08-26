@@ -62,6 +62,31 @@ note(){ printf '  · %s\n' "$*"; }
 }
 DEST="$(cd "$DEST" && pwd)"
 
+# --- The project's justfile, under the name the project spells it ---------
+# `just` compares every directory entry against `justfile` and `.justfile`
+# with `eq_ignore_ascii_case` and refuses to run when more than one
+# matches. Keeler ships `Justfile`, so copying it in beside a project's own
+# `justfile` would kill every recipe there, Keeler's gates included, while
+# this script reported success.
+justfiles=()
+# nocasematch is the comparison just makes; it is unset again because
+# leaving it on would change every `case` below.
+shopt -s nullglob dotglob nocasematch
+for entry in "$DEST"/*; do
+    base="${entry##*/}"
+    if [[ "$base" == justfile || "$base" == .justfile ]]; then
+        justfiles+=("$base")
+    fi
+done
+shopt -u nullglob dotglob nocasematch
+if [ "${#justfiles[@]}" -gt 1 ]; then
+    echo "error: $DEST already holds more than one justfile: ${justfiles[*]}" >&2
+    echo "just refuses to run with more than one candidate, so every recipe Keeler installs would be dead on arrival. Keep one and re-run." >&2
+    exit 1
+fi
+JUSTFILE_NAME="Justfile"
+[ "${#justfiles[@]}" -eq 1 ] && JUSTFILE_NAME="${justfiles[0]}"
+
 # --- Source: local checkout when present, otherwise fetch a tarball --------
 if ! SRC="$(cd "$(dirname "${BASH_SOURCE[0]:-.}")" 2>/dev/null && pwd)"; then
     SRC="$(pwd)"
@@ -183,10 +208,14 @@ for f in .claude/commands/keeler/spec.md .claude/commands/keeler/tasks.md \
          .claude/skills/property-testing/SKILL.md \
          .claude/skills/gherkin-specs/SKILL.md \
          scripts/keeler-graph.sh \
-         specs/TEMPLATE.md KEELER.md Justfile \
+         specs/TEMPLATE.md KEELER.md \
          .cargo-mutants.toml clippy.toml rustfmt.toml; do
     install_file "$f"
 done
+
+# Under their spelling when they have one, so the conflict is reported and
+# kept against the file that is there.
+install_file Justfile "$JUSTFILE_NAME"
 
 # The rules file is not installed like the others: it is ours to own, so an
 # upgrade replaces it wholesale and the version marker inside always matches

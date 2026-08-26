@@ -611,15 +611,50 @@ fn the_template_and_the_tasks_command_carry_the_format() {
 // command file sends the agent down the same road rather than letting it
 // read the Tasks section itself. These tests drive the recipe.
 
-/// Runs `just keeler-graph <spec>` from the repository root, the way a
-/// human — or /keeler:graph — would.
+/// Runs `just keeler-graph <spec>` the way a human — or /keeler:graph —
+/// would: in a project, against the spec as committed on
+/// `feat/<spec-slug>`, which is the ref the recipe answers from.
 fn just_graph(spec: &Path) -> Output {
-    std::process::Command::new("just")
+    let slug = spec.file_stem().unwrap().to_string_lossy().into_owned();
+    let dir = std::env::temp_dir().join(format!("keeler-just-graph-{slug}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("scripts")).unwrap();
+    std::fs::create_dir_all(dir.join("specs")).unwrap();
+    std::fs::copy(repo_root().join("Justfile"), dir.join("Justfile")).unwrap();
+    std::fs::copy(
+        repo_root().join("scripts/keeler-graph.sh"),
+        dir.join("scripts/keeler-graph.sh"),
+    )
+    .unwrap();
+    let rel = format!("specs/{slug}.md");
+    std::fs::copy(spec, dir.join(&rel)).unwrap();
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .args(["-c", "user.email=probe@keeler", "-c", "user.name=probe"])
+            .args(args)
+            .current_dir(&dir)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .output()
+            .expect("failed to run git");
+        assert!(
+            out.status.success(),
+            "git {args:?} failed:\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    git(&["init", "-qb", "main"]);
+    git(&["add", "-A"]);
+    git(&["commit", "-qm", "spec"]);
+    git(&["checkout", "-qb", &format!("feat/{slug}")]);
+    let output = std::process::Command::new("just")
         .arg("keeler-graph")
-        .arg(spec)
-        .current_dir(repo_root())
+        .arg(&rel)
+        .current_dir(&dir)
         .output()
-        .expect("failed to run just")
+        .expect("failed to run just");
+    let _ = std::fs::remove_dir_all(&dir);
+    output
 }
 
 /// The report line that opens with `<id> `, or a panic naming what was

@@ -9,6 +9,32 @@ Installations pin a version with `KEELER_REF` and record it at the top of
 
 ## [Unreleased]
 
+### Fixed
+
+- **The installer no longer leaves two justfiles.** `just` accepts any
+  ASCII-case spelling of `justfile` and `.justfile` and refuses to run
+  when more than one is present. Keeler installed `Justfile` regardless,
+  so a project spelling its own `justfile` — the name in just's own
+  documentation — ended up with both on a case-sensitive filesystem, and
+  every recipe in it died while the installer reported success. The
+  destination is now resolved against the names just searches for, so an
+  existing justfile is treated as the project's own file under its own
+  name; a project that already holds two is refused up front, naming
+  both, rather than added to.
+- **The branch-baseline check reads the project's justfile.** It asked
+  git for `<ref>:Justfile`, found nothing in a project tracking
+  `justfile`, and failed every `keeler/*` pull request there —
+  permanently, blaming a `cov:` recipe that was present. It now resolves
+  the tracked name, and says "no justfile at `<ref>`" when there is
+  genuinely none rather than blaming the recipe for a missing file.
+- **`just keeler-graph` answers from the feature branch.** It read the
+  working tree while the rules and `/keeler:graph` both said it read
+  `feat/<spec-slug>`, so an uncommitted tick made it report a task
+  **ready** that `keeler-status` did not know about and `keeler-spawn`
+  refused. It now reads the same ref `keeler-status` does, falls back to
+  HEAD once a landed feature's branch is gone, and prints the ref it
+  answered from.
+
 ## [0.4.0] — 2026-08-20
 
 Graph mode: a spec's tasks run in parallel, one agent each, and the tools

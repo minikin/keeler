@@ -23,4 +23,6 @@ If the recipe **refuses** — a cycle, a Needs: naming no task, an id defined tw
 
 Readiness is read from the spec on the feature's own branch, **`feat/<spec-slug>`** — which is also the only branch `just keeler-spawn` will run from. A tick on a task branch unblocks nothing until it lands on the feature branch, because arriving there is the landing.
 
+The recipe opens with the ref it read — `graph: <spec> on <ref>` — and falls back to HEAD when the feature branch does not exist, which is where a landed feature leaves it. Report that line with the states: it is what makes the difference between two answers visible rather than guessable.
+
 Do not implement anything here — that is /keeler:tdd on a ready task, or `just keeler-spawn <spec> <task>` to hand one to an agent on its own branch.

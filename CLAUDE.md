@@ -41,3 +41,11 @@ here instead — project-specific instructions, in the file meant for them.
   in this repository silently skips the xtask member and reports success
   having tested nothing.
 
+## Comments
+
+**A comment that restates the code is not allowed.** Delete it. A comment
+earns its place by saying what the code cannot: why this way and not the
+obvious one, what breaks if it changes, which upstream behavior it is
+matching. `# increment the counter` above `n += 1` is noise; the tests'
+Given/When/Then lines and a rationale a reader could not derive from the
+code are not.

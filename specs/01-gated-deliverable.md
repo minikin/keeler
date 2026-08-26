@@ -160,6 +160,16 @@ And   the version Keeler would have written is available alongside it as
 And   the run names that file in its conflict report
 ```
 
+### Scenario: The project's own justfile is found whatever it is spelled
+
+```
+Given a project whose justfile is spelled in any case just accepts
+When  the installer runs
+Then  that file is treated as the project's own copy of the Justfile
+And   the project holds exactly one name just would take as a candidate
+And   any conflict is reported and kept under the name the project uses
+```
+
 ### Scenario: The rules file is replaced, and the replaced text is kept
 
 ```
@@ -186,6 +196,16 @@ Given a directory with no Cargo.toml
 When  the installer runs against it
 Then  it exits with a non-zero status
 And   it explains that the directory is not a Rust project
+And   it creates no files there
+```
+
+### Scenario: A project just already refuses is refused, not added to
+
+```
+Given a project that already holds more than one justfile candidate
+When  the installer runs against it
+Then  it exits with a non-zero status
+And   it names every candidate it found
 And   it creates no files there
 ```
 

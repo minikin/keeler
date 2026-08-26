@@ -873,6 +873,11 @@ fn assert_graph_mode_is_documented(project: &TempProject) {
 /// every task is ready.
 fn assert_an_old_spec_reads_as_a_graph(project: &TempProject) {
     std::fs::write(project.path().join("specs/07-legacy.md"), OLD_FORMAT_SPEC).unwrap();
+    // The recipe answers from the spec as committed; with no feature
+    // branch here, that is the fallback to HEAD.
+    project.git(&["init", "-qb", "main"]);
+    project.git(&["add", "specs/07-legacy.md"]);
+    project.git(&["commit", "-qm", "a spec from before graph mode"]);
     let read = project.run_just_args(&["keeler-graph", "specs/07-legacy.md"]);
     let report = String::from_utf8_lossy(&read.stdout).into_owned();
     assert!(
@@ -880,9 +885,13 @@ fn assert_an_old_spec_reads_as_a_graph(project: &TempProject) {
         "`just keeler-graph` refused a spec in the old format:\n{report}{}",
         String::from_utf8_lossy(&read.stderr),
     );
+    assert!(
+        report.contains("graph: specs/07-legacy.md on HEAD"),
+        "the recipe does not say which ref it answered from:\n{report}",
+    );
     let states: Vec<&str> = report
         .lines()
-        .filter(|line| !line.trim().is_empty())
+        .filter(|line| !line.trim().is_empty() && !line.starts_with("graph: "))
         .collect();
     assert_eq!(
         states,
@@ -1939,5 +1948,145 @@ fn a_pinned_version_is_fetched_even_from_inside_a_clone() {
     assert!(
         !output.status.success(),
         "an unfetchable pin was silently ignored and the checkout used instead:\n{said}",
+    );
+}
+
+/// The names `just` searches for. It compares each directory entry
+/// against them with `eq_ignore_ascii_case` and refuses to run when more
+/// than one matches.
+const JUSTFILE_CANDIDATES: [&str; 2] = ["justfile", ".justfile"];
+
+/// The entries of `dir` that `just` would take as candidates, spelled as
+/// the filesystem spells them. By listing, not `Path::exists`, which on a
+/// case-insensitive filesystem answers yes for a spelling that is absent.
+fn justfile_names(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| {
+            JUSTFILE_CANDIDATES
+                .iter()
+                .any(|candidate| name.eq_ignore_ascii_case(candidate))
+        })
+        .collect();
+    names.sort();
+    names
+}
+
+/// Whether `dir` holds an entry spelled exactly `name` — again by listing,
+/// for the reason above.
+fn holds_exactly(dir: &Path, name: &str) -> bool {
+    std::fs::read_dir(dir)
+        .unwrap()
+        .any(|entry| entry.unwrap().file_name() == name)
+}
+
+proptest::proptest! {
+    // Every case runs the installer as a subprocess, so the count stays
+    // at the file's convention.
+    #![proptest_config(proptest::prelude::ProptestConfig {
+        cases: 12,
+        failure_persistence: Some(Box::new(
+            proptest::test_runner::FileFailurePersistence::WithSource("proptest-regressions"),
+        )),
+        ..proptest::prelude::ProptestConfig::default()
+    })]
+
+    #[test]
+    fn the_projects_own_justfile_is_found_whatever_it_is_spelled(
+        base in proptest::sample::select(JUSTFILE_CANDIDATES.to_vec()),
+        upper in proptest::collection::vec(proptest::prelude::any::<bool>(), 9),
+    ) {
+        // Given a project whose justfile is spelled in any case just accepts
+        let spelling: String = base
+            .chars()
+            .zip(&upper)
+            .map(|(c, up)| if *up { c.to_ascii_uppercase() } else { c })
+            .collect();
+        let project = TempProject::new("justfile-spelling", MANIFEST_WITH_PROPTEST);
+        let own = "cov:\n    cargo llvm-cov nextest --fail-under-lines 90\n";
+        std::fs::write(project.path().join(&spelling), own).unwrap();
+
+        // When the installer runs
+        let report = project.install();
+
+        // Then that file is treated as the project's own copy of the
+        // Justfile — its content stands, and Keeler's version is kept
+        // beside it under the name the project uses ...
+        proptest::prop_assert_eq!(
+            std::fs::read_to_string(project.path().join(&spelling)).unwrap(),
+            own,
+            "the project's own {} was overwritten", spelling,
+        );
+        proptest::prop_assert!(
+            holds_exactly(project.path(), &format!("{spelling}.keeler")),
+            "no {spelling}.keeler beside the project's own file:\n{report}",
+        );
+
+        // ... the project holds exactly one name just would take as a
+        // candidate ...
+        proptest::prop_assert_eq!(
+            justfile_names(project.path()),
+            vec![spelling.clone()],
+            "the installer left just with more than one candidate:\n{}", report,
+        );
+
+        // ... and the conflict is reported under that name, which is
+        // what a human — and `git show <ref>:<name>` — goes looking for
+        proptest::prop_assert!(
+            report.contains(&format!("{spelling} differs")),
+            "the report does not name the project's own justfile:\n{report}",
+        );
+
+        // And `just` still runs there: with two candidates it refuses
+        // every recipe in the project.
+        let listed = project.run_just_args(&["--list"]);
+        proptest::prop_assert!(
+            listed.status.success(),
+            "just refuses to run after the install:\n{}",
+            String::from_utf8_lossy(&listed.stderr),
+        );
+    }
+}
+
+#[test]
+fn a_project_just_already_refuses_is_refused_not_added_to() {
+    // Given a project that already holds more than one justfile
+    // candidate — two spellings differing by more than case, so the
+    // fixture is the same on either kind of filesystem
+    let project = TempProject::new("two-justfiles", MANIFEST_WITH_PROPTEST);
+    let both = ["justfile", ".justfile"];
+    for name in both {
+        std::fs::write(project.path().join(name), "cov:\n    echo cov\n").unwrap();
+    }
+    let before = project.tree_snapshot();
+
+    // When the installer runs against it
+    let output = project.try_install();
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    // Then it exits with a non-zero status ...
+    assert!(
+        !output.status.success(),
+        "the installer added to a project just already refuses:\n{said}",
+    );
+
+    // ... it names every candidate it found ...
+    for name in both {
+        assert!(
+            said.contains(name),
+            "the refusal does not name {name}:\n{said}",
+        );
+    }
+
+    // ... and it creates no files there
+    assert_eq!(
+        project.tree_snapshot(),
+        before,
+        "the refusal still changed the project",
     );
 }

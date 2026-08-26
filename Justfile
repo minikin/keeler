@@ -338,7 +338,38 @@ keeler-feature-branch SPEC:
 keeler-graph SPEC:
     #!/usr/bin/env bash
     set -euo pipefail
-    report=$(bash scripts/keeler-graph.sh "$SPEC")
+    spec="$SPEC"
+    root="$(git rev-parse --show-toplevel)"
+    # Made absolute without touching the filesystem, because the answer
+    # comes from a ref: on main after the spec was committed to its
+    # feature branch, neither the file nor `specs/` is in this tree, and
+    # the graph is still there to read. `pwd -P` because git answers with
+    # the physical path — under a symlinked mount, every macOS $TMPDIR
+    # among them, a logical one strips nothing below.
+    case "$spec" in
+        /*) spec_abs="$spec" ;;
+        *)  spec_abs="$(pwd -P)/$spec" ;;
+    esac
+    rel="${spec_abs#"$root/"}"
+    # Readiness comes from the feature's own branch, the same place
+    # `keeler-status` reads it and the only branch `keeler-spawn` runs
+    # from. Answering from the working tree would make this the one place
+    # in graph mode where an uncommitted tick counts, and it fails in the
+    # inviting direction: ready for work nothing will accept. After a
+    # feature lands its branch is gone, so HEAD stands in.
+    feature="feat/$(basename "$spec_abs" .md)"
+    graph_ref="$feature"
+    git rev-parse --verify -q "$feature^{commit}" >/dev/null || graph_ref=HEAD
+    graph_copy="$(mktemp -d)"
+    trap 'rm -rf "$graph_copy"' EXIT
+    if ! git show "$graph_ref:$rel" > "$graph_copy/$(basename "$spec_abs")" 2>/dev/null; then
+        echo "keeler-graph: $rel is not committed on $graph_ref — there is no graph to report." >&2
+        exit 1
+    fi
+    # The parser first, and the ref line only once it has answered: a
+    # refusal is the script's, and this recipe prints nothing over it.
+    report=$(bash "$root/scripts/keeler-graph.sh" "$graph_copy/$(basename "$spec_abs")")
+    echo "graph: $rel on $graph_ref"
     printf '%s\n' "$report" | awk '
         NF { row[++n] = $0; if ($2 == "done") done_[$1] = 1 }
         END {
@@ -498,7 +529,7 @@ _spawn-preflight SPEC:
     spec="$SPEC"
     [ -f "$spec" ] || { echo "keeler-spawn: $spec is not a file" >&2; exit 1; }
     root="$(git rev-parse --show-toplevel)"
-    spec_abs="$(cd "$(dirname "$spec")" && pwd)/$(basename "$spec")"
+    spec_abs="$(cd "$(dirname "$spec")" && pwd -P)/$(basename "$spec")"
     case "$spec_abs" in
         "$root"/*) ;;
         *)
@@ -581,7 +612,7 @@ keeler-spawn SPEC TASK:
     # that a recipe nobody named failed.
     report="$("{{just_executable()}}" -q _spawn-preflight "$spec")"
     root="$(git rev-parse --show-toplevel)"
-    spec_abs="$(cd "$(dirname "$spec")" && pwd)/$(basename "$spec")"
+    spec_abs="$(cd "$(dirname "$spec")" && pwd -P)/$(basename "$spec")"
     rel="${spec_abs#"$root"/}"
     entry="$(printf '%s\n' "$report" | awk -v id="$task" '$1 == id')"
     if [ -z "$entry" ]; then
@@ -663,9 +694,13 @@ keeler-status SPEC:
     #!/usr/bin/env bash
     set -euo pipefail
     spec="$SPEC"
-    [ -f "$spec" ] || { echo "keeler-status: $spec is not a file" >&2; exit 1; }
     root="$(git rev-parse --show-toplevel)"
-    spec_abs="$(cd "$(dirname "$spec")" && pwd)/$(basename "$spec")"
+    # As `keeler-graph`: physical, and no working-tree gate on an answer
+    # that comes from a ref.
+    case "$spec" in
+        /*) spec_abs="$spec" ;;
+        *)  spec_abs="$(pwd -P)/$spec" ;;
+    esac
     slug="$(basename "$spec_abs" .md)"
     runs="$root/.keeler/runs/$slug"
     # The graph comes from the feature's branch, the same place
@@ -799,7 +834,7 @@ keeler-resume SPEC TASK:
     }
     [ -f "$spec" ] || { echo "keeler-resume: $spec is not a file" >&2; exit 1; }
     root="$(git rev-parse --show-toplevel)"
-    spec_abs="$(cd "$(dirname "$spec")" && pwd)/$(basename "$spec")"
+    spec_abs="$(cd "$(dirname "$spec")" && pwd -P)/$(basename "$spec")"
     slug="$(basename "$spec_abs" .md)"
     tid="$(printf '%s' "$task" | tr '[:upper:]' '[:lower:]')"
     runner="$root/.keeler/runs/$slug/$tid.sh"
@@ -909,6 +944,8 @@ keeler-fan-out SPEC:
     wave=""
     while read -r id state rest; do
         [ -n "$id" ] || continue
+        # `keeler-graph` opens with the ref it answered from.
+        [ "$id" = "graph:" ] && continue
         if [ "$state" != ready ]; then
             printf '  %s %s%s\n' "$id" "$state" "${rest:+ $rest}"
             continue
