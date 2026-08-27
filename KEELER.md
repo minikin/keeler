@@ -299,7 +299,7 @@ rules for the spec stage.
 Recommended companions, installed on your machine rather than in the repo:
 - **[rust-best-practices](https://github.com/apollographql/rust-best-practices)**
 — borrowing vs cloning, `Result` handling, API design — for idiomatic Rust.
-- **[clean-code](https://github.com/jackjin1997/ClawForge)** — naming, function
+- **[clean-code]()** — naming, function
 size, structure — for the refactor step.
 - **[rust-async-patterns](https://github.com/diegosouzapw/awesome-omni-skills/tree/main/skills/rust-async-patterns-v2)**
 — Tokio, async traits, concurrency — once the project grows async code.
