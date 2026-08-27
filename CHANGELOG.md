@@ -9,6 +9,11 @@ Installations pin a version with `KEELER_REF` and record it at the top of
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-08-27
+
+Four bugs, three of them found by installing Keeler into a project that
+already had a justfile and one by reviewing the fix for the others.
+
 ### Fixed
 
 - **The installer no longer leaves two justfiles.** `just` accepts any
@@ -400,7 +405,8 @@ repository that holds itself to the same standard it installs.
   failed with "no library targets found" in binary-only projects. Every job
   now goes through the `just` recipes, so CI runs what `just dev` runs.
 
-[Unreleased]: https://github.com/minikin/keeler/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/minikin/keeler/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/minikin/keeler/releases/tag/v0.4.1
 [0.4.0]: https://github.com/minikin/keeler/releases/tag/v0.4.0
 [0.3.0]: https://github.com/minikin/keeler/releases/tag/v0.3.0
 [0.2.0]: https://github.com/minikin/keeler/releases/tag/v0.2.0

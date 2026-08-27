@@ -3,7 +3,7 @@
 # it is gated like the rest of the code instead of hiding in shell.
 [package]
 name = "xtask"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2024"
 rust-version = "1.88"
 publish = false

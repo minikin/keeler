@@ -29,7 +29,7 @@ From inside any Rust project — existing or freshly `cargo new`-ed:
 
 ```bash
 # pin a release
-KEELER_REF=v0.4.0 curl -fsSL https://raw.githubusercontent.com/minikin/keeler/main/install.sh | bash -s .
+KEELER_REF=v0.4.1 curl -fsSL https://raw.githubusercontent.com/minikin/keeler/main/install.sh | bash -s .
 
 # or take main
 curl -fsSL https://raw.githubusercontent.com/minikin/keeler/main/install.sh | bash -s .
@@ -39,7 +39,7 @@ Prefer to verify before running? Every release ships `install.sh` with its
 SHA256:
 
 ```bash
-gh release download v0.4.0 --repo minikin/keeler --pattern 'install.sh*'
+gh release download v0.4.1 --repo minikin/keeler --pattern 'install.sh*'
 sha256sum -c install.sh.sha256    # shasum -a 256 -c on macOS
 bash install.sh .
 ```

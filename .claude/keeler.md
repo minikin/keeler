@@ -1,4 +1,4 @@
-<!-- keeler-version: 0.4.0 -->
+<!-- keeler-version: 0.4.1 -->
 # Keeler — workflow rules
 
 The spec-first, test-driven workflow this project follows. Imported by CLAUDE.md.
