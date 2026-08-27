@@ -301,7 +301,7 @@ Recommended companions, installed on your machine rather than in the repo:
 — borrowing vs cloning, `Result` handling, API design — for idiomatic Rust.
 - **[clean-code](https://github.com/jackjin1997/ClawForge)** — naming, function
 size, structure — for the refactor step.
-- **[rust-async-patterns](https://github.com/search?q=rust-async-patterns+SKILL.md&type=code)**
+- **[rust-async-patterns](https://github.com/diegosouzapw/awesome-omni-skills/tree/main/skills/rust-async-patterns-v2)**
 — Tokio, async traits, concurrency — once the project grows async code.
 - **[bulletproof-rust-web](https://github.com/minikin/claude-skills/blob/main/skills/bulletproof-rust-web/SKILL.md)**
 — Axum, Tokio, SQLx and Tower: layering, domain types, error handling,
