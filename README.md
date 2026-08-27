@@ -47,7 +47,7 @@ bash install.sh .
 |              | What lands in your project                                                                                                 |
 | ------------ | -------------------------------------------------------------------------------------------------------------------------- |
 | **Commands** | the nine slash commands under `.claude/commands/keeler/` — `/keeler:feature`, `:spec`, `:tasks`, `:tdd`, `:qa`, `:review`, `:mutants`, `:fix`, `:graph` — plus two skills and `specs/TEMPLATE.md` |
-| **Gates**    | a `Justfile` and the configs behind it: `just dev`, `test`, `lint`, `cov`, `crap`, `crap-baseline`, `crap-delta`, `mutants-diff` — the linear road, and what CI runs |
+| **Gates**    | a `Justfile` — under your own spelling if you already have one, since `just` refuses to run with two — and the configs behind it: `just dev`, `test`, `lint`, `cov`, `crap`, `crap-baseline`, `crap-delta`, `mutants-diff` — the linear road, and what CI runs |
 | **Graph mode** | in the same `Justfile`, the recipes for the parallel road — `keeler-feature-branch`, `keeler-graph`, `keeler-fan-out`, `keeler-spawn`, `keeler-status`, `keeler-resume`, `keeler-branch`, `keeler-land` — plus `scripts/keeler-graph.sh`. Opt-in: unused, they cost nothing |
 | **Rules**    | `.claude/keeler.md`, imported by `CLAUDE.md` with one line — your `CLAUDE.md` is otherwise untouched                       |
 | **Guide**    | `KEELER.md` — the same workflow explained for humans: why each gate exists, and the graph-mode day start to finish          |
@@ -63,6 +63,11 @@ is `.claude/keeler.md`, which Keeler owns — an upgrade replaces it and keeps
 your previous copy as `.claude/keeler.md.bak`. Running it twice changes
 nothing. `just keeler-upgrade` re-runs it later; the version you have is
 recorded at the top of `.claude/keeler.md`.
+
+It refuses rather than install into a project it would break: a directory
+with no `Cargo.toml`, a `Cargo.toml` cargo cannot read, or one already
+holding two justfiles — a state `just` will not run in, and one Keeler
+will not add to.
 
 ## The first day
 
