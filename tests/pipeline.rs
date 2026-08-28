@@ -121,7 +121,9 @@ fn the_rules_warn_that_a_skipped_review_goes_unnoticed() {
     );
 }
 
-// Spec 08 — the pipeline enforces itself.
+// Spec 08 — the pipeline enforces itself. Unlike the tests above, this
+// one is about our own repository's workflow, not the shipped commands —
+// it holds nowhere but here.
 
 #[test]
 fn this_repository_runs_the_check_it_ships() {
@@ -138,8 +140,13 @@ fn this_repository_runs_the_check_it_ships() {
         "ci.yml has no review-record job — the check ships to adopters but never ran here",
     );
     let ours = job_block(&ci, "review-record");
+    // Trailing whitespace aside: a blank line separating this job from one
+    // added after it belongs to the file's layout, not to the job, and
+    // `job_block` keeps it — equality over it would cry drift at an
+    // invisible diff the moment either file gains a job below this one.
     assert_eq!(
-        ours, shipped,
+        ours.trim_end(),
+        shipped.trim_end(),
         "ci.yml's review-record job has drifted from templates/keeler.yml — \
          the copy is verbatim, `fetch-depth: 0` and all",
     );

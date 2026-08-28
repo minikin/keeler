@@ -251,14 +251,10 @@ jobs:
           ./install.sh "$RUNNER_TEMP/fallback"
           cargo nextest --version
 
-  # Copied verbatim from templates/keeler.yml — tests/pipeline.rs holds
-  # the two identical, so change the template and re-copy rather than
-  # editing here (that includes version bumps like checkout@v6).
-  # A task branch — keeler/<spec-slug>/<task-id> — must carry the record
-  # /keeler:review writes, and the record must name a commit this branch
-  # made. Existence alone is a gate `touch` satisfies; ancestry of the head
-  # alone lets the merge base through, and that covers none of the branch's
-  # work. So: an ancestor of the head, and not of the base.
+  # Copied verbatim from templates/keeler.yml, which also says why the
+  # check has the shape it has — tests/pipeline.rs holds the two copies
+  # identical, so change the template and re-copy rather than editing
+  # here (that includes version bumps like checkout@v6).
   review-record:
     name: Review record
     if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'keeler/')
