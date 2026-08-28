@@ -43,7 +43,7 @@ Not every change is a feature. Pick the lightest class that honestly fits — an
 | Class       | When                                                 | Pipeline                                                                                 |
 | ----------- | ---------------------------------------------------- | ---------------------------------------------------------------------------------------- |
 | **Feature** | New behavior, changed behavior, new API              | Full: `/keeler:spec → approve → /keeler:tasks → /keeler:tdd → /keeler:qa → /keeler:review → /keeler:mutants`                       |
-| **Bugfix**  | Existing behavior is wrong                           | `/keeler:fix`: failing regression test first → minimal fix → `just dev` + `just mutants-diff`   |
+| **Bugfix**  | Existing behavior is wrong                           | `/keeler:fix`: tight failing regression test first → minimise the repro → ranked hypotheses → minimal fix → `just dev` + `just mutants-diff`   |
 | **Trivial** | Docs, comments, config, renames — no behavior change | Fast path: `just lint` (plus `just test` if code was touched at all); no spec, no review |
 
 Rule of thumb: if you're debating whether it changes behavior, it's not trivial. If a "trivial" change makes any test fail, it wasn't trivial — reclassify.

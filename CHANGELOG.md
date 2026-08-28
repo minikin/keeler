@@ -9,6 +9,25 @@ Installations pin a version with `KEELER_REF` and record it at the top of
 
 ## [Unreleased]
 
+### Changed
+
+- **/keeler:spec interviews in rounds.** The clarify step is now a
+  mechanism, not a wish: open questions form a tree, the frontier — every
+  question whose prerequisites are settled — is asked in one numbered
+  round with a recommended answer attached to each, facts are looked up
+  rather than asked, and the interview ends when the frontier is empty.
+  Each question is phrased as the scenario it will become, so the settled
+  frontier reads straight into the Acceptance Tests. Adapted from
+  mattpocock/skills' `grilling`.
+- **/keeler:fix gained a diagnosis discipline.** The regression test must
+  be tight — red on the user's exact symptom, deterministic, seconds —
+  and reproduction is claimed only by showing the red run; a flaky bug is
+  reproduced by raising its rate under proptest, never by rerunning until
+  it fails. Two new steps: minimise the repro until every element is
+  load-bearing, and rank 3–5 falsifiable hypotheses before touching code
+  — skipped, saying so, when minimisation has already cornered the cause.
+  Adapted from mattpocock/skills' `diagnosing-bugs`.
+
 ## [0.4.1] — 2026-08-27
 
 Four bugs, three of them found by installing Keeler into a project that

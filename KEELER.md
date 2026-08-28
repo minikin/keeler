@@ -56,7 +56,7 @@ for big ones too. So the first question is always: *what kind of change is this?
 flowchart TD
     A[Incoming change] --> B{Does it change<br/>behavior?}
     B -- "No — docs, comments,<br/>config, renames" --> C[<b>Trivial: fast path</b><br/>just lint<br/>+ just test if code touched]
-    B -- "Yes — existing behavior<br/>is wrong" --> D[<b>Bugfix: /keeler:fix</b><br/>failing regression test first,<br/>then the minimal fix]
+    B -- "Yes — existing behavior<br/>is wrong" --> D[<b>Bugfix: /keeler:fix</b><br/>failing regression test first,<br/>minimised, hypotheses ranked,<br/>then the minimal fix]
     B -- "Yes — new or changed<br/>behavior, new API" --> E[<b>Feature: /keeler:feature</b><br/>full pipeline below]
     C --> F[English summary,<br/>commit on confirmation]
     D --> G[just dev + mutants on<br/>the changed lines] --> F
@@ -198,7 +198,7 @@ detached session, which is what makes the runs both parallel and watchable.
 | **/keeler:review**               | Spec-conformance check + independent generic review                        | Scope creep; code that satisfies the letter of tests but not the spec                |
 | **/keeler:mutants**              | Injects bugs; every one must be caught by a test                           | Assertion-free or tautological tests — the classic weakness of generated test suites |
 | **CRAP delta**                   | Compares scores before/after the feature                                   | Slow erosion: each change "fine", the codebase quietly getting worse                 |
-| **/keeler:fix** (bugfix road)    | Failing regression test before any fix; minimal change after               | "Fixing" what was never reproduced; drive-by rewrites hiding inside a bugfix         |
+| **/keeler:fix** (bugfix road)    | Failing regression test, minimised, before any fix; minimal change after   | "Fixing" what was never reproduced, or the first plausible cause; drive-by rewrites hiding inside a bugfix |
 
 Behind the stages sit the gates themselves, and each catches what the
 others miss:
