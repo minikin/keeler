@@ -177,7 +177,59 @@ And   that an adopting project's review stage remains unenforced
 
 ## Tasks
 
-_Empty until /keeler:tasks runs against the approved spec._
+Each task lists its scenarios, the test types that pin it, and — when it
+depends on earlier tasks — a `Needs:` naming them. The core splits into
+one module per input (`xtask/src/pipeline/` — decision, records,
+backlog, specs) so the three parsers can be built in parallel without
+touching one region. Acceptance tests land in `tests/pipeline.rs`, each
+task under its own test functions; the two CI tasks each add their own
+job block to `.github/workflows/ci.yml` under its own job name.
+
+- [ ] **T1 — The decision: ticked × records × backlog → what is
+      missing.** The pure core and its types; coverage means a pass
+      record or an unrecorded backlog line. Scenarios: _A task ticked
+      without a review is caught_, _A reviewed task passes, and the gate
+      says what it counted_. Tests: unit + property (gate soundness: no
+      false pass, no false failure).
+- [ ] **T2 — The record grammar: four headers, a verdict, or a refusal
+      naming the file.** Parsing and validation of
+      `reviews/<slug>/<task>.md`; a fail verdict fails its task whatever
+      else holds. Needs: T1. Scenarios: _A malformed record is refused,
+      not misread_, _A fail verdict contradicts a ticked box_. Tests:
+      unit + property (record dominance).
+- [ ] **T3 — The backlog: explicit debt, refused when it lies.**
+      Parsing `reviews/BACKLOG.md`; duplicates and unparseable lines are
+      refusals naming the line. Needs: T1. Scenarios: _Accepted debt is
+      explicit, and adding to it is a diff_, _A duplicate backlog line
+      is refused, naming the line_. Tests: unit + property (debt
+      monotonicity).
+- [ ] **T4 — The spec reader, and the promise Implemented makes.**
+      Ticked tasks from every `specs/*.md` but the template; an
+      Implemented spec with an unticked or uncovered task is named.
+      Needs: T1. Scenarios: _An Implemented spec vouches for every
+      task_. Tests: unit + acceptance.
+- [ ] **T5 — The command: `cargo xtask pipeline-check`, and the debt on
+      the books.** The impure shell over the core; seeds
+      `reviews/BACKLOG.md` with the thirty-nine so this repository
+      passes its own gate. Needs: T2, T3, T4. Scenarios: _The gate needs
+      no git history_. Tests: acceptance.
+- [ ] **T6 — The release guard refuses a skipped pipeline.** The guard
+      runs the gate before anything is published. Needs: T5. Scenarios:
+      _A release refuses a pipeline that was skipped_. Tests: unit +
+      acceptance.
+- [ ] **T7 — Wired where the gates live.** `just dev` and a CI job of
+      its own (`pipeline-check:`) run the command. Needs: T5. Scenarios:
+      _The gate is one recipe away, everywhere the gates live_. Tests:
+      acceptance.
+- [ ] **T8 — This repository runs the check it ships.** The
+      `review-record:` job copied verbatim from `templates/keeler.yml`
+      into our own workflow. Scenarios: _This repository runs the check
+      it ships_. Tests: acceptance.
+- [ ] **T9 — The rules stop claiming nothing can notice.**
+      `.claude/keeler.md`'s review-stage warning and CONTRIBUTING's
+      "Nothing enforces this" both redrawn: enforced here, documented
+      for adopters. Needs: T7. Scenarios: _The rules stop claiming
+      nothing can notice_. Tests: acceptance.
 
 ---
 
