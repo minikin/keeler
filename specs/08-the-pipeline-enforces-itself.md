@@ -221,7 +221,7 @@ job block to `.github/workflows/ci.yml` under its own job name.
       its own (`pipeline-check:`) run the command. Needs: T5. Scenarios:
       _The gate is one recipe away, everywhere the gates live_. Tests:
       acceptance.
-- [ ] **T8 — This repository runs the check it ships.** The
+- [x] **T8 — This repository runs the check it ships.** The
       `review-record:` job copied verbatim from `templates/keeler.yml`
       into our own workflow. Scenarios: _This repository runs the check
       it ships_. Tests: acceptance.
