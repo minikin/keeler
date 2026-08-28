@@ -125,11 +125,9 @@ mod tests {
         // When the gate decides
         let decision = decide(&ticked, &[], &[]);
         // Then it fails, naming the spec and the task
-        let Decision::Missing(missing) = decision else {
-            panic!("an unreviewed tick passed the gate: {decision:?}");
-        };
-        assert_eq!(missing.len(), 1);
-        assert_eq!(missing[0].to_string(), "08-pipeline/t1");
+        assert_eq!(decision, Decision::Missing(vec![task("08-pipeline", "t1")]));
+        // The address the failure prints spells out both halves.
+        assert_eq!(task("08-pipeline", "t1").to_string(), "08-pipeline/t1");
     }
 
     #[test]
