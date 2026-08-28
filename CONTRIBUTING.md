@@ -43,6 +43,38 @@ Several of these are gate-checked: tests assert that the README explains
 verification, that the rules and `KEELER.md` both walk through a graph-mode
 day, and that `VERSION`, the rules marker and `CHANGELOG.md` agree.
 
+## Writing for the agent
+
+The files under `.claude/commands/keeler/` and `.claude/skills/` are not
+documentation about the workflow — they *are* the workflow, executed by an
+agent that reads them fresh every run. Prose quality there is behavior.
+When you touch one, measure it against three levers (the framing comes
+from mattpocock/skills' `writing-for-agents`; the bars are ours):
+
+- **The description is the trigger.** A skill fires, or doesn't, on its
+  `description:` line alone — the body is never seen until it has fired.
+  Lead with the words that decide invocation, name the distinct cases that
+  should reach it, and cut everything the body already says. A right body
+  behind a weak description is a coin-flip, and the fix is the wording,
+  not more wording.
+- **Every step ends on a checkable bound.** "The interview is done when
+  the frontier is empty" can be verified; "until understanding is reached"
+  invites declaring victory early. The bound also sets the workload:
+  "every scenario maps to a test named after it" forces legwork that
+  "add tests" does not. If a step's done-condition can't be told from its
+  not-done, sharpen it before shipping.
+- **One word, used the same way everywhere, beats a clause.** *Tight*,
+  *frontier*, *load-bearing*, *oracle* — each names a discipline the
+  model already knows, so repeating the word re-invokes the discipline at
+  the cost of a token. Spelling the definition out at every site spends
+  tokens teaching what a shared term recruits for free. When the same
+  idea appears in three files under three phrasings, that is a rename
+  waiting to happen.
+
+The same rule as code review applies: a step that restates what the agent
+would do anyway is noise — delete it. What earns its place is the
+instruction the agent would *not* derive on its own.
+
 ## What CI checks
 
 Everything `just dev` does, plus end-to-end installer runs on Linux and
