@@ -1,8 +1,27 @@
 # Spec 05 — The installer becomes Rust, and the shell ends
 
-**Status:** Draft
+**Status:** Retired
 **Effort:** Large
 **Module:** `keeler/`, `xtask/`, `.github/workflows/release.yml`, `tests/`
+
+## Why this spec is retired
+
+The migration was attempted, measured, and found to cost more than it
+bought. Four tasks of eight were built on `feat/installer-in-rust`:
+248 lines of working shell became ~880 lines of product Rust plus ~1,500
+of tests, and along the way the rewrite introduced three classes of
+defect the shell version never had — one of them destroying a project's
+own file while reporting success. Every one was caught by review; none
+by the 165 green tests, 111 killed mutants or the clean CRAP run. The
+gates this spec promised to extend were measuring the code we wrote, not
+the promises the installer makes.
+
+An installer is thirty careful copies — shell's native genre and Rust's
+worst one. `install.sh` stays: it is exercised by 26 subprocess
+scenarios against real projects on every CI run, and its weakness (it
+sits outside the mutation gate) has cost one sed-dialect bug in the
+project's life. The full record, including what to test first if anyone
+ever resumes this, is `HANDOVER.md` on the parked branch.
 
 ## Context
 
