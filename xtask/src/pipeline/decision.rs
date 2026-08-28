@@ -16,11 +16,15 @@ pub struct TaskId {
 }
 
 impl TaskId {
+    /// The task id is lowercased on the way in, as it is on the way into
+    /// every path: the spec's checkbox says `T1`, the record lives at
+    /// `t1.md`, and they must be the same address here or a reviewed task
+    /// reads as missing.
     #[must_use]
     pub fn new(spec: impl Into<String>, task: impl Into<String>) -> Self {
         Self {
             spec: spec.into(),
-            task: task.into(),
+            task: task.into().to_lowercase(),
         }
     }
 }
@@ -139,6 +143,16 @@ mod tests {
         let decision = decide(&ticked, &records, &[]);
         // Then it passes, and says how many ticked tasks it accounted for
         assert_eq!(decision, Decision::AllAccounted { ticked: 2 });
+    }
+
+    #[test]
+    fn a_task_id_is_one_address_whatever_the_case() {
+        // The spec's checkbox says `T1`; the record lives at
+        // `reviews/<slug>/t1.md`. One task, one address — otherwise a
+        // reviewed task reads as missing because two parsers disagreed
+        // on a letter's case.
+        assert_eq!(task("08-pipeline", "T1"), task("08-pipeline", "t1"));
+        assert_eq!(task("08-pipeline", "T1").to_string(), "08-pipeline/t1");
     }
 
     #[test]
