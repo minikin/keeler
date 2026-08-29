@@ -217,7 +217,7 @@ job block to `.github/workflows/ci.yml` under its own job name.
       runs the gate before anything is published. Needs: T5. Scenarios:
       _A release refuses a pipeline that was skipped_. Tests: unit +
       acceptance.
-- [ ] **T7 — Wired where the gates live.** `just dev` and a CI job of
+- [x] **T7 — Wired where the gates live.** `just dev` and a CI job of
       its own (`pipeline-check:`) run the command. Needs: T5. Scenarios:
       _The gate is one recipe away, everywhere the gates live_. Tests:
       acceptance.

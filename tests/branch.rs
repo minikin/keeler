@@ -175,12 +175,30 @@ fn branch_gates_are_diff_based_only() {
 fn the_branch_gate_leaves_dev_alone() {
     // The adopter on the linear road must see no change: the branch gate
     // *calls* dev, it does not restate it or add a step to it.
+    //
+    // Byte equality with `dev: fmt lint test crap` said that once and says
+    // it no longer: spec 08's T7 gave `dev` a body of its own, keyed on a
+    // marker file only this repository has, and `tests/pipeline.rs` runs
+    // the recipe in a project without that marker to prove it is inert
+    // there. What this test still owns is the branch gate's own two steps
+    // staying out of `dev` — they are what would make the linear road
+    // diff-based behind an adopter's back.
     let justfile = std::fs::read_to_string(repo_root().join("Justfile")).unwrap();
+    let dev = recipe_block(&justfile, "dev");
+    // The dependency line is still pinned exactly, and not by a prefix: a
+    // fifth gate appended to it — `cov`, `mutants-all` — is precisely the
+    // change byte equality was here to catch.
     assert_eq!(
-        recipe_block(&justfile, "dev"),
-        "dev: fmt lint test crap",
-        "`just dev` is no longer the recipe it was"
+        dev.lines().next(),
+        Some("dev: fmt lint test crap"),
+        "`just dev` no longer runs the four gates it did, and only those:\n{dev}"
     );
+    for gate in ["crap-delta", "mutants-diff"] {
+        assert!(
+            !dev.contains(gate),
+            "the branch gate's `{gate}` has moved into `just dev`:\n{dev}"
+        );
+    }
 }
 
 #[test]

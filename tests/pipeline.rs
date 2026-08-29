@@ -10,9 +10,11 @@
 
 mod common;
 
+use std::os::unix::fs::PermissionsExt as _;
 use std::path::PathBuf;
+use std::process::Command;
 
-use common::{job_block, repo_root, shipped_workflow};
+use common::{Repo, job_block, repo_root, said, shipped_workflow};
 
 fn command(name: &str) -> String {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -156,5 +158,183 @@ fn this_repository_runs_the_check_it_ships() {
         ours.contains("github.event_name == 'pull_request'")
             && ours.contains("startsWith(github.head_ref, 'keeler/')"),
         "ci.yml's review-record job does not key on keeler/* pull requests:\n{ours}",
+    );
+}
+
+// T7 — wired where the gates live.
+
+/// Stands in for cargo, recording each invocation and answering nothing.
+/// Nothing is answered on purpose: `test` and `crap` read `cargo metadata`
+/// to decide whether this project has any Rust to measure, and silence is
+/// "none" — so the four gates ahead of the pipeline check cost a fork
+/// apiece and the recipe under test is the only one that does any work.
+/// `KEELER_STUB_CARGO_FAIL` names the one invocation that refuses, which
+/// is how a gate's verdict is made to reach `just dev`'s exit code.
+const CARGO_STUB: &str = r#"#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$KEELER_STUB_CARGO_LOG"
+if [ "$*" = "${KEELER_STUB_CARGO_FAIL:-}" ]; then exit 3; fi
+exit 0
+"#;
+
+/// Stands in for shellcheck, which `lint` runs over shell this fixture has
+/// none of.
+const SHELLCHECK_STUB: &str = "#!/usr/bin/env bash\nexit 0\n";
+
+/// `just dev` over the shipped Justfile in a throwaway project, returning
+/// what it did — its exit status, and what it asked cargo for, in order.
+/// The recipe is the real one: a Justfile read as text cannot say what
+/// `just dev` runs, because the command could sit in a recipe nothing
+/// calls, and it cannot say whether a refusal is passed on or swallowed.
+///
+/// `marker` is `templates/keeler.yml`, the file only Keeler's own
+/// repository has and the same one `lint` keys its shellcheck branch on.
+/// `refuses`, when given, is the cargo invocation the stub exits 3 on.
+fn run_dev(name: &str, marker: bool, refuses: Option<&str>) -> (std::process::Output, Vec<String>) {
+    let repo = Repo::new("dev-gate", name);
+    std::fs::copy(repo_root().join("Justfile"), repo.path().join("Justfile")).unwrap();
+    if marker {
+        repo.write("templates/keeler.yml", "# the marker, not the workflow\n");
+    }
+    let bin = repo.path().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    for (tool, body) in [("cargo", CARGO_STUB), ("shellcheck", SHELLCHECK_STUB)] {
+        let stub = bin.join(tool);
+        std::fs::write(&stub, body).unwrap();
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let log = repo.path().join("cargo-calls");
+    let output = Command::new("just")
+        .arg("dev")
+        .current_dir(repo.path())
+        .env(
+            "PATH",
+            format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
+        )
+        .env("KEELER_STUB_CARGO_LOG", &log)
+        .env("KEELER_STUB_CARGO_FAIL", refuses.unwrap_or_default())
+        .output()
+        .expect("failed to run just dev — is just on PATH?");
+    let calls = std::fs::read_to_string(&log)
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_string)
+        .collect();
+    (output, calls)
+}
+
+/// `run_dev` where every gate passes, which is every case but one.
+fn dev_calls(name: &str, marker: bool) -> Vec<String> {
+    let (output, calls) = run_dev(name, marker, None);
+    assert!(
+        output.status.success(),
+        "`just dev` failed over the shipped Justfile:\n{}",
+        said(&output)
+    );
+    calls
+}
+
+/// The lines of one top-level key of a workflow — `on:` here, which no
+/// `job_block` reaches.
+fn top_level_block(workflow: &str, key: &str) -> String {
+    let head = format!("{key}:");
+    let mut lines = workflow.lines().skip_while(|line| line.trim_end() != head);
+    let first = lines.next().unwrap_or_else(|| panic!("no `{key}:` key"));
+    let mut block = vec![first];
+    for line in lines {
+        if !line.trim().is_empty() && !line.starts_with(' ') {
+            break;
+        }
+        block.push(line);
+    }
+    block.join("\n")
+}
+
+#[test]
+fn the_gate_is_one_recipe_away_everywhere_the_gates_live() {
+    // Given the Justfile and the CI workflow of this repository
+
+    // When `just dev` runs — the shipped recipe over a project carrying
+    // the marker that says the gate lives here
+    let calls = dev_calls("wired", true);
+
+    // Then it runs `cargo xtask pipeline-check`, and runs it last: the
+    // gate is milliseconds and the four ahead of it are minutes, so a
+    // pipeline check that ran first would send a developer back to a
+    // review stage before their tests had compiled
+    assert_eq!(
+        calls.last().map(String::as_str),
+        Some("xtask pipeline-check"),
+        "`just dev` does not end with the pipeline gate: {calls:?}",
+    );
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|call| call.starts_with("xtask pipeline-check"))
+            .count(),
+        1,
+        "`just dev` runs the pipeline gate more than once: {calls:?}",
+    );
+
+    // And a gate that refuses is a `just dev` that refuses. Running the
+    // command is not the requirement — reporting what it decided is:
+    // `cargo xtask pipeline-check || true` would satisfy every assertion
+    // above and leave the gate decorative.
+    let (refused, calls) = run_dev("refused", true, Some("xtask pipeline-check"));
+    assert!(
+        !refused.status.success(),
+        "`just dev` passed over a pipeline gate that refused: {calls:?}\n{}",
+        said(&refused),
+    );
+
+    // And when CI runs on a push or a pull request, a job of its own runs
+    // the same command
+    let ci = std::fs::read_to_string(repo_root().join(".github/workflows/ci.yml")).unwrap();
+    let triggers = top_level_block(&ci, "on");
+    for event in ["push:", "pull_request:"] {
+        assert!(
+            triggers.contains(event),
+            "ci.yml no longer runs on `{event}`:\n{triggers}",
+        );
+    }
+    assert!(
+        ci.lines()
+            .any(|line| line.trim_end() == "  pipeline-check:"),
+        "ci.yml has no pipeline-check job — the gate would run on one developer's machine and nowhere else",
+    );
+    let job = job_block(&ci, "pipeline-check");
+    assert!(
+        job.contains("cargo xtask pipeline-check"),
+        "ci.yml's pipeline-check job does not run the command:\n{job}",
+    );
+    // And nothing narrows it away from either event. A job whose `if:`
+    // keys on a branch or an event runs on the other one never, and the
+    // gate's whole point is that no route to main skips it.
+    assert!(
+        !job.lines().any(|line| line.trim_start().starts_with("if:")),
+        "ci.yml's pipeline-check job is conditional — it must run on a push and on a pull request alike:\n{job}",
+    );
+}
+
+#[test]
+fn the_gate_stays_out_of_an_adopting_projects_dev() {
+    // Given a project Keeler installed into — the same Justfile, and none
+    // of the repository machinery the gate is: no xtask crate, and not
+    // even the `cargo xtask` alias, which is never installed
+    // When `just dev` runs there
+    let calls = dev_calls("adopter", false);
+
+    // Then the gate is inert. Shipping it would fail every adopter's gate
+    // on a cargo subcommand their project has never heard of, and the spec
+    // says plainly that their review stage stays documented, not enforced.
+    assert!(
+        !calls.iter().any(|call| call.starts_with("xtask")),
+        "`just dev` runs the gate in a project that does not have it: {calls:?}",
+    );
+
+    // And the gates they do have ran, so this proves inertness and not a
+    // recipe that failed before reaching anything
+    assert!(
+        calls.iter().any(|call| call.starts_with("clippy")),
+        "`just dev` did not reach the lint gate at all: {calls:?}",
     );
 }
