@@ -6,6 +6,11 @@
 //! a spec says. Like that parser, this one refuses what it cannot read
 //! instead of dropping it: a ticked task that vanishes in parsing is a
 //! task the gate silently vouched for.
+//!
+//! Agreement sets the boundary too. Items are anchored at column zero in
+//! both grammars, so an indented `- [ ]` is a continuation of the item
+//! above it — prose, in the awk parser and here alike. Refusing it here
+//! would be the stricter reading, and the two would disagree.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -97,10 +102,10 @@ impl Reader {
         }
 
         if !self.status_read
-            && let Some(value) = line.strip_prefix("**Status:**")
+            && let Some(value) = status_value(line)
         {
             self.status_read = true;
-            self.spec.implemented = value.trim() == "Implemented";
+            self.spec.implemented = value == "Implemented";
         } else if is_tasks_heading(line) {
             self.in_tasks = true;
             self.section_found = true;
@@ -151,6 +156,21 @@ impl Reader {
         }
         Ok(self.spec)
     }
+}
+
+/// The value of a `Status:` line, whatever decorates it.
+///
+/// The Justfile finds this line with `^[*_[:space:]]*Status:` and strips
+/// the same characters off its value, and `keeler-land` writes
+/// `Implemented` into whichever shape the spec already carries. A
+/// stricter grammar here would read a spec as unfinished that the
+/// pipeline had already marked finished — and the promise this module
+/// exists to enforce would go unenforced on the specs that need it.
+fn status_value(line: &str) -> Option<&str> {
+    const DECORATION: [char; 4] = ['*', '_', ' ', '\t'];
+    line.trim_start_matches(DECORATION)
+        .strip_prefix("Status:")
+        .map(|value| value.trim_matches(DECORATION))
 }
 
 /// Whether this line opens the Tasks section: `## Tasks` and nothing else.
@@ -501,6 +521,28 @@ mod tests {
     fn an_implemented_status_is_the_promise() {
         let spec = parse("09-demo", &text("Implemented", "- [x] **T1 — Done.**")).unwrap();
         assert!(spec.implemented);
+    }
+
+    #[test]
+    fn the_status_line_is_read_however_it_is_decorated() {
+        // Given the shapes the Justfile's `^[*_[:space:]]*Status:` accepts —
+        // `keeler-land` writes Implemented into whichever of them the spec
+        // already carries, so a stricter grammar here would read a spec as
+        // unfinished that the pipeline had already marked finished, and the
+        // promise this module exists to enforce would go unenforced
+        for line in [
+            "**Status:** Implemented",
+            "Status: Implemented",
+            "_Status:_ Implemented",
+            "  **Status:**   Implemented  ",
+        ] {
+            let spec = parse(
+                "09-demo",
+                &format!("# Spec\n\n{line}\n\n## Tasks\n\n- [ ] **T1 — Open.**\n"),
+            )
+            .unwrap();
+            assert!(spec.implemented, "`{line}` was not read as Implemented");
+        }
     }
 
     #[test]
