@@ -255,6 +255,27 @@ fn a_tick_this_repository_cannot_account_for_fails_the_command() {
 }
 
 #[test]
+fn a_records_directory_that_cannot_be_read_is_named_by_the_reader() {
+    // Absence the reader forgives — a repository that has reviewed
+    // nothing — but this is not absence: `reviews` is there and is not a
+    // directory, so every record it should hold is unreadable. Read as
+    // "no records", a repository whose whole evidence the gate could not
+    // see would look exactly like one that owes a review, and the reader
+    // would say nothing about the file that caused it.
+    let root = repository("reviews-a-file", &[("reviews", "not a directory\n")]);
+
+    let refusal = records::read_from(&root.join("reviews"))
+        .expect_err("an unreadable records directory was read as no records")
+        .to_string();
+    assert!(
+        refusal.contains("reviews"),
+        "the refusal does not name what it could not read: {refusal}",
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn this_repository_passes_its_own_gate() {
     // Given this repository, whose thirty-nine historical ticks are on the
     // committed backlog and whose every later tick holds a record
