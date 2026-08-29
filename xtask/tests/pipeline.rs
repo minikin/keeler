@@ -335,3 +335,79 @@ fn this_repository_passes_its_own_gate() {
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..")
 }
+
+// T6 — the release guard refuses a skipped pipeline.
+
+/// The guard as the release workflow runs it: the shipped binary, for a tag,
+/// in a directory of our making. The exit code is what stands between a
+/// skipped pipeline and a published release, and only the binary has one.
+fn release_guard(root: &Path, tag: &str) -> std::process::Output {
+    std::process::Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .args(["release-guard", tag])
+        .current_dir(root)
+        .output()
+        .expect("failed to run the xtask binary")
+}
+
+/// The release-relevant corner of a repository at 1.2.3, with every version
+/// it states agreeing — so the only thing left for the guard to refuse is
+/// the pipeline.
+const RELEASABLE: [(&str, &str); 4] = [
+    ("VERSION", "1.2.3\n"),
+    (".claude/keeler.md", "<!-- keeler-version: 1.2.3 -->\n"),
+    (
+        "CHANGELOG.md",
+        "# Changelog\n\n## [1.2.3] — 2026-01-01\n\n- an entry\n",
+    ),
+    (
+        "Cargo.toml",
+        "[package]\nname = \"fixture\"\nversion = \"1.2.3\"\n",
+    ),
+];
+
+#[test]
+fn a_release_refuses_a_pipeline_that_was_skipped() {
+    // Given a repository where the gate fails — a ticked task with neither
+    // a review record nor a backlog line — and where nothing else about the
+    // release is wrong
+    let mut files = RELEASABLE.to_vec();
+    files.push((
+        "specs/09-demo.md",
+        "**Status:** Approved\n\n## Tasks\n\n- [x] **T1 — Ticked anyway.**\n",
+    ));
+    let root = repository("release-skipped", &files);
+
+    // When the release guard runs, for the tag its own VERSION asks for
+    let output = release_guard(&root, "v1.2.3");
+
+    // Then it refuses, and its message names the failing task
+    assert!(
+        !output.status.success(),
+        "a release went out over a skipped review:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("09-demo/t1"),
+        "the refusal does not name the failing task: {stderr}",
+    );
+
+    // And the tick is what it refused, not the fixture: record the review
+    // and the very same tag releases. Without this, a guard broken in any
+    // way at all would pass the assertions above.
+    std::fs::create_dir_all(root.join("reviews/09-demo")).unwrap();
+    std::fs::write(
+        root.join("reviews/09-demo/t1.md"),
+        "Spec: 09-demo\nTask: t1\nCommit: abc1234\nVerdict: pass\n\n## Findings\n\nnone\n",
+    )
+    .unwrap();
+    let reviewed = release_guard(&root, "v1.2.3");
+    assert!(
+        reviewed.status.success(),
+        "the guard refuses a release whose pipeline is whole:\n{}{}",
+        String::from_utf8_lossy(&reviewed.stdout),
+        String::from_utf8_lossy(&reviewed.stderr),
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}

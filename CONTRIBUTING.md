@@ -81,6 +81,9 @@ Everything `just dev` does, plus end-to-end installer runs on Linux and
 macOS, a from-scratch bootstrap (the installer installing its own tools,
 including the forced source-compile fallback), and version consistency
 (`VERSION` ↔ the marker in `.claude/keeler.md` ↔ a `CHANGELOG.md` entry).
+The guard that checks that last one also runs the pipeline gate, so CI
+refuses a push whose specs tick a task no review record and no line of
+`reviews/BACKLOG.md` accounts for.
 
 ## Cutting a release
 
@@ -103,6 +106,12 @@ The tag push is what cuts the release: the guard runs, then `just ci`, then
 the notes and the checksum, then `gh release create`. A published release
 is never overwritten, so a bad one has to be deleted rather than fixed —
 which is why the guard refuses before anything is published.
+
+The guard refuses over a skipped review as readily as over a version that
+disagrees: a release is the last moment anyone looks, and it ships whatever
+the specs claim is finished. So a tag over a ticked-but-unreviewed task
+fails here, naming the task — write the review record, or put the task on
+`reviews/BACKLOG.md` as accepted debt, and cut the tag again.
 
 ## Review debt
 
