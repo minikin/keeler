@@ -77,7 +77,11 @@ jobs:
       # every project must agree with it, or users cannot tell what they
       # run. One owner for that law: the same guard the release workflow
       # runs at tag time (the constructed tag makes its tag-check a no-op).
-      - name: VERSION, marker and CHANGELOG agree
+      # That guard also runs the pipeline gate, so this step refuses a task
+      # ticked without a review too — named here, because a check running
+      # under a name that does not mention it is one nobody knows they
+      # have, and nobody notices going away.
+      - name: VERSION, marker and CHANGELOG agree, and no review was skipped
         run: cargo xtask release-guard "v$(tr -d '[:space:]' < VERSION)"
 
   installer:
