@@ -10,7 +10,10 @@
 //! also why the record's address is read off its path and its headers must
 //! agree — see [`filed_as`].
 
+use std::path::{Path, PathBuf};
+
 use super::decision::{Record, TaskId, Verdict};
+use crate::Failure;
 
 /// Why a record was refused, phrased for the person who has to open the
 /// file: which file, and which line it lacks.
@@ -132,6 +135,54 @@ fn header<'line>(
         ));
     }
     Ok(value)
+}
+
+/// Reads every record under `dir` — `reviews/<spec-slug>/<task-id>.md`, one
+/// directory down, which is the only shape that addresses a task.
+///
+/// A file at the top level is not a record: `reviews/BACKLOG.md` lives
+/// there, and reading the debt list as a review would refuse it as
+/// malformed — the gate failing over the file that exists to make it pass.
+/// Inside a record directory, only `*.md` is read; a `.DS_Store` is litter,
+/// not a review, and the task whose record is misnamed still fails loudly
+/// as unreviewed.
+///
+/// # Errors
+///
+/// Names the directory it cannot read, the file it cannot read, and the
+/// record the grammar refuses. An absent `reviews/` is no records at all —
+/// a repository that has reviewed nothing, which fails the moment anything
+/// is ticked.
+pub fn read_from(dir: &Path) -> Result<Vec<Record>, Failure> {
+    let mut records = Vec::new();
+    for spec in sorted(dir)? {
+        if !spec.is_dir() {
+            continue;
+        }
+        for file in sorted(&spec)? {
+            if file.extension().is_some_and(|kind| kind == "md") {
+                let file = file.display().to_string();
+                records.push(parse(&file, &crate::read(&file)?)?);
+            }
+        }
+    }
+    Ok(records)
+}
+
+/// What `dir` holds, in file-name order — the gate's output must not depend
+/// on the filesystem's mood — or nothing at all when `dir` is not there.
+fn sorted(dir: &Path) -> Result<Vec<PathBuf>, Failure> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(why) if why.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(why) => return Err(format!("cannot read {}: {why}", dir.display()).into()),
+    };
+    let mut paths: Vec<PathBuf> = entries
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<Result<_, _>>()
+        .map_err(|why| format!("cannot read {}: {why}", dir.display()))?;
+    paths.sort();
+    Ok(paths)
 }
 
 #[cfg(test)]

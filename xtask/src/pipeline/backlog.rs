@@ -7,7 +7,10 @@
 //! A duplicate or unparseable line is a refusal naming the line, never a
 //! panic — the parked gate's first blocker, now a scenario.
 
+use std::path::Path;
+
 use super::decision::TaskId;
+use crate::Failure;
 
 /// Why the backlog was refused. Each variant names the line — its number
 /// and its text — because "the backlog is malformed" sends the reader
@@ -94,6 +97,25 @@ fn entry(line: &str) -> Option<TaskId> {
                 .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
     };
     (half(spec) && half(task)).then(|| TaskId::new(spec, task))
+}
+
+/// Reads the accepted-debt list at `path`.
+///
+/// # Errors
+///
+/// Names the file it cannot read, and prefixes the file to whichever line
+/// the parser refused — "the backlog is malformed" sends the reader
+/// hunting, `reviews/BACKLOG.md: line 12` sends them to line 12.
+///
+/// An absent file is no debt at all: a repository that owes nothing, whose
+/// every ticked task must then stand on a review record of its own.
+pub fn read_from(path: &Path) -> Result<Vec<TaskId>, Failure> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(why) if why.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(why) => return Err(format!("cannot read {}: {why}", path.display()).into()),
+    };
+    parse(&text).map_err(|refusal| format!("{}: {refusal}", path.display()).into())
 }
 
 #[cfg(test)]
