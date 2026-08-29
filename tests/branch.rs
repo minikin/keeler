@@ -185,9 +185,13 @@ fn the_branch_gate_leaves_dev_alone() {
     // diff-based behind an adopter's back.
     let justfile = std::fs::read_to_string(repo_root().join("Justfile")).unwrap();
     let dev = recipe_block(&justfile, "dev");
-    assert!(
-        dev.starts_with("dev: fmt lint test crap"),
-        "`just dev` no longer runs the four gates it did:\n{dev}"
+    // The dependency line is still pinned exactly, and not by a prefix: a
+    // fifth gate appended to it — `cov`, `mutants-all` — is precisely the
+    // change byte equality was here to catch.
+    assert_eq!(
+        dev.lines().next(),
+        Some("dev: fmt lint test crap"),
+        "`just dev` no longer runs the four gates it did, and only those:\n{dev}"
     );
     for gate in ["crap-delta", "mutants-diff"] {
         assert!(

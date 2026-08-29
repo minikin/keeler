@@ -168,8 +168,11 @@ fn this_repository_runs_the_check_it_ships() {
 /// to decide whether this project has any Rust to measure, and silence is
 /// "none" — so the four gates ahead of the pipeline check cost a fork
 /// apiece and the recipe under test is the only one that does any work.
+/// `KEELER_STUB_CARGO_FAIL` names the one invocation that refuses, which
+/// is how a gate's verdict is made to reach `just dev`'s exit code.
 const CARGO_STUB: &str = r#"#!/usr/bin/env bash
 printf '%s\n' "$*" >> "$KEELER_STUB_CARGO_LOG"
+if [ "$*" = "${KEELER_STUB_CARGO_FAIL:-}" ]; then exit 3; fi
 exit 0
 "#;
 
@@ -177,14 +180,16 @@ exit 0
 /// none of.
 const SHELLCHECK_STUB: &str = "#!/usr/bin/env bash\nexit 0\n";
 
-/// The whole of what `just dev` asked cargo for, in order, over the shipped
-/// Justfile in a throwaway project. The recipe is the real one — the
-/// question is what it runs, and a Justfile read as text cannot answer it:
-/// the command could sit in a recipe nothing calls.
+/// `just dev` over the shipped Justfile in a throwaway project, returning
+/// what it did — its exit status, and what it asked cargo for, in order.
+/// The recipe is the real one: a Justfile read as text cannot say what
+/// `just dev` runs, because the command could sit in a recipe nothing
+/// calls, and it cannot say whether a refusal is passed on or swallowed.
 ///
 /// `marker` is `templates/keeler.yml`, the file only Keeler's own
 /// repository has and the same one `lint` keys its shellcheck branch on.
-fn dev_calls(name: &str, marker: bool) -> Vec<String> {
+/// `refuses`, when given, is the cargo invocation the stub exits 3 on.
+fn run_dev(name: &str, marker: bool, refuses: Option<&str>) -> (std::process::Output, Vec<String>) {
     let repo = Repo::new("dev-gate", name);
     std::fs::copy(repo_root().join("Justfile"), repo.path().join("Justfile")).unwrap();
     if marker {
@@ -206,18 +211,26 @@ fn dev_calls(name: &str, marker: bool) -> Vec<String> {
             format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
         )
         .env("KEELER_STUB_CARGO_LOG", &log)
+        .env("KEELER_STUB_CARGO_FAIL", refuses.unwrap_or_default())
         .output()
         .expect("failed to run just dev — is just on PATH?");
+    let calls = std::fs::read_to_string(&log)
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_string)
+        .collect();
+    (output, calls)
+}
+
+/// `run_dev` where every gate passes, which is every case but one.
+fn dev_calls(name: &str, marker: bool) -> Vec<String> {
+    let (output, calls) = run_dev(name, marker, None);
     assert!(
         output.status.success(),
         "`just dev` failed over the shipped Justfile:\n{}",
         said(&output)
     );
-    std::fs::read_to_string(&log)
-        .unwrap_or_default()
-        .lines()
-        .map(str::to_string)
-        .collect()
+    calls
 }
 
 /// The lines of one top-level key of a workflow — `on:` here, which no
@@ -260,6 +273,17 @@ fn the_gate_is_one_recipe_away_everywhere_the_gates_live() {
             .count(),
         1,
         "`just dev` runs the pipeline gate more than once: {calls:?}",
+    );
+
+    // And a gate that refuses is a `just dev` that refuses. Running the
+    // command is not the requirement — reporting what it decided is:
+    // `cargo xtask pipeline-check || true` would satisfy every assertion
+    // above and leave the gate decorative.
+    let (refused, calls) = run_dev("refused", true, Some("xtask pipeline-check"));
+    assert!(
+        !refused.status.success(),
+        "`just dev` passed over a pipeline gate that refused: {calls:?}\n{}",
+        said(&refused),
     );
 
     // And when CI runs on a push or a pull request, a job of its own runs
