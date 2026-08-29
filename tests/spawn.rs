@@ -964,6 +964,36 @@ fn the_runner_parses_under_the_bash_that_will_run_it() {
 }
 
 #[test]
+fn the_runner_shares_one_compile_cache_across_worktrees() {
+    // Given a spawn, and the runner it wrote
+    let project = Project::new("sccache");
+    let output = project.spawn(SLUG, "T3");
+    assert!(output.status.success(), "{}", both(&output));
+    let ran = std::fs::read_to_string(project.runs(SLUG).join("t3.sh")).unwrap();
+
+    // Then it reaches for sccache when the machine has it. Every worktree
+    // starts with a cold target/, so a wave compiles the same workspace
+    // once per task — with one shared cache, once altogether. The check
+    // is at run time, not spawn time, so a runner re-run by hand on
+    // another machine still decides for itself.
+    assert!(
+        ran.contains("command -v sccache"),
+        "the runner never checks for sccache:\n{ran}"
+    );
+    assert!(
+        ran.contains("RUSTC_WRAPPER=sccache"),
+        "the runner never points rustc at the shared cache:\n{ran}"
+    );
+    // sccache refuses to cache incremental artifacts, and cargo's dev
+    // profile is incremental by default — with the wrapper on but
+    // incremental left on, every build would miss.
+    assert!(
+        ran.contains("CARGO_INCREMENTAL=0"),
+        "the runner leaves incremental compilation defeating the cache:\n{ran}"
+    );
+}
+
+#[test]
 fn the_log_carries_progress_and_not_only_the_final_answer() {
     // Given the runner a spawn writes
     let project = Project::new("verbose-log");

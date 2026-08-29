@@ -465,6 +465,16 @@ _write-runner SPEC TASK BRANCH WORKTREE RUNNER EXIT_FILE LOG_FILE STREAM_FILE:
     # Written by 'just keeler-spawn' for $branch. Re-runnable by hand:
     #     bash "$runner"
     cd "$worktree" || exit 1
+    # One compile cache across every worktree: a wave otherwise builds
+    # the same workspace from scratch once per task. Decided at run time,
+    # not spawn time, so a runner re-run by hand on another machine still
+    # answers for itself. Incremental compilation is turned off with the
+    # wrapper on — sccache refuses to cache incremental artifacts, and
+    # cargo would otherwise choose them for every dev build.
+    if command -v sccache >/dev/null 2>&1; then
+        export RUSTC_WRAPPER=sccache
+        export CARGO_INCREMENTAL=0
+    fi
     prompt=\$(cat <<'KEELER_PROMPT'
     $prompt
     KEELER_PROMPT
