@@ -143,6 +143,17 @@ And   the shipped rules say this is the one place an agent commits
       without asking, and why the spawn was the asking
 ```
 
+### Scenario: A spawned agent is told its turn is the only one
+
+```
+Given the runner keeler-spawn writes
+When  its prompt is read
+Then  it says the session ends with its reply and nothing resumes it
+And   it forbids putting the gate in the background to continue
+      afterwards — the pipeline, commits included, finishes inside
+      the turn
+```
+
 ### Scenario: A finished agent leaves a verdict the gate decided, and a log
 
 ```
