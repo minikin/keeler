@@ -567,6 +567,19 @@ fn a_spawned_agent_is_told_its_turn_is_the_only_one() {
         lower.contains("background"),
         "the prompt never forbids backgrounding the gate:\n{ran}"
     );
+    // And the trap that beat the first wording is named: a harness that
+    // backgrounds a long command itself and promises a notification the
+    // headless session will never receive
+    assert!(
+        lower.contains("poll"),
+        "the prompt never says to poll a backgrounded command in-turn:\n{ran}"
+    );
+    // And the belt under the prose: the gate is given room to finish in
+    // the foreground, so the harness never backgrounds it at all
+    assert!(
+        ran.contains("BASH_DEFAULT_TIMEOUT_MS"),
+        "the runner never raises the foreground timeout:\n{ran}"
+    );
 }
 
 #[test]
