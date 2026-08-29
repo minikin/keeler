@@ -7,3 +7,4 @@
 pub mod backlog;
 pub mod decision;
 pub mod records;
+pub mod specs;

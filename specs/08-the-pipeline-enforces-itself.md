@@ -203,7 +203,7 @@ job block to `.github/workflows/ci.yml` under its own job name.
       explicit, and adding to it is a diff_, _A duplicate backlog line
       is refused, naming the line_. Tests: unit + property (debt
       monotonicity).
-- [ ] **T4 — The spec reader, and the promise Implemented makes.**
+- [x] **T4 — The spec reader, and the promise Implemented makes.**
       Ticked tasks from every `specs/*.md` but the template; an
       Implemented spec with an unticked or uncovered task is named.
       Needs: T1. Scenarios: _An Implemented spec vouches for every
