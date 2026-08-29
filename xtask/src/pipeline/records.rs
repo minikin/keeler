@@ -6,7 +6,9 @@
 //! `Commit:` must be present and non-empty but is never resolved, because
 //! ancestry belongs to the pull-request check and this gate consults no
 //! history at all. A record the grammar cannot read is refused, never
-//! guessed at: a misread record could vouch for the wrong task.
+//! guessed at: a misread record could vouch for the wrong task. Which is
+//! also why the record's address is read off its path and its headers must
+//! agree — see [`filed_as`].
 
 use super::decision::{Record, TaskId, Verdict};
 
@@ -26,43 +28,82 @@ impl std::fmt::Display for Refusal {
 
 impl std::error::Error for Refusal {}
 
-/// Reads one review record. `file` is only a name for the refusal to carry —
-/// the content has already been read, so the parser stays pure.
+/// Reads one review record. `file` is the path it was found at — the
+/// content has already been read, so the parser stays pure, but the path is
+/// the address, not decoration.
 ///
 /// # Errors
 ///
 /// Refuses a record that lacks one of its four header lines, one whose
-/// header names nothing, and a verdict that is neither `pass` nor `fail` —
-/// naming the file and the line each time.
+/// header names nothing, a verdict that is neither `pass` nor `fail`, and
+/// one whose headers name a task other than the one it is filed as —
+/// naming the file and the lack each time.
 pub fn parse(file: &str, content: &str) -> Result<Record, Refusal> {
-    record(content).map_err(|complaint| Refusal {
+    record(file, content).map_err(|complaint| Refusal {
         file: file.to_string(),
         complaint,
     })
 }
 
-/// The grammar itself, with the file name out of the way: four headers in
-/// `/keeler:review`'s order, then findings the gate never reads.
-fn record(content: &str) -> Result<Record, String> {
+/// The grammar itself: four headers in `/keeler:review`'s order, then
+/// findings the gate never reads.
+fn record(file: &str, content: &str) -> Result<Record, String> {
     let mut lines = content.lines();
     let spec = header(lines.next(), 1, "Spec")?;
     let task = header(lines.next(), 2, "Task")?;
+    let task = filed_as(file, &TaskId::new(spec, task))?;
     // Present and non-empty, never resolved: ancestry belongs to the
     // pull-request check, and this gate consults no history at all.
     header(lines.next(), 3, "Commit")?;
-    let verdict = match header(lines.next(), 4, "Verdict")? {
-        "pass" => Verdict::Pass,
-        "fail" => Verdict::Fail,
-        other => {
-            return Err(format!(
-                "`Verdict:` must be `pass` or `fail`, not `{other}`"
-            ));
-        }
+    let verdict = verdict(header(lines.next(), 4, "Verdict")?)?;
+    Ok(Record { task, verdict })
+}
+
+/// The task the record's path says it holds — `<spec-slug>/<task-id>` read
+/// off `…/<spec-slug>/<task-id>.md` — checked against the one its headers
+/// name.
+///
+/// The path decides, because the path is where the rest of the workflow
+/// agrees a task's address lives: the branch, the worktree and the CI check
+/// all spell it that way, while a header is a line someone can carry over
+/// from the neighbouring record without noticing. Disagreement is refused
+/// rather than resolved: one of the two is wrong, and a gate that picked
+/// for you would let a misfiled record vouch for a task nobody reviewed.
+fn filed_as(file: &str, named: &TaskId) -> Result<TaskId, String> {
+    let Some(held) = address(file) else {
+        return Err("is not `<spec-slug>/<task-id>.md`, so it addresses no task".to_string());
     };
-    Ok(Record {
-        task: TaskId::new(spec, task),
-        verdict,
-    })
+    if held == *named {
+        return Ok(held);
+    }
+    Err(format!(
+        "its headers name {named}, but it is filed as {held} — one of the two is wrong"
+    ))
+}
+
+/// The last two components of a record's path, or nothing when the path has
+/// no such shape.
+fn address(file: &str) -> Option<TaskId> {
+    let (directories, name) = file.rsplit_once('/')?;
+    let task = name.strip_suffix(".md")?;
+    let spec = directories
+        .rsplit_once('/')
+        .map_or(directories, |(_, last)| last);
+    if spec.is_empty() {
+        return None;
+    }
+    Some(TaskId::new(spec, task))
+}
+
+/// The one header whose value the gate reads rather than merely requires.
+fn verdict(value: &str) -> Result<Verdict, String> {
+    match value {
+        "pass" => Ok(Verdict::Pass),
+        "fail" => Ok(Verdict::Fail),
+        other => Err(format!(
+            "`Verdict:` must be `pass` or `fail`, not `{other}`"
+        )),
+    }
 }
 
 /// One header line: `<name>: <value>`, the value non-empty once trimmed.
@@ -189,6 +230,69 @@ mod tests {
     }
 
     #[test]
+    fn a_record_filed_under_the_wrong_task_is_refused() {
+        // A record copied from its neighbour and not re-headed vouches for
+        // the task it was copied from: that task reads as reviewed when
+        // nobody reviewed it, and this one reads as having no record while
+        // the file sits right there. The path and the headers must agree,
+        // and the gate names both rather than guessing which is right.
+        let content = well_formed("06-graph-mode", "t3", "1ad1a50", "pass");
+        let Err(refusal) = parse("reviews/06-graph-mode/t4.md", &content) else {
+            panic!("a record filed under another task's name was accepted");
+        };
+        let message = refusal.to_string();
+        assert!(
+            message.contains("06-graph-mode/t3") && message.contains("06-graph-mode/t4"),
+            "the refusal does not name both addresses: {message}",
+        );
+
+        // A `Spec:` header differing only in case is the same misfiling.
+        // One task, one address, one spelling — a slug normalised here
+        // would silently address a spec that may not be this one.
+        let miscased = well_formed("06-Graph-Mode", "t3", "1ad1a50", "pass");
+        let Err(refusal) = parse("reviews/06-graph-mode/t3.md", &miscased) else {
+            panic!("a record whose `Spec:` header is miscased was accepted");
+        };
+        assert!(
+            refusal.to_string().contains("06-Graph-Mode/t3"),
+            "the refusal does not name the address the headers spell: {refusal}",
+        );
+    }
+
+    #[test]
+    fn the_last_two_components_are_the_address_however_the_path_reaches_them() {
+        // T5 may reach a record by an absolute path or by one relative to
+        // wherever it walked from; both name the same record, and neither
+        // may change what it vouches for.
+        for file in [
+            "reviews/03-wild/t2.md",
+            "/Users/someone/keeler/reviews/03-wild/t2.md",
+            "03-wild/t2.md",
+        ] {
+            let record = parse(file, &well_formed("03-wild", "t2", "abc1234", "pass"))
+                .unwrap_or_else(|why| panic!("`{file}` was refused: {why}"));
+            assert_eq!(record.task, TaskId::new("03-wild", "t2"));
+        }
+    }
+
+    #[test]
+    fn a_file_that_is_not_a_records_path_is_refused() {
+        // Nothing but `<spec-slug>/<task-id>.md` addresses a task, so
+        // nothing else may be read as vouching for one — `reviews/` holds
+        // `BACKLOG.md` too, and a gate that read it as a record would let
+        // the debt list vouch for a task named `backlog`.
+        for file in ["t2.md", "reviews/03-wild/t2.txt", "/t2.md"] {
+            let Err(refusal) = parse(file, &well_formed("03-wild", "t2", "abc1234", "pass")) else {
+                panic!("`{file}` was read as a review record");
+            };
+            assert!(
+                refusal.to_string().contains(file),
+                "the refusal does not name the file: {refusal}",
+            );
+        }
+    }
+
+    #[test]
     fn a_well_formed_record_names_its_task_and_verdict() {
         // The spec's checkbox says `T2`; the record's `Task:` header may
         // spell it either way and still be the same address.
@@ -296,7 +400,10 @@ mod tests {
             let content = format!(
                 "Spec: {spec}\nTask: {task}\nCommit: {commit}\nVerdict: {verdict}\n\n{findings}\n"
             );
-            let read = parse("reviews/any.md", &content);
+            // The file the review stage writes: the task id lowercased on
+            // the way into the path, whatever case the header spells.
+            let file = format!("reviews/{spec}/{}.md", task.to_lowercase());
+            let read = parse(&file, &content);
             proptest::prop_assert_eq!(read, Ok(Record {
                 task: TaskId::new(&spec, &task),
                 verdict: if passed { Verdict::Pass } else { Verdict::Fail },
