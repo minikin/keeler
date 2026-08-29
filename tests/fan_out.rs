@@ -12,6 +12,7 @@ mod wave {
     use std::path::{Path, PathBuf};
     use std::process::{Command, Output, Stdio};
     use std::sync::OnceLock;
+    use std::thread;
     use std::time::{Duration, Instant};
 
     fn repo_root() -> PathBuf {
@@ -759,14 +760,24 @@ mod wave {
             .unwrap();
         // Held open for the whole run, so the recipe never sees EOF.
         let held_open = child.stdin.take().unwrap();
+        // Polled, not waited: a blocking wait shares the hang it is here to
+        // detect, and a bound checked after the wait returns can only ever
+        // fire on a process that exited — that is, on a slow success under
+        // load, never on the hang. The deadline is generous because it must
+        // hold under a parallel wave's gates and coverage instrumentation,
+        // where an honest refusal has been observed to take over a minute.
         let started = Instant::now();
+        while child.try_wait().unwrap().is_none() {
+            if started.elapsed() > Duration::from_secs(120) {
+                child.kill().ok();
+                let said = both(&child.wait_with_output().unwrap());
+                panic!("the run hung on an open pipe:\n{said}");
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
         let output = child.wait_with_output().unwrap();
         drop(held_open);
         let said = both(&output);
-        assert!(
-            started.elapsed() < Duration::from_secs(20),
-            "the run hung on an open pipe:\n{said}"
-        );
         assert!(!output.status.success(), "an open pipe said yes:\n{said}");
         assert!(
             stderr(&output).contains("KEELER_FAN_OUT_YES"),
