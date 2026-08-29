@@ -117,7 +117,7 @@ fails here, naming the task — write the review record, or put the task on
 
 The review stage was skipped for every task in specs 01 through 04 —
 twenty-odd of them — and nothing noticed. Each had green gates, and a
-skipped review leaves no artifact whose absence could fail anything.
+skipped review left no artifact whose absence could fail anything.
 
 It is being worked off by **area**, not by task. Half those tasks describe
 code that was later rewritten, so reading their diffs would be archaeology;
@@ -135,11 +135,22 @@ a checksum, which SECURITY.md states plainly rather than implying
 otherwise: closing it means publishing per-release archive digests, which
 is its own decision.
 
-**Nothing enforces this.** A gate was built and its own review found three
-blocking defects, so it is parked on `feat/pipeline-enforces-itself`. Until
-something replaces it, the pipeline's commands lead from each stage to the
-next and the discipline is the only mechanism there is. When a review
-happens, add a row here.
+**This is now enforced.** A first gate was built and its own review found
+three blocking defects, so it was parked on
+`feat/pipeline-enforces-itself`; spec 08 built the one that stayed.
+`cargo xtask pipeline-check` refuses a ticked task holding neither a
+`reviews/<spec-slug>/<task-id>.md` record whose `Verdict:` is `pass` nor a
+line of `reviews/BACKLOG.md`, and `just dev`, CI and the release guard all
+run it. What it proves is that a review happened, not that it was any
+good — a carelessly written record passes, and no gate can say otherwise.
+
+The thirty-nine tasks ticked before it existed are the backlog's opening
+balance: specs 01 through 04, whose areas are reviewed and recorded in the
+table above, and spec 06's T1 and T2, which are debt of review as well as
+of record and so come off first. Adding a line to `reviews/BACKLOG.md` is
+how a tick without a review gets past the gate, and it is a diff someone
+has to justify. Working lines off is the point: review the task, write the
+record, delete the line. When an area is reviewed, add a row above.
 
 ## Dependencies
 
