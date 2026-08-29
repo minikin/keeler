@@ -38,64 +38,119 @@ pub struct Spec {
 /// know, a task defined twice, an unclosed code fence, or a spec with no
 /// `## Tasks` section at all.
 pub fn parse(slug: &str, content: &str) -> Result<Spec, String> {
-    let mut spec = Spec {
-        slug: slug.to_string(),
-        implemented: false,
-        tasks: Vec::new(),
-    };
-    let mut status_read = false;
-    // Some(line) while inside a fence — the line is what an unclosed one
-    // is named by.
-    let mut fence_opened_at = None;
-    let mut in_tasks = false;
-    let mut section_found = false;
-    let mut defined_at = BTreeMap::new();
-
+    let mut reader = Reader::new(slug);
     for (index, raw) in content.lines().enumerate() {
-        let number = index + 1;
         // CRLF endings would hide every heading and every item.
-        let line = raw.trim_end_matches('\r');
+        reader.read(raw.trim_end_matches('\r'), index + 1)?;
+    }
+    reader.finish()
+}
 
+/// The walk down one spec, top to bottom: what has been read so far, and
+/// so what the next line means. A struct and not a handful of locals
+/// because the state *is* the grammar — no rule below reads only one
+/// piece of it, and threading five of them through free functions would
+/// hide which rule owns which.
+struct Reader {
+    spec: Spec,
+    /// The first `**Status:**` line wins; any later one is prose.
+    status_read: bool,
+    /// `Some(line)` while inside a fence — and the line an unclosed one
+    /// is named by.
+    fence_opened_at: Option<usize>,
+    in_tasks: bool,
+    section_found: bool,
+    /// Where each id was first defined, so a duplicate names both lines.
+    defined_at: BTreeMap<String, usize>,
+}
+
+impl Reader {
+    fn new(slug: &str) -> Self {
+        Self {
+            spec: Spec {
+                slug: slug.to_string(),
+                implemented: false,
+                tasks: Vec::new(),
+            },
+            status_read: false,
+            fence_opened_at: None,
+            in_tasks: false,
+            section_found: false,
+            defined_at: BTreeMap::new(),
+        }
+    }
+
+    /// Reads the line numbered `number`.
+    fn read(&mut self, line: &str, number: usize) -> Result<(), String> {
         // Fences are tracked over the whole file, before anything else
         // reads the line: a quoted `## Tasks` with an example item under
         // it would otherwise open the section there.
         if line.trim_start_matches([' ', '\t']).starts_with("```") {
-            fence_opened_at = match fence_opened_at {
+            self.fence_opened_at = match self.fence_opened_at {
                 Some(_) => None,
                 None => Some(number),
             };
-            continue;
+            return Ok(());
         }
-        if fence_opened_at.is_some() {
-            continue;
+        if self.fence_opened_at.is_some() {
+            return Ok(());
         }
 
-        if !status_read && let Some(value) = line.strip_prefix("**Status:**") {
-            status_read = true;
-            spec.implemented = value.trim() == "Implemented";
+        if !self.status_read
+            && let Some(value) = line.strip_prefix("**Status:**")
+        {
+            self.status_read = true;
+            self.spec.implemented = value.trim() == "Implemented";
         } else if is_tasks_heading(line) {
-            in_tasks = true;
-            section_found = true;
-        } else if in_tasks && (line.starts_with("# ") || line.starts_with("## ")) {
-            // A heading at the section level or above ends it; a deeper
-            // one is structure within it, and truncating there would drop
-            // tasks in silence.
-            in_tasks = false;
-        } else if in_tasks {
-            read_item(&mut spec, &mut defined_at, line, number)?;
+            self.in_tasks = true;
+            self.section_found = true;
+        } else if self.in_tasks && ends_the_section(line) {
+            self.in_tasks = false;
+        } else if self.in_tasks {
+            self.read_item(line, number)?;
         }
+        Ok(())
     }
 
-    if let Some(opened) = fence_opened_at {
-        return Err(format!(
-            "line {opened}: a code fence opened here and was never closed — \
-             every task after it would be dropped in silence"
-        ));
+    /// Reads one line inside the Tasks section: a task item, a shape that
+    /// must be refused, or prose to pass over.
+    fn read_item(&mut self, line: &str, number: usize) -> Result<(), String> {
+        if let Some((ticked, body)) = checkbox(line) {
+            let Some(id) = task_id(body) else {
+                return Err(format!(
+                    "line {number}: an item that does not open with **Tn — : {line}"
+                ));
+            };
+            if let Some(first) = self.defined_at.insert(id.to_string(), number) {
+                return Err(format!(
+                    "line {number}: {id} is defined twice (first at line {first})"
+                ));
+            }
+            let id = TaskId::new(&self.spec.slug, id);
+            self.spec.tasks.push(Task { id, ticked });
+        } else if unreadable_checkbox(line) {
+            // A checkbox the grammar does not know is a task that would
+            // vanish: never spawned, never counted, never asked for a review.
+            return Err(format!(
+                "line {number}: a checkbox line the grammar cannot read: {line}"
+            ));
+        }
+        Ok(())
     }
-    if !section_found {
-        return Err("no ## Tasks section found — nothing to read".to_string());
+
+    /// The spec, or the one refusal only the end of the file can make.
+    fn finish(self) -> Result<Spec, String> {
+        if let Some(opened) = self.fence_opened_at {
+            return Err(format!(
+                "line {opened}: a code fence opened here and was never closed — \
+                 every task after it would be dropped in silence"
+            ));
+        }
+        if !self.section_found {
+            return Err("no ## Tasks section found — nothing to read".to_string());
+        }
+        Ok(self.spec)
     }
-    Ok(spec)
 }
 
 /// Whether this line opens the Tasks section: `## Tasks` and nothing else.
@@ -104,37 +159,11 @@ fn is_tasks_heading(line: &str) -> bool {
         .is_some_and(|rest| rest.trim_matches([' ', '\t']).is_empty())
 }
 
-/// Reads one line inside the Tasks section: a task item, a shape that must
-/// be refused, or prose to pass over.
-fn read_item(
-    spec: &mut Spec,
-    defined_at: &mut BTreeMap<String, usize>,
-    line: &str,
-    number: usize,
-) -> Result<(), String> {
-    if let Some((ticked, body)) = checkbox(line) {
-        let Some(id) = task_id(body) else {
-            return Err(format!(
-                "line {number}: an item that does not open with **Tn — : {line}"
-            ));
-        };
-        if let Some(first) = defined_at.insert(id.to_string(), number) {
-            return Err(format!(
-                "line {number}: {id} is defined twice (first at line {first})"
-            ));
-        }
-        spec.tasks.push(Task {
-            id: TaskId::new(&spec.slug, id),
-            ticked,
-        });
-    } else if unreadable_checkbox(line) {
-        // A checkbox the grammar does not know is a task that would
-        // vanish: never spawned, never counted, never asked for a review.
-        return Err(format!(
-            "line {number}: a checkbox line the grammar cannot read: {line}"
-        ));
-    }
-    Ok(())
+/// Whether this line ends the Tasks section: a heading at the section's
+/// own level or above. A deeper one is structure within it, and
+/// truncating there would drop tasks in silence.
+fn ends_the_section(line: &str) -> bool {
+    line.starts_with("# ") || line.starts_with("## ")
 }
 
 /// The item opening `- [ ] ` / `- [x] ` / `- [X] `: whether the box is
@@ -367,6 +396,10 @@ mod tests {
         // Given checkbox shapes the grammar does not know — a task written
         // in one of these would vanish: never spawned, never counted
         for bad in [
+            // The one that is a checkbox in every respect but its mark —
+            // `- [` and `] ` around a single character the grammar has no
+            // meaning for. Nothing else here reaches that far.
+            "- [y] a strange mark",
             "* [y] a strange mark",
             "- [✓] a pretty tick",
             "+ [x no closing bracket",
