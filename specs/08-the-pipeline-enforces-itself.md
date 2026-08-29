@@ -197,7 +197,7 @@ job block to `.github/workflows/ci.yml` under its own job name.
       else holds. Needs: T1. Scenarios: _A malformed record is refused,
       not misread_, _A fail verdict contradicts a ticked box_. Tests:
       unit + property (record dominance).
-- [ ] **T3 — The backlog: explicit debt, refused when it lies.**
+- [x] **T3 — The backlog: explicit debt, refused when it lies.**
       Parsing `reviews/BACKLOG.md`; duplicates and unparseable lines are
       refusals naming the line. Needs: T1. Scenarios: _Accepted debt is
       explicit, and adding to it is a diff_, _A duplicate backlog line
