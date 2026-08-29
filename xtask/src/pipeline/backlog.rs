@@ -16,8 +16,16 @@ use super::decision::TaskId;
 pub enum Refusal {
     /// The line is not `<spec-slug>/<task-id>`.
     Unparseable { line: usize, text: String },
-    /// The line names a task an earlier line already named.
-    Duplicate { line: usize, text: String },
+    /// The line names a task the line at `first` already named. Both
+    /// numbers are carried because the two lines need not read alike:
+    /// `06-graph-mode/T1` and `06-graph-mode/t1` are one address, so a
+    /// message quoting only the second sends a reader grepping for text
+    /// the first line does not contain.
+    Duplicate {
+        line: usize,
+        first: usize,
+        text: String,
+    },
 }
 
 impl std::fmt::Display for Refusal {
@@ -27,8 +35,8 @@ impl std::fmt::Display for Refusal {
                 out,
                 "line {line} is not a backlog entry: `{text}` — expected <spec-slug>/<task-id>",
             ),
-            Self::Duplicate { line, text } => {
-                write!(out, "line {line} duplicates an earlier entry: `{text}`")
+            Self::Duplicate { line, first, text } => {
+                write!(out, "line {line} duplicates line {first}: `{text}`")
             }
         }
     }
@@ -46,43 +54,52 @@ impl std::error::Error for Refusal {}
 /// that names a task an earlier line already named — each refusal carrying
 /// the line's number and text.
 pub fn parse(text: &str) -> Result<Vec<TaskId>, Refusal> {
-    let mut debts: Vec<TaskId> = Vec::new();
+    let mut debts: Vec<(usize, TaskId)> = Vec::new();
     for (index, raw) in text.lines().enumerate() {
         let text = raw.trim();
         if text.is_empty() {
             continue;
         }
+        let line = index + 1;
         let Some(task) = entry(text) else {
             return Err(Refusal::Unparseable {
-                line: index + 1,
+                line,
                 text: text.to_string(),
             });
         };
-        if debts.contains(&task) {
+        if let Some((first, _)) = debts.iter().find(|(_, seen)| *seen == task) {
             return Err(Refusal::Duplicate {
-                line: index + 1,
+                line,
+                first: *first,
                 text: text.to_string(),
             });
         }
-        debts.push(task);
+        debts.push((line, task));
     }
-    Ok(debts)
+    Ok(debts.into_iter().map(|(_, task)| task).collect())
 }
 
-/// One line as a task address, or nothing. Exactly one `/`, both halves
-/// non-empty and free of whitespace — slugs and task ids never hold any,
-/// so whitespace means prose that wandered into the debt list.
+/// One line as a task address, or nothing. Exactly one `/`, and each half
+/// non-empty and spelled the way a slug and a task id are spelled: ASCII
+/// letters, digits, `-` and `_`. Anything else is prose that wandered into
+/// the debt list — a bullet's dash and space, a trailing comma, backticks
+/// — and accepting it would mint an address no ticked task can equal, so
+/// the gate would report a task missing that the file plainly lists.
 fn entry(line: &str) -> Option<TaskId> {
     let (spec, task) = line.split_once('/')?;
-    let half =
-        |text: &str| !text.is_empty() && !text.contains(|c: char| c == '/' || c.is_whitespace());
+    let half = |text: &str| {
+        !text.is_empty()
+            && text
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    };
     (half(spec) && half(task)).then(|| TaskId::new(spec, task))
 }
 
 #[cfg(test)]
 mod tests {
     use super::super::decision::{Decision, Record, TaskId, Verdict, decide};
-    use super::{Refusal, parse};
+    use super::{Refusal, entry, parse};
 
     fn task(spec: &str, id: &str) -> TaskId {
         TaskId::new(spec, id)
@@ -118,26 +135,35 @@ mod tests {
             refusal,
             Refusal::Duplicate {
                 line: 3,
+                first: 1,
                 text: "06-graph-mode/t1".into(),
             },
         );
         let message = refusal.to_string();
         assert!(
-            message.contains("line 3") && message.contains("06-graph-mode/t1"),
-            "the refusal does not name the line: {message}",
+            message.contains("line 3")
+                && message.contains("line 1")
+                && message.contains("06-graph-mode/t1"),
+            "the refusal does not name both lines: {message}",
         );
     }
 
     #[test]
-    fn a_duplicate_differing_only_in_case_is_still_a_duplicate() {
+    fn a_duplicate_differing_only_in_case_names_the_line_it_duplicates() {
         // `T1` and `t1` are one address — the same rule that lets a
         // record at `t1.md` cover a checkbox that says `T1`. Two spellings
         // of one task are one debt line twice, not two debts.
+        //
+        // And this is why the refusal carries the earlier line's number
+        // rather than trusting the reader to search for its text: the two
+        // lines are the same address spelled differently, so grepping what
+        // the message quotes finds only the second of them.
         let refusal = parse("06-graph-mode/T1\n06-graph-mode/t1\n").unwrap_err();
         assert_eq!(
             refusal,
             Refusal::Duplicate {
                 line: 2,
+                first: 1,
                 text: "06-graph-mode/t1".into(),
             },
         );
@@ -159,6 +185,32 @@ mod tests {
             message.contains("line 3") && message.contains("thirty-seven tasks, reviewed by area"),
             "the refusal does not name the line: {message}",
         );
+    }
+
+    #[test]
+    fn an_address_wearing_prose_is_refused_rather_than_silently_accepted() {
+        // A hand-edited debt list grows Markdown: a bullet, a trailing
+        // comma, backticks, a sentence's full stop. Each of these holds a
+        // `/` with non-empty halves, so a laxer rule would mint a task
+        // address no ticked task can ever equal — and the gate would then
+        // report `01-install/t1` missing while the file plainly lists it,
+        // with nothing pointing at the line that lied.
+        for bad in [
+            "01-install/t1,",
+            "01-install/t1.",
+            "`01-install/t1`",
+            "[01-install/t1]",
+            "- 01-install/t1",
+        ] {
+            assert_eq!(
+                parse(bad).unwrap_err(),
+                Refusal::Unparseable {
+                    line: 1,
+                    text: bad.into(),
+                },
+                "`{bad}` should not parse as a task address",
+            );
+        }
     }
 
     #[test]
@@ -220,6 +272,18 @@ mod tests {
         })
     }
 
+    /// One line of a plausible backlog: an address, the same address in
+    /// another case, or the junk a hand-edited file collects. Drawn from
+    /// the same tiny universe as `any_task` so that repeats — which is
+    /// what the duplicate refusal exists for — actually happen.
+    fn any_line() -> impl Strategy<Value = String> {
+        proptest::prop_oneof![
+            any_task().prop_map(|task| task.to_string()),
+            any_task().prop_map(|task| task.to_string().to_uppercase()),
+            proptest::string::string_regex("[a-z0-9/ ,-]{0,12}").unwrap(),
+        ]
+    }
+
     proptest::proptest! {
         #![proptest_config(proptest::prelude::ProptestConfig {
             cases: 512,
@@ -247,14 +311,37 @@ mod tests {
 
         /// The parked gate's first blocker: it panicked on a duplicate
         /// line. Whatever the file holds, the answer is a parse or a
-        /// refusal — and a parse never smuggles a duplicate through.
+        /// refusal — and each answer is checked against the file it came
+        /// from: a parse smuggles no duplicate through, and a refusal
+        /// names a line that exists, quotes what that line says, and — for
+        /// a duplicate — points at the earlier line, which holds the same
+        /// address. A refusal that named the wrong line would send the
+        /// reader hunting, which is the whole failure this module exists
+        /// to prevent.
         #[test]
-        fn any_input_is_parsed_or_refused_never_panicked_on(
-            text in proptest::string::string_regex(".{0,80}").unwrap(),
+        fn every_answer_is_checked_against_the_file_it_came_from(
+            lines in proptest::collection::vec(any_line(), 0..8),
         ) {
-            if let Ok(tasks) = parse(&text) {
-                let distinct: std::collections::BTreeSet<&TaskId> = tasks.iter().collect();
-                proptest::prop_assert_eq!(distinct.len(), tasks.len());
+            let file = lines.join("\n");
+            let at = |line: usize| lines[line - 1].trim().to_string();
+            match parse(&file) {
+                Ok(tasks) => {
+                    let distinct: std::collections::BTreeSet<&TaskId> = tasks.iter().collect();
+                    proptest::prop_assert_eq!(distinct.len(), tasks.len());
+                    let addresses = lines.iter().filter(|line| !line.trim().is_empty()).count();
+                    proptest::prop_assert_eq!(tasks.len(), addresses);
+                }
+                Err(Refusal::Unparseable { line, text }) => {
+                    proptest::prop_assert!((1..=lines.len()).contains(&line));
+                    proptest::prop_assert_eq!(&at(line), &text);
+                    proptest::prop_assert!(entry(&text).is_none());
+                }
+                Err(Refusal::Duplicate { line, first, text }) => {
+                    proptest::prop_assert!((1..=lines.len()).contains(&line));
+                    proptest::prop_assert!(first < line);
+                    proptest::prop_assert_eq!(&at(line), &text);
+                    proptest::prop_assert_eq!(entry(&at(first)), entry(&text));
+                }
             }
         }
 
