@@ -50,6 +50,47 @@ pub struct Record {
     pub verdict: Verdict,
 }
 
+/// Why a ticked task is not accounted for. Two ticks can fail for reasons
+/// that would read alike and are not alike: one has no evidence at all, the
+/// other has evidence that says no. Kept apart, the first sends the reader
+/// to write a review and the second to read the one already written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Why {
+    /// Ticked, with neither a review record nor a backlog line.
+    Unreviewed,
+    /// Ticked, and its own review record's verdict is `fail`.
+    ReviewFailed,
+}
+
+/// A ticked task the evidence does not account for, and why.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Uncovered {
+    pub task: TaskId,
+    pub why: Why,
+}
+
+impl std::fmt::Display for Uncovered {
+    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.why {
+            Why::Unreviewed => write!(
+                out,
+                "{} is ticked, but no review record and no backlog line account for it",
+                self.task,
+            ),
+            // The record's path is the task's address under the directory
+            // and extension the workflow fixes — `reviews/<spec>/<task>.md`,
+            // the one place /keeler:review writes. Naming it is the whole
+            // difference between "go review this" and "go read the review
+            // you already wrote".
+            Why::ReviewFailed => write!(
+                out,
+                "{task} is ticked, but reviews/{task}.md says `Verdict: fail`",
+                task = self.task,
+            ),
+        }
+    }
+}
+
 /// What the gate concluded: a count of what was accounted for, or what is
 /// missing.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,8 +98,9 @@ pub enum Decision {
     /// Every ticked task is accounted for — this many of them.
     AllAccounted { ticked: usize },
     /// These ticked tasks are not, in address order: each was ticked
-    /// without the evidence the tick claims exists.
-    Missing(Vec<TaskId>),
+    /// without the evidence the tick claims exists, and each says which
+    /// lack it is.
+    Missing(Vec<Uncovered>),
 }
 
 /// The gate's one rule. A ticked task is covered by a record whose verdict
@@ -70,10 +112,14 @@ pub fn decide(ticked: &[TaskId], records: &[Record], backlog: &[TaskId]) -> Deci
     // one task to account for, and the missing list comes out in address
     // order — the same order however the specs were read.
     let distinct: BTreeSet<&TaskId> = ticked.iter().collect();
-    let missing: Vec<TaskId> = distinct
+    let missing: Vec<Uncovered> = distinct
         .iter()
-        .filter(|task| !covered(task, records, backlog))
-        .map(|task| (*task).clone())
+        .filter_map(|task| {
+            uncovered(task, records, backlog).map(|why| Uncovered {
+                task: (*task).clone(),
+                why,
+            })
+        })
         .collect();
     if missing.is_empty() {
         Decision::AllAccounted {
@@ -84,27 +130,50 @@ pub fn decide(ticked: &[TaskId], records: &[Record], backlog: &[TaskId]) -> Deci
     }
 }
 
-/// Whether one ticked task is accounted for. Records are consulted first
-/// and alone when any exist — which is what lets a backlog line cover only
-/// the unrecorded, and a fail verdict fail its task whatever else holds.
-fn covered(task: &TaskId, records: &[Record], backlog: &[TaskId]) -> bool {
+/// Whether one ticked task is accounted for, and if not, which lack it is.
+/// Records are consulted first and alone when any exist — which is what
+/// lets a backlog line cover only the unrecorded, and a fail verdict fail
+/// its task whatever else holds.
+fn uncovered(task: &TaskId, records: &[Record], backlog: &[TaskId]) -> Option<Why> {
     let mut verdicts = records
         .iter()
         .filter(|record| record.task == *task)
         .map(|record| record.verdict)
         .peekable();
-    match verdicts.peek() {
-        Some(_) => verdicts.all(|verdict| verdict == Verdict::Pass),
-        None => backlog.contains(task),
+    if verdicts.peek().is_none() {
+        return if backlog.contains(task) {
+            None
+        } else {
+            Some(Why::Unreviewed)
+        };
+    }
+    if verdicts.all(|verdict| verdict == Verdict::Pass) {
+        None
+    } else {
+        Some(Why::ReviewFailed)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Decision, Record, TaskId, Verdict, decide};
+    use super::{Decision, Record, TaskId, Uncovered, Verdict, Why, decide};
 
     fn task(spec: &str, id: &str) -> TaskId {
         TaskId::new(spec, id)
+    }
+
+    fn unreviewed(spec: &str, id: &str) -> Uncovered {
+        Uncovered {
+            task: task(spec, id),
+            why: Why::Unreviewed,
+        }
+    }
+
+    fn review_failed(spec: &str, id: &str) -> Uncovered {
+        Uncovered {
+            task: task(spec, id),
+            why: Why::ReviewFailed,
+        }
     }
 
     fn pass(spec: &str, id: &str) -> Record {
@@ -129,9 +198,38 @@ mod tests {
         // When the gate decides
         let decision = decide(&ticked, &[], &[]);
         // Then it fails, naming the spec and the task
-        assert_eq!(decision, Decision::Missing(vec![task("08-pipeline", "t1")]));
+        assert_eq!(
+            decision,
+            Decision::Missing(vec![unreviewed("08-pipeline", "t1")])
+        );
         // The address the failure prints spells out both halves.
         assert_eq!(task("08-pipeline", "t1").to_string(), "08-pipeline/t1");
+        assert!(
+            unreviewed("08-pipeline", "t1")
+                .to_string()
+                .contains("08-pipeline/t1"),
+            "the failure does not name the spec and the task",
+        );
+    }
+
+    #[test]
+    fn a_missing_review_and_a_failed_one_do_not_read_alike() {
+        // Two ticks fail for reasons that are not the same: one has no
+        // evidence, the other has evidence that says no. Reported alike,
+        // the second sends the reader to write a review that is already
+        // written — so each says which it is, and the failed one names
+        // the record.
+        let absent = unreviewed("03-wild", "t2").to_string();
+        let failed = review_failed("03-wild", "t2").to_string();
+        assert_ne!(absent, failed);
+        assert!(
+            absent.contains("no review record") && absent.contains("no backlog line"),
+            "the unreviewed failure does not say what is absent: {absent}",
+        );
+        assert!(
+            failed.contains("reviews/03-wild/t2.md") && failed.contains("Verdict: fail"),
+            "the failed review does not name the record and the contradiction: {failed}",
+        );
     }
 
     #[test]
@@ -171,7 +269,7 @@ mod tests {
         let records = [fail("02-release", "t3")];
         assert_eq!(
             decide(&ticked, &records, &[]),
-            Decision::Missing(vec![task("02-release", "t3")]),
+            Decision::Missing(vec![review_failed("02-release", "t3")]),
         );
     }
 
@@ -185,7 +283,7 @@ mod tests {
         let backlog = [task("03-wild", "t2")];
         assert_eq!(
             decide(&ticked, &records, &backlog),
-            Decision::Missing(vec![task("03-wild", "t2")]),
+            Decision::Missing(vec![review_failed("03-wild", "t2")]),
         );
     }
 
@@ -239,23 +337,28 @@ mod tests {
         ) {
             // The model restates the rule from the spec's words: a pass
             // record with no fail beside it, or a backlog line with no
-            // record at all.
+            // record at all. It models the reason too — a tick with no
+            // evidence and a tick its record contradicts are different
+            // failures, and the gate must not blur them.
             let distinct: std::collections::BTreeSet<TaskId> = ticked.iter().cloned().collect();
-            let uncovered: Vec<TaskId> = distinct
+            let uncovered: Vec<Uncovered> = distinct
                 .iter()
-                .filter(|task| {
+                .filter_map(|task| {
                     let has_pass = records
                         .iter()
-                        .any(|r| r.task == **task && r.verdict == Verdict::Pass);
+                        .any(|r| r.task == *task && r.verdict == Verdict::Pass);
                     let has_fail = records
                         .iter()
-                        .any(|r| r.task == **task && r.verdict == Verdict::Fail);
+                        .any(|r| r.task == *task && r.verdict == Verdict::Fail);
                     let has_record = has_pass || has_fail;
-                    let covered = (has_pass && !has_fail)
-                        || (!has_record && backlog.contains(task));
-                    !covered
+                    if (has_pass && !has_fail) || (!has_record && backlog.contains(task)) {
+                        return None;
+                    }
+                    Some(Uncovered {
+                        task: task.clone(),
+                        why: if has_record { Why::ReviewFailed } else { Why::Unreviewed },
+                    })
                 })
-                .cloned()
                 .collect();
 
             match decide(&ticked, &records, &backlog) {

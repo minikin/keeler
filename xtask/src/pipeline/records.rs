@@ -95,7 +95,7 @@ fn header<'line>(
 
 #[cfg(test)]
 mod tests {
-    use super::super::decision::{Decision, Record, TaskId, Verdict, decide};
+    use super::super::decision::{Decision, Record, TaskId, Uncovered, Verdict, Why, decide};
     use super::parse;
 
     /// A record as `/keeler:review` writes one: four headers, a blank
@@ -169,11 +169,22 @@ mod tests {
         let backlog = [TaskId::new("03-wild", "t2")];
         // When the gate runs
         let decision = decide(&ticked, &[record], &backlog);
-        // Then it fails, naming the record and the contradiction: the
-        // missing task's address is the record's address.
+        // Then it fails, naming the record and the contradiction — not
+        // the same word it uses for a task nobody reviewed at all.
+        let Decision::Missing(missing) = decision else {
+            panic!("a ticked task with a fail record was accounted for");
+        };
         assert_eq!(
-            decision,
-            Decision::Missing(vec![TaskId::new("03-wild", "t2")]),
+            missing,
+            vec![Uncovered {
+                task: TaskId::new("03-wild", "t2"),
+                why: Why::ReviewFailed,
+            }],
+        );
+        let complaint = missing[0].to_string();
+        assert!(
+            complaint.contains("reviews/03-wild/t2.md") && complaint.contains("Verdict: fail"),
+            "the failure names neither the record nor the contradiction: {complaint}",
         );
     }
 
@@ -228,12 +239,15 @@ mod tests {
 
     #[test]
     fn the_findings_are_free_form_not_more_headers() {
-        // A finding may quote `Verdict: fail` — seventeen records on main
-        // quote headers freely. Only the first four lines are grammar; a
-        // parser that scanned the whole file would let the findings
-        // overturn the verdict.
+        // Two records on main open a findings line with `Verdict:` — the
+        // stage's own summary of what it concluded. Only the first four
+        // lines are grammar; a parser that scanned the whole file would
+        // let the findings overturn the verdict. `Commit:` is left out of
+        // this fixture on purpose: the shipped `review-record` job counts
+        // `^Commit:` lines and refuses any record but one carrying
+        // exactly one, so a record blessed here would fail there.
         let content = format!(
-            "{}\nA quoted counter-example:\nVerdict: fail\nCommit:\n",
+            "{}\nVerdict: **fail** would be the wrong read of this line.\n",
             well_formed("03-wild", "t2", "abc1234", "pass"),
         );
         let record =
@@ -323,8 +337,11 @@ mod tests {
             with_fail.push(Record { task: target.clone(), verdict: Verdict::Fail });
             match decide(&ticked, &with_fail, &backlog) {
                 Decision::Missing(missing) => proptest::prop_assert!(
-                    missing.contains(&target),
-                    "the gate failed, but not on {target}: {missing:?}",
+                    missing.contains(&Uncovered {
+                        task: target.clone(),
+                        why: Why::ReviewFailed,
+                    }),
+                    "the gate failed, but not on {target} as a failed review: {missing:?}",
                 ),
                 Decision::AllAccounted { .. } => proptest::prop_assert!(
                     false,
