@@ -7,6 +7,7 @@
 pub mod changelog;
 pub mod checksum;
 pub mod guard;
+pub mod pipeline;
 
 /// What `cargo xtask` prints when asked what it can do.
 #[must_use]
