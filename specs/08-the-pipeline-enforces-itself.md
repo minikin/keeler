@@ -213,7 +213,7 @@ job block to `.github/workflows/ci.yml` under its own job name.
       `reviews/BACKLOG.md` with the thirty-nine so this repository
       passes its own gate. Needs: T2, T3, T4. Scenarios: _The gate needs
       no git history_. Tests: acceptance.
-- [ ] **T6 — The release guard refuses a skipped pipeline.** The guard
+- [x] **T6 — The release guard refuses a skipped pipeline.** The guard
       runs the gate before anything is published. Needs: T5. Scenarios:
       _A release refuses a pipeline that was skipped_. Tests: unit +
       acceptance.
