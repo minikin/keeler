@@ -191,7 +191,7 @@ job block to `.github/workflows/ci.yml` under its own job name.
       without a review is caught_, _A reviewed task passes, and the gate
       says what it counted_. Tests: unit + property (gate soundness: no
       false pass, no false failure).
-- [ ] **T2 — The record grammar: four headers, a verdict, or a refusal
+- [x] **T2 — The record grammar: four headers, a verdict, or a refusal
       naming the file.** Parsing and validation of
       `reviews/<slug>/<task>.md`; a fail verdict fails its task whatever
       else holds. Needs: T1. Scenarios: _A malformed record is refused,
