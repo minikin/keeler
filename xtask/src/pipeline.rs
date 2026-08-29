@@ -4,4 +4,5 @@
 //! parsers that feed it — so each can be built and tested without touching
 //! the others' region.
 
+pub mod backlog;
 pub mod decision;
