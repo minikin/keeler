@@ -442,8 +442,8 @@ _write-runner SPEC TASK BRANCH WORKTREE RUNNER EXIT_FILE LOG_FILE STREAM_FILE:
     pipeline, commits included, before your reply ends. If your harness
     moves a long command to the background anyway and promises a
     notification, that promise is not for this session — the notification
-    lands after you are gone. Poll the command's output in this same turn
-    until it ends.
+    lands after you are gone. Poll its output in this same turn until it
+    ends.
 
     You are on branch $branch, in the worktree $worktree. Commit there as
     each stage finishes: the human ran keeler-spawn for this task, and that
