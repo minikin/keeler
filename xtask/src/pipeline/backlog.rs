@@ -146,12 +146,18 @@ mod tests {
     #[test]
     fn a_line_that_is_no_task_address_is_refused_naming_the_line() {
         let text = "01-install/t1\n\nthirty-seven tasks, reviewed by area\n";
+        let refusal = parse(text).unwrap_err();
         assert_eq!(
-            parse(text).unwrap_err(),
+            refusal,
             Refusal::Unparseable {
                 line: 3,
                 text: "thirty-seven tasks, reviewed by area".into(),
             },
+        );
+        let message = refusal.to_string();
+        assert!(
+            message.contains("line 3") && message.contains("thirty-seven tasks, reviewed by area"),
+            "the refusal does not name the line: {message}",
         );
     }
 
