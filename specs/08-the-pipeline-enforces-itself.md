@@ -185,7 +185,7 @@ touching one region. Acceptance tests land in `tests/pipeline.rs`, each
 task under its own test functions; the two CI tasks each add their own
 job block to `.github/workflows/ci.yml` under its own job name.
 
-- [ ] **T1 — The decision: ticked × records × backlog → what is
+- [x] **T1 — The decision: ticked × records × backlog → what is
       missing.** The pure core and its types; coverage means a pass
       record or an unrecorded backlog line. Scenarios: _A task ticked
       without a review is caught_, _A reviewed task passes, and the gate
