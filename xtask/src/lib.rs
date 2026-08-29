@@ -713,6 +713,29 @@ mod tests {
     }
 
     #[test]
+    fn a_markdown_file_where_records_live_is_held_to_the_grammar() {
+        // The other half of the rule above, and the deliberate one: prose
+        // filed among the records is refused by name, not passed over. A
+        // record misnamed by one letter is the case that matters — passed
+        // over, its task reads as unreviewed while the file sits right
+        // there, and nothing names the file that would have explained it.
+        let root = gate_fixture(
+            "prose",
+            &[
+                spec_with_one_tick(),
+                pass_record(),
+                ("reviews/09-demo/README.md", "# Notes about this spec\n"),
+            ],
+        );
+        let error = pipeline_check_command(&root, &[]).unwrap_err().to_string();
+        assert!(
+            error.contains("09-demo/README.md") && error.contains("`Spec:`"),
+            "the refusal does not name the file and what it is not: {error}",
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn pipeline_check_takes_no_arguments() {
         let error = pipeline_check_command(std::path::Path::new("."), &["specs".into()])
             .unwrap_err()

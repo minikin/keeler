@@ -143,9 +143,16 @@ fn header<'line>(
 /// A file at the top level is not a record: `reviews/BACKLOG.md` lives
 /// there, and reading the debt list as a review would refuse it as
 /// malformed — the gate failing over the file that exists to make it pass.
-/// Inside a record directory, only `*.md` is read; a `.DS_Store` is litter,
-/// not a review, and the task whose record is misnamed still fails loudly
-/// as unreviewed.
+///
+/// Inside a record directory the rule is the other way round, and
+/// deliberately so: every `*.md` there is held to the grammar, while a
+/// `.DS_Store` or a `.txt` is passed over. Litter the operating system
+/// leaves is not a claim about a review; a Markdown file sitting where
+/// records live is, and a directory that holds records holds nothing else.
+/// Refusing it names the file and the header it lacks, which is how a
+/// reader learns the rule; passing over it would let a record misnamed by
+/// one letter vanish, and its task would read as unreviewed while the file
+/// sat right there.
 ///
 /// # Errors
 ///
