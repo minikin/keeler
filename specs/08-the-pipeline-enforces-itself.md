@@ -208,7 +208,7 @@ job block to `.github/workflows/ci.yml` under its own job name.
       Implemented spec with an unticked or uncovered task is named.
       Needs: T1. Scenarios: _An Implemented spec vouches for every
       task_. Tests: unit + acceptance.
-- [ ] **T5 — The command: `cargo xtask pipeline-check`, and the debt on
+- [x] **T5 — The command: `cargo xtask pipeline-check`, and the debt on
       the books.** The impure shell over the core; seeds
       `reviews/BACKLOG.md` with the thirty-nine so this repository
       passes its own gate. Needs: T2, T3, T4. Scenarios: _The gate needs
