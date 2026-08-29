@@ -148,29 +148,55 @@ fn release_guard_command(root: &std::path::Path, args: &[String]) -> Result<Stri
     let changelog = read(&at("CHANGELOG.md"))?;
 
     let manifests = declared_versions(root)?;
-    let found = guard::disagreements(tag, &version, &marker, &changelog, &manifests);
+    let mut found = guard::disagreements(tag, &version, &marker, &changelog, &manifests);
+    found.extend(skipped_pipeline(root));
     if found.is_empty() {
         return Ok(format!(
             "v{version} is consistent — tag, VERSION, marker, CHANGELOG \
-             and {} manifest(s) agree",
+             and {} manifest(s) agree, and every ticked task is accounted for",
             manifests.len(),
         ));
     }
     Err(format!("refusing to release:\n  {}", found.join("\n  ")).into())
 }
 
-/// `pipeline-check`, against the repository rooted at `root`.
+/// What the pipeline gate refuses this repository for, phrased for someone
+/// who came here to cut a release. Nothing is published over a tick no
+/// review accounts for — the release is the last moment anyone looks.
 ///
-/// The impure shell over the decision: it reads the three inputs and prints
-/// what the pure rule concluded. The root is a parameter for the reason
-/// `release-guard`'s is — an implicit working directory is what kept that
-/// command untested — and everything it consults is a file. No git, no
-/// network, no clock, so the gate runs identically in a worktree, a shallow
-/// clone and CI.
-fn pipeline_check_command(root: &std::path::Path, args: &[String]) -> Result<String, Failure> {
-    if !args.is_empty() {
-        return Err("usage: pipeline-check".into());
+/// A gate that could not run at all is one of those reasons and not a
+/// separate kind of failure: the release stops either way, and folding it in
+/// keeps every disagreement in one report, which is the whole point of the
+/// list it joins.
+fn skipped_pipeline(root: &std::path::Path) -> Vec<String> {
+    match gate(root) {
+        Ok(Gate::Accounted { .. }) => Vec::new(),
+        Ok(Gate::Refused(complaints)) => complaints,
+        Err(why) => vec![format!("the pipeline gate could not run: {why}")],
     }
+}
+
+/// What the pipeline gate concluded about a repository: what it counted, or
+/// every reason it refuses. Two callers read this — the command that reports
+/// it and the release guard that will not publish over it — and neither may
+/// see a count the other's refusal makes meaningless.
+enum Gate {
+    Accounted {
+        ticked: usize,
+        records: usize,
+        debt: usize,
+    },
+    Refused(Vec<String>),
+}
+
+/// The gate itself: read the three inputs, apply the rule.
+///
+/// The impure shell over the decision. Everything it consults is a file —
+/// no git, no network, no clock — so it runs identically in a worktree, a
+/// shallow clone and CI. The root is a parameter for the reason
+/// `release-guard`'s is: an implicit working directory is what kept that
+/// command untested.
+fn gate(root: &std::path::Path) -> Result<Gate, Failure> {
     let specs = pipeline::specs::read_from(&root.join("specs"))?;
     // A gate that measured nothing must not report success: an empty
     // `specs/` accounts for every ticked task there is by accounting for
@@ -190,19 +216,37 @@ fn pipeline_check_command(root: &std::path::Path, args: &[String]) -> Result<Str
         .map(|task| format!("{task} is unticked in a spec marked `Status: Implemented`"))
         .collect();
     let decision = pipeline::decision::decide(&pipeline::specs::ticked(&specs), &records, &backlog);
-    match (decision, broken.is_empty()) {
-        (pipeline::decision::Decision::AllAccounted { ticked }, true) => Ok(format!(
-            "pipeline-check: {ticked} ticked task(s) accounted for — \
-             {} review record(s), {} line(s) of accepted debt",
-            records.len(),
-            backlog.len(),
-        )),
-        (pipeline::decision::Decision::AllAccounted { .. }, false) => Err(refusal(&broken)),
+    Ok(match (decision, broken.is_empty()) {
+        (pipeline::decision::Decision::AllAccounted { ticked }, true) => Gate::Accounted {
+            ticked,
+            records: records.len(),
+            debt: backlog.len(),
+        },
+        (pipeline::decision::Decision::AllAccounted { .. }, false) => Gate::Refused(broken),
         (pipeline::decision::Decision::Missing(missing), _) => {
             let mut all: Vec<String> = missing.iter().map(ToString::to_string).collect();
             all.extend(broken);
-            Err(refusal(&all))
+            Gate::Refused(all)
         }
+    })
+}
+
+/// `pipeline-check`, against the repository rooted at `root`: the gate's
+/// verdict, printed.
+fn pipeline_check_command(root: &std::path::Path, args: &[String]) -> Result<String, Failure> {
+    if !args.is_empty() {
+        return Err("usage: pipeline-check".into());
+    }
+    match gate(root)? {
+        Gate::Accounted {
+            ticked,
+            records,
+            debt,
+        } => Ok(format!(
+            "pipeline-check: {ticked} ticked task(s) accounted for — \
+             {records} review record(s), {debt} line(s) of accepted debt",
+        )),
+        Gate::Refused(complaints) => Err(refusal(&complaints)),
     }
 }
 
@@ -349,7 +393,83 @@ mod tests {
             format!("[package]\nname = \"member\"\nversion = \"{version}\"\n"),
         )
         .unwrap();
+        // A repository being released has specs, and the guard runs the
+        // pipeline gate over them — a fixture without any is not a
+        // repository, the same reason it carries a manifest above.
+        std::fs::create_dir_all(root.join("specs")).unwrap();
+        std::fs::write(
+            root.join("specs/01-fixture.md"),
+            "**Status:** Approved\n\n## Tasks\n\n- [ ] **T1 — Not yet.**\n",
+        )
+        .unwrap();
         root
+    }
+
+    /// Ticks the fixture's one task and leaves no review behind it — the
+    /// state the release guard exists to refuse.
+    fn tick_without_reviewing(root: &std::path::Path) {
+        std::fs::write(
+            root.join("specs/01-fixture.md"),
+            "**Status:** Approved\n\n## Tasks\n\n- [x] **T1 — Ticked anyway.**\n",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn a_release_over_a_skipped_pipeline_is_refused() {
+        // Every version agrees; the only thing wrong is the tick nothing
+        // reviewed. A release is the last moment to catch it.
+        let root = repo_fixture("skipped", "1.2.3", "1.2.3", "## [1.2.3]\n\n- shipped\n");
+        tick_without_reviewing(&root);
+
+        let error = release_guard_command(&root, &["v1.2.3".into()])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("01-fixture/t1") && error.contains("no review record"),
+            "the refusal does not name the failing task and the lack: {error}",
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_skipped_pipeline_is_reported_beside_the_version_disagreements() {
+        // The guard reports every disagreement rather than the first, so
+        // one trip round the release loop fixes all of them. A pipeline
+        // failure that hid the version drift, or that the drift hid, would
+        // cost the second trip this module exists to save.
+        let root = repo_fixture("skipped-and-drifted", "1.2.3", "0.0.1", "# Changelog\n");
+        tick_without_reviewing(&root);
+
+        let error = release_guard_command(&root, &["v9.9.9".into()])
+            .unwrap_err()
+            .to_string();
+        for expected in ["v9.9.9", "0.0.1", "CHANGELOG", "01-fixture/t1"] {
+            assert!(
+                error.contains(expected),
+                "`{expected}` missing from: {error}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_gate_that_cannot_run_at_all_refuses_the_release() {
+        // Not "the pipeline is fine": the gate could not read the specs it
+        // judges, which is the failure `declared_versions` refuses one
+        // function above. Reported as a reason among the others, because
+        // the release stops either way and the reader wants the whole list.
+        let root = repo_fixture("no-specs", "1.2.3", "1.2.3", "## [1.2.3]\n\n- shipped\n");
+        std::fs::remove_dir_all(root.join("specs")).unwrap();
+
+        let error = release_guard_command(&root, &["v1.2.3".into()])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("pipeline gate") && error.contains("specs"),
+            "the refusal does not say the gate could not run, or over what: {error}",
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -357,6 +477,13 @@ mod tests {
         let root = repo_fixture("ok", "1.2.3", "1.2.3", "## [1.2.3]\n\n- shipped\n");
         let out = release_guard_command(&root, &["v1.2.3".into()]).unwrap();
         assert!(out.contains("1.2.3") && out.contains("consistent"), "{out}");
+        // And it says the pipeline was among what it checked. A guard that
+        // checks more than it claims is one nobody knows they are relying
+        // on — and one nobody notices has stopped.
+        assert!(
+            out.contains("ticked task"),
+            "the guard checks the pipeline without saying so: {out}",
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
