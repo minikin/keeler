@@ -15,7 +15,8 @@ pub fn usage() -> String {
     "cargo xtask <command>\n\nCommands:\n  \
      release-notes <version> <changelog>   print one version's notes\n  \
      checksum <file>                       print its sha256 checksum line\n  \
-     release-guard <tag>                   refuse a tag that lies\n"
+     release-guard <tag>                   refuse a tag that lies\n  \
+     pipeline-check                        refuse a tick no review accounts for\n"
         .to_string()
 }
 
@@ -27,6 +28,26 @@ pub type Failure = Box<dyn std::error::Error>;
 fn read(path: &str) -> Result<String, Failure> {
     std::fs::read_to_string(path).map_err(|why| format!("cannot read {path}: {why}").into())
 }
+
+/// One command: the repository it runs against, and the arguments after its
+/// own name. The root is the working directory for every command that reads
+/// the repository; the ones that read only their arguments ignore it.
+type Command = fn(&std::path::Path, &[String]) -> Result<String, Failure>;
+
+/// Every command, in the order `usage()` lists them.
+///
+/// A table and not a `match` arm apiece: dispatch that grows a branch per
+/// command charges that growth to whichever change adds the next one, and
+/// the CRAP ratchet measures per function — a gate that gets harder to pass
+/// the more commands exist is a gate that punishes the wrong thing.
+const COMMANDS: [(&str, Command); 6] = [
+    ("--help", |_, _| Ok(usage())),
+    ("-h", |_, _| Ok(usage())),
+    ("release-notes", |_, args| release_notes_command(args)),
+    ("checksum", |_, args| checksum_command(args)),
+    ("release-guard", release_guard_command),
+    ("pipeline-check", pipeline_check_command),
+];
 
 /// Runs one command and returns what it should print.
 ///
@@ -42,13 +63,10 @@ pub fn run(args: &[String]) -> Result<String, Failure> {
     let Some((command, rest)) = args.split_first() else {
         return Ok(usage());
     };
-    match command.as_str() {
-        "--help" | "-h" => Ok(usage()),
-        "release-notes" => release_notes_command(rest),
-        "checksum" => checksum_command(rest),
-        "release-guard" => release_guard_command(std::path::Path::new("."), rest),
-        unknown => Err(format!("unknown command `{unknown}`\n\n{}", usage()).into()),
-    }
+    let Some((_, dispatch)) = COMMANDS.iter().find(|(name, _)| name == command) else {
+        return Err(format!("unknown command `{command}`\n\n{}", usage()).into());
+    };
+    dispatch(std::path::Path::new("."), rest)
 }
 
 /// `release-notes <version> <changelog>`
@@ -141,6 +159,62 @@ fn release_guard_command(root: &std::path::Path, args: &[String]) -> Result<Stri
     Err(format!("refusing to release:\n  {}", found.join("\n  ")).into())
 }
 
+/// `pipeline-check`, against the repository rooted at `root`.
+///
+/// The impure shell over the decision: it reads the three inputs and prints
+/// what the pure rule concluded. The root is a parameter for the reason
+/// `release-guard`'s is — an implicit working directory is what kept that
+/// command untested — and everything it consults is a file. No git, no
+/// network, no clock, so the gate runs identically in a worktree, a shallow
+/// clone and CI.
+fn pipeline_check_command(root: &std::path::Path, args: &[String]) -> Result<String, Failure> {
+    if !args.is_empty() {
+        return Err("usage: pipeline-check".into());
+    }
+    let specs = pipeline::specs::read_from(&root.join("specs"))?;
+    // A gate that measured nothing must not report success: an empty
+    // `specs/` accounts for every ticked task there is by accounting for
+    // none, which is the failure `declared_versions` refuses above.
+    if specs.is_empty() {
+        return Err(format!(
+            "no specs in {} — nothing could be checked",
+            root.join("specs").display(),
+        )
+        .into());
+    }
+    let records = pipeline::records::read_from(&root.join("reviews"))?;
+    let backlog = pipeline::backlog::read_from(&root.join("reviews/BACKLOG.md"))?;
+
+    let broken: Vec<String> = pipeline::specs::unkept_promises(&specs)
+        .iter()
+        .map(|task| format!("{task} is unticked in a spec marked `Status: Implemented`"))
+        .collect();
+    let decision = pipeline::decision::decide(&pipeline::specs::ticked(&specs), &records, &backlog);
+    match (decision, broken.is_empty()) {
+        (pipeline::decision::Decision::AllAccounted { ticked }, true) => Ok(format!(
+            "pipeline-check: {ticked} ticked task(s) accounted for — \
+             {} review record(s), {} line(s) of accepted debt",
+            records.len(),
+            backlog.len(),
+        )),
+        (pipeline::decision::Decision::AllAccounted { .. }, false) => Err(refusal(&broken)),
+        (pipeline::decision::Decision::Missing(missing), _) => {
+            let mut all: Vec<String> = missing.iter().map(ToString::to_string).collect();
+            all.extend(broken);
+            Err(refusal(&all))
+        }
+    }
+}
+
+/// One refusal per line, so a reader fixing them can work down the list.
+fn refusal(complaints: &[String]) -> Failure {
+    format!(
+        "refusing to vouch for this pipeline:\n  {}",
+        complaints.join("\n  "),
+    )
+    .into()
+}
+
 /// `checksum <file>`
 fn checksum_command(args: &[String]) -> Result<String, Failure> {
     match args {
@@ -154,7 +228,7 @@ fn checksum_command(args: &[String]) -> Result<String, Failure> {
 
 #[cfg(test)]
 mod tests {
-    use super::{release_guard_command, run, usage};
+    use super::{pipeline_check_command, release_guard_command, run, usage};
 
     fn fixture(name: &str, content: &str) -> std::path::PathBuf {
         let path = std::env::temp_dir().join(format!("xtask-{name}-{}", std::process::id()));
@@ -415,9 +489,298 @@ mod tests {
         assert!(error.contains("VERSION"), "no file named in: {error}");
     }
 
+    /// A throwaway repository root holding the given `(relative path,
+    /// content)` — `specs/`, `reviews/` and the backlog, in whatever state
+    /// the case under test needs.
+    fn gate_fixture(name: &str, files: &[(&str, &str)]) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!("xtask-gate-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for (path, content) in files {
+            let file = root.join(path);
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(file, content).unwrap();
+        }
+        root
+    }
+
+    /// One spec with one ticked task, and a well-formed pass record for it.
+    fn spec_with_one_tick() -> (&'static str, &'static str) {
+        (
+            "specs/09-demo.md",
+            "**Status:** Approved\n\n## Tasks\n\n- [x] **T1 — Shipped.**\n",
+        )
+    }
+
+    fn pass_record() -> (&'static str, &'static str) {
+        (
+            "reviews/09-demo/t1.md",
+            "Spec: 09-demo\nTask: t1\nCommit: abc1234\nVerdict: pass\n\n## Findings\n\nnone\n",
+        )
+    }
+
+    #[test]
+    fn the_gate_says_what_it_counted_and_what_it_counted_it_from() {
+        // Two backlog lines against one record, so a message that swapped
+        // the counts or invented one could not pass.
+        let root = gate_fixture(
+            "counts",
+            &[
+                spec_with_one_tick(),
+                pass_record(),
+                ("reviews/BACKLOG.md", "01-old/t1\n01-old/t2\n"),
+            ],
+        );
+        assert_eq!(
+            pipeline_check_command(&root, &[]).unwrap(),
+            "pipeline-check: 1 ticked task(s) accounted for — \
+             1 review record(s), 2 line(s) of accepted debt",
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_tick_with_no_evidence_is_refused_by_the_command() {
+        let root = gate_fixture("unreviewed", &[spec_with_one_tick()]);
+        let error = pipeline_check_command(&root, &[]).unwrap_err().to_string();
+        assert!(
+            error.contains("09-demo/t1") && error.contains("no review record"),
+            "the refusal does not name the task and the lack: {error}",
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_backlog_line_carries_a_tick_the_records_do_not() {
+        // The debt list is the gate's second source of coverage, and the
+        // command must actually read it — the thirty-nine on this
+        // repository's books are what stand between it and its own gate.
+        let root = gate_fixture(
+            "debt",
+            &[spec_with_one_tick(), ("reviews/BACKLOG.md", "09-demo/t1\n")],
+        );
+        let accounted = pipeline_check_command(&root, &[]).unwrap();
+        assert!(
+            accounted.contains("1 line(s) of accepted debt"),
+            "{accounted}"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn the_backlog_is_not_read_as_a_review_record() {
+        // `reviews/BACKLOG.md` sits among the record directories and ends
+        // in `.md` like they do. Read as a record it would be refused as
+        // malformed, and the gate would fail over the file that exists to
+        // make it pass.
+        let root = gate_fixture(
+            "backlog-not-a-record",
+            &[
+                spec_with_one_tick(),
+                pass_record(),
+                ("reviews/BACKLOG.md", "01-old/t1\n"),
+            ],
+        );
+        assert!(pipeline_check_command(&root, &[]).is_ok());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_malformed_record_is_named_by_the_command() {
+        let root = gate_fixture(
+            "malformed",
+            &[
+                spec_with_one_tick(),
+                (
+                    "reviews/09-demo/t1.md",
+                    "Spec: 09-demo\nTask: t1\nVerdict: pass\n",
+                ),
+            ],
+        );
+        let error = pipeline_check_command(&root, &[]).unwrap_err().to_string();
+        assert!(
+            error.contains("09-demo/t1.md") && error.contains("`Commit:`"),
+            "the refusal names neither the file nor the header it lacks: {error}",
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_backlog_that_lies_is_named_with_its_file() {
+        // The parked gate panicked here. The refusal names the file the
+        // reader has to open and the line inside it.
+        let root = gate_fixture(
+            "duplicate",
+            &[
+                spec_with_one_tick(),
+                pass_record(),
+                ("reviews/BACKLOG.md", "01-old/t1\n01-old/t1\n"),
+            ],
+        );
+        let error = pipeline_check_command(&root, &[]).unwrap_err().to_string();
+        assert!(
+            error.contains("BACKLOG.md") && error.contains("line 2 duplicates line 1"),
+            "the refusal does not name the file and the duplicated line: {error}",
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn an_implemented_spec_with_an_unticked_task_is_refused() {
+        // Given a spec marked Implemented with a task unticked
+        let root = gate_fixture(
+            "promise",
+            &[
+                (
+                    "specs/09-demo.md",
+                    "**Status:** Implemented\n\n## Tasks\n\n\
+                     - [x] **T1 — Shipped.**\n- [ ] **T2 — Forgotten.**\n",
+                ),
+                pass_record(),
+            ],
+        );
+        // Then the gate fails, naming the spec and the task
+        let error = pipeline_check_command(&root, &[]).unwrap_err().to_string();
+        assert!(
+            error.contains("09-demo/t2") && error.contains("Implemented"),
+            "the refusal does not name the broken promise: {error}",
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_repository_with_no_specs_is_refused_not_passed() {
+        // A gate that measured nothing must not report success — the
+        // failure `declared_versions` already refuses one line above.
+        let root = gate_fixture("no-specs", &[("reviews/BACKLOG.md", "")]);
+        std::fs::create_dir_all(root.join("specs")).unwrap();
+        let error = pipeline_check_command(&root, &[]).unwrap_err().to_string();
+        assert!(
+            error.contains("nothing could be checked"),
+            "an empty specs directory passed the gate: {error}",
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_repository_with_neither_reviews_nor_backlog_is_read_as_no_evidence() {
+        // Absence is not an error here: it is a repository where nothing
+        // has been reviewed and nothing is owed, which fails loudly the
+        // moment anything is ticked and passes while nothing is.
+        let root = gate_fixture(
+            "bare",
+            &[(
+                "specs/09-demo.md",
+                "**Status:** Approved\n\n## Tasks\n\n- [ ] **T1 — Not yet.**\n",
+            )],
+        );
+        assert_eq!(
+            pipeline_check_command(&root, &[]).unwrap(),
+            "pipeline-check: 0 ticked task(s) accounted for — \
+             0 review record(s), 0 line(s) of accepted debt",
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_reviews_path_that_is_not_a_directory_is_named() {
+        // Not the absence the gate forgives: `reviews` is there and is not
+        // what it must be, and a gate that read that as "no records" would
+        // pass a repository whose every review it could not see.
+        let root = gate_fixture(
+            "reviews-a-file",
+            &[spec_with_one_tick(), ("reviews", "not a directory\n")],
+        );
+        let error = pipeline_check_command(&root, &[]).unwrap_err().to_string();
+        assert!(
+            error.contains("reviews"),
+            "the refusal does not name what it could not read: {error}",
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_backlog_path_that_is_not_a_file_is_named() {
+        let root = gate_fixture("backlog-a-dir", &[spec_with_one_tick(), pass_record()]);
+        std::fs::create_dir_all(root.join("reviews/BACKLOG.md")).unwrap();
+        let error = pipeline_check_command(&root, &[]).unwrap_err().to_string();
+        assert!(
+            error.contains("BACKLOG.md"),
+            "the refusal does not name what it could not read: {error}",
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn what_is_not_a_record_in_a_records_directory_is_passed_over() {
+        // A directory the operating system litters — `.DS_Store` — must
+        // not be read as a review of a task called `.DS_Store`, nor refuse
+        // the whole gate for not being one.
+        let root = gate_fixture(
+            "litter",
+            &[
+                spec_with_one_tick(),
+                pass_record(),
+                ("reviews/09-demo/.DS_Store", "\u{0}\u{0}"),
+                ("reviews/09-demo/notes.txt", "scratch\n"),
+            ],
+        );
+        assert!(pipeline_check_command(&root, &[]).is_ok());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_markdown_file_where_records_live_is_held_to_the_grammar() {
+        // The other half of the rule above, and the deliberate one: prose
+        // filed among the records is refused by name, not passed over. A
+        // record misnamed by one letter is the case that matters — passed
+        // over, its task reads as unreviewed while the file sits right
+        // there, and nothing names the file that would have explained it.
+        let root = gate_fixture(
+            "prose",
+            &[
+                spec_with_one_tick(),
+                pass_record(),
+                ("reviews/09-demo/README.md", "# Notes about this spec\n"),
+            ],
+        );
+        let error = pipeline_check_command(&root, &[]).unwrap_err().to_string();
+        assert!(
+            error.contains("09-demo/README.md") && error.contains("`Spec:`"),
+            "the refusal does not name the file and what it is not: {error}",
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn pipeline_check_takes_no_arguments() {
+        let error = pipeline_check_command(std::path::Path::new("."), &["specs".into()])
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("pipeline-check"), "no usage in: {error}");
+    }
+
+    #[test]
+    fn the_usage_lists_the_gate() {
+        assert!(
+            usage().contains("pipeline-check"),
+            "a command nobody is told about: {}",
+            usage(),
+        );
+    }
+
     #[test]
     fn no_command_at_all_prints_the_usage() {
         assert!(run(&[]).unwrap().starts_with("cargo xtask"));
+    }
+
+    #[test]
+    fn both_spellings_of_help_print_the_usage() {
+        for spelling in ["--help", "-h"] {
+            assert!(
+                run(&[spelling.into()]).unwrap().starts_with("cargo xtask"),
+                "`{spelling}` does not print the usage",
+            );
+        }
     }
 
     #[test]
