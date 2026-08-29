@@ -98,7 +98,7 @@ fn entry(line: &str) -> Option<TaskId> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::decision::{Decision, Record, TaskId, Verdict, decide};
+    use super::super::decision::{Decision, Record, TaskId, Uncovered, Verdict, Why, decide};
     use super::{Refusal, entry, parse};
 
     fn task(spec: &str, id: &str) -> TaskId {
@@ -250,7 +250,10 @@ mod tests {
         ];
         assert_eq!(
             decide(&ticked, &[], &backlog),
-            Decision::Missing(vec![task("03-wild", "t2")]),
+            Decision::Missing(vec![Uncovered {
+                task: task("03-wild", "t2"),
+                why: Why::Unreviewed,
+            }]),
         );
     }
 

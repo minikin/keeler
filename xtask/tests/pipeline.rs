@@ -7,7 +7,7 @@
 
 use std::path::{Path, PathBuf};
 
-use xtask::pipeline::decision::{Decision, TaskId, decide};
+use xtask::pipeline::decision::{Decision, TaskId, Uncovered, Why, decide};
 use xtask::pipeline::specs;
 
 /// A throwaway specs directory holding the given `(file name, content)`.
@@ -46,7 +46,10 @@ fn an_implemented_spec_vouches_for_every_task() {
     // Implemented cannot vouch for a task no record accounts for
     assert_eq!(
         decide(&specs::ticked(&read), &[], &[]),
-        Decision::Missing(vec![TaskId::new("09-demo", "t1")]),
+        Decision::Missing(vec![Uncovered {
+            task: TaskId::new("09-demo", "t1"),
+            why: Why::Unreviewed,
+        }]),
     );
 
     let _ = std::fs::remove_dir_all(dir);
