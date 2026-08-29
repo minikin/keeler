@@ -29,6 +29,26 @@ fn read(path: &str) -> Result<String, Failure> {
     std::fs::read_to_string(path).map_err(|why| format!("cannot read {path}: {why}").into())
 }
 
+/// One command: the repository it runs against, and the arguments after its
+/// own name. The root is the working directory for every command that reads
+/// the repository; the ones that read only their arguments ignore it.
+type Command = fn(&std::path::Path, &[String]) -> Result<String, Failure>;
+
+/// Every command, in the order `usage()` lists them.
+///
+/// A table and not a `match` arm apiece: dispatch that grows a branch per
+/// command charges that growth to whichever change adds the next one, and
+/// the CRAP ratchet measures per function — a gate that gets harder to pass
+/// the more commands exist is a gate that punishes the wrong thing.
+const COMMANDS: [(&str, Command); 6] = [
+    ("--help", |_, _| Ok(usage())),
+    ("-h", |_, _| Ok(usage())),
+    ("release-notes", |_, args| release_notes_command(args)),
+    ("checksum", |_, args| checksum_command(args)),
+    ("release-guard", release_guard_command),
+    ("pipeline-check", pipeline_check_command),
+];
+
 /// Runs one command and returns what it should print.
 ///
 /// Dispatch only: each command is its own function, so adding one does not
@@ -43,14 +63,10 @@ pub fn run(args: &[String]) -> Result<String, Failure> {
     let Some((command, rest)) = args.split_first() else {
         return Ok(usage());
     };
-    match command.as_str() {
-        "--help" | "-h" => Ok(usage()),
-        "release-notes" => release_notes_command(rest),
-        "checksum" => checksum_command(rest),
-        "release-guard" => release_guard_command(std::path::Path::new("."), rest),
-        "pipeline-check" => pipeline_check_command(std::path::Path::new("."), rest),
-        unknown => Err(format!("unknown command `{unknown}`\n\n{}", usage()).into()),
-    }
+    let Some((_, dispatch)) = COMMANDS.iter().find(|(name, _)| name == command) else {
+        return Err(format!("unknown command `{command}`\n\n{}", usage()).into());
+    };
+    dispatch(std::path::Path::new("."), rest)
 }
 
 /// `release-notes <version> <changelog>`
@@ -755,6 +771,16 @@ mod tests {
     #[test]
     fn no_command_at_all_prints_the_usage() {
         assert!(run(&[]).unwrap().starts_with("cargo xtask"));
+    }
+
+    #[test]
+    fn both_spellings_of_help_print_the_usage() {
+        for spelling in ["--help", "-h"] {
+            assert!(
+                run(&[spelling.into()]).unwrap().starts_with("cargo xtask"),
+                "`{spelling}` does not print the usage",
+            );
+        }
     }
 
     #[test]
