@@ -940,6 +940,30 @@ fn the_runner_is_written_as_it_was_meant_not_as_the_shell_ate_it() {
 }
 
 #[test]
+fn the_runner_parses_under_the_bash_that_will_run_it() {
+    // Given a spawn, and the runner it wrote
+    let project = Project::new("bash-n");
+    let output = project.spawn(SLUG, "T3");
+    assert!(output.status.success(), "{}", both(&output));
+    let runner = project.runs(SLUG).join("t3.sh");
+
+    // Then /bin/bash — 3.2 on macOS, the oldest bash a runner will meet —
+    // accepts it whole. An unbalanced apostrophe in the prompt's prose
+    // ("the command's output") broke 3.2's parse of the heredoc inside
+    // $( ), and the run died before its first line of output.
+    let check = std::process::Command::new("/bin/bash")
+        .arg("-n")
+        .arg(&runner)
+        .output()
+        .unwrap();
+    assert!(
+        check.status.success(),
+        "the runner the spawn wrote is not valid bash:\n{}",
+        String::from_utf8_lossy(&check.stderr)
+    );
+}
+
+#[test]
 fn the_log_carries_progress_and_not_only_the_final_answer() {
     // Given the runner a spawn writes
     let project = Project::new("verbose-log");
