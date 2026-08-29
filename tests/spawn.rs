@@ -542,6 +542,47 @@ fn session_script(project: &Project, call: &[String]) -> String {
 }
 
 #[test]
+fn a_spawned_agent_is_told_its_turn_is_the_only_one() {
+    // Given a task spawned by `just keeler-spawn`
+    let project = Project::new("one-turn");
+    let output = project.spawn(SLUG, "T3");
+    assert!(output.status.success(), "{}", both(&output));
+    let ran = session_script(&project, &project.new_sessions()[0]);
+
+    // Then the prompt says the session ends with the reply — three of five
+    // real runs ended with "the gate is running in the background, I'll
+    // continue when it reports", and headless sessions have no next turn
+    let lower = ran.to_lowercase();
+    assert!(
+        lower.contains("one turn"),
+        "the prompt never says the turn is the only one:\n{ran}"
+    );
+    assert!(
+        lower.contains("nothing resumes it") || lower.contains("nothing will resume"),
+        "the prompt never says nothing resumes the session:\n{ran}"
+    );
+    // And it forbids the exact move that killed those runs: a gate put in
+    // the background to be picked up "afterwards"
+    assert!(
+        lower.contains("background"),
+        "the prompt never forbids backgrounding the gate:\n{ran}"
+    );
+    // And the trap that beat the first wording is named: a harness that
+    // backgrounds a long command itself and promises a notification the
+    // headless session will never receive
+    assert!(
+        lower.contains("poll"),
+        "the prompt never says to poll a backgrounded command in-turn:\n{ran}"
+    );
+    // And the belt under the prose: the gate is given room to finish in
+    // the foreground, so the harness never backgrounds it at all
+    assert!(
+        ran.contains("BASH_DEFAULT_TIMEOUT_MS"),
+        "the runner never raises the foreground timeout:\n{ran}"
+    );
+}
+
+#[test]
 fn a_spawned_agent_commits_on_its_branch_and_nowhere_else() {
     // Given a task spawned by `just keeler-spawn`
     let project = Project::new("commits");
@@ -895,6 +936,30 @@ fn the_runner_is_written_as_it_was_meant_not_as_the_shell_ate_it() {
     assert!(
         !runner.contains("# , because") && !runner.contains("final  record"),
         "a comment reached the runner with its subject eaten:\n{runner}"
+    );
+}
+
+#[test]
+fn the_runner_parses_under_the_bash_that_will_run_it() {
+    // Given a spawn, and the runner it wrote
+    let project = Project::new("bash-n");
+    let output = project.spawn(SLUG, "T3");
+    assert!(output.status.success(), "{}", both(&output));
+    let runner = project.runs(SLUG).join("t3.sh");
+
+    // Then /bin/bash — 3.2 on macOS, the oldest bash a runner will meet —
+    // accepts it whole. An unbalanced apostrophe in the prompt's prose
+    // ("the command's output") broke 3.2's parse of the heredoc inside
+    // $( ), and the run died before its first line of output.
+    let check = std::process::Command::new("/bin/bash")
+        .arg("-n")
+        .arg(&runner)
+        .output()
+        .unwrap();
+    assert!(
+        check.status.success(),
+        "the runner the spawn wrote is not valid bash:\n{}",
+        String::from_utf8_lossy(&check.stderr)
     );
 }
 

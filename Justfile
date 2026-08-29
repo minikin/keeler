@@ -435,6 +435,16 @@ _write-runner SPEC TASK BRANCH WORKTREE RUNNER EXIT_FILE LOG_FILE STREAM_FILE:
     /keeler:review, then /keeler:mutants. The gate is 'just keeler-branch';
     it must be green before the task is done.
 
+    You have exactly one turn: when your reply ends, the session is over
+    and nothing resumes it. Never start the gate, a build or anything else
+    in the background expecting to pick it up afterwards — there is no
+    afterwards. Run it in the foreground, wait, and finish the whole
+    pipeline, commits included, before your reply ends. If your harness
+    moves a long command to the background anyway and promises a
+    notification, that promise is not for this session — the notification
+    lands after you are gone. Poll its output in this same turn until it
+    ends.
+
     You are on branch $branch, in the worktree $worktree. Commit there as
     each stage finishes: the human ran keeler-spawn for this task, and that
     was the consent for those commits. Commit nowhere else, never push, and
@@ -470,6 +480,7 @@ _write-runner SPEC TASK BRANCH WORKTREE RUNNER EXIT_FILE LOG_FILE STREAM_FILE:
         # project met exactly that. The stream's final 'result' record is
         # written only when the turn ends, so its presence is the signal
         # and its absence is the death, however calm the exit.
+        BASH_DEFAULT_TIMEOUT_MS=1800000 BASH_MAX_TIMEOUT_MS=1800000 \
         claude -p "\$prompt" --verbose --output-format stream-json \
             --permission-mode acceptEdits --allowedTools '$tools' --disallowedTools '$blocked' \
             | tee "$stream_file"
