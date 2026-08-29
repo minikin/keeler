@@ -435,6 +435,12 @@ _write-runner SPEC TASK BRANCH WORKTREE RUNNER EXIT_FILE LOG_FILE STREAM_FILE:
     /keeler:review, then /keeler:mutants. The gate is 'just keeler-branch';
     it must be green before the task is done.
 
+    You have exactly one turn: when your reply ends, the session is over
+    and nothing resumes it. Never start the gate, a build or anything else
+    in the background expecting to pick it up afterwards — there is no
+    afterwards. Run it in the foreground, wait, and finish the whole
+    pipeline, commits included, before your reply ends.
+
     You are on branch $branch, in the worktree $worktree. Commit there as
     each stage finishes: the human ran keeler-spawn for this task, and that
     was the consent for those commits. Commit nowhere else, never push, and

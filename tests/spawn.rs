@@ -542,6 +542,34 @@ fn session_script(project: &Project, call: &[String]) -> String {
 }
 
 #[test]
+fn a_spawned_agent_is_told_its_turn_is_the_only_one() {
+    // Given a task spawned by `just keeler-spawn`
+    let project = Project::new("one-turn");
+    let output = project.spawn(SLUG, "T3");
+    assert!(output.status.success(), "{}", both(&output));
+    let ran = session_script(&project, &project.new_sessions()[0]);
+
+    // Then the prompt says the session ends with the reply — three of five
+    // real runs ended with "the gate is running in the background, I'll
+    // continue when it reports", and headless sessions have no next turn
+    let lower = ran.to_lowercase();
+    assert!(
+        lower.contains("one turn"),
+        "the prompt never says the turn is the only one:\n{ran}"
+    );
+    assert!(
+        lower.contains("nothing resumes it") || lower.contains("nothing will resume"),
+        "the prompt never says nothing resumes the session:\n{ran}"
+    );
+    // And it forbids the exact move that killed those runs: a gate put in
+    // the background to be picked up "afterwards"
+    assert!(
+        lower.contains("background"),
+        "the prompt never forbids backgrounding the gate:\n{ran}"
+    );
+}
+
+#[test]
 fn a_spawned_agent_commits_on_its_branch_and_nowhere_else() {
     // Given a task spawned by `just keeler-spawn`
     let project = Project::new("commits");
