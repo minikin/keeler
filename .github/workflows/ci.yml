@@ -80,6 +80,20 @@ jobs:
       - name: VERSION, marker and CHANGELOG agree
         run: cargo xtask release-guard "v$(tr -d '[:space:]' < VERSION)"
 
+  # No `if:`, and no fetch-depth: the gate consults no git history at all,
+  # so it reads the same in a shallow checkout as in a full one — and every
+  # route to main, push and pull request alike, passes through it. Ancestry
+  # is the review-record job's question, below, and only there.
+  pipeline-check:
+    name: Pipeline check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Every ticked task holds a review record or a line of accepted debt
+        run: cargo xtask pipeline-check
+
   installer:
     name: Installer (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

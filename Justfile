@@ -99,8 +99,24 @@ crap-delta:
     cargo crap --lcov lcov.info --workspace --threshold 15 --fail-above \
         --baseline crap-baseline.json --fail-regression
 
+# The body below is inert in your project — like the shellcheck branch in
+# `lint`, it is keyed on a marker file only Keeler's own repository has.
+# `cargo xtask pipeline-check` is repository machinery Keeler does not
+# install, so your review stage stays documented rather than enforced; the
+# keeler/* pull-request check in .github/workflows/keeler.yml is the part
+# of it you do get.
+#
+# It runs after the four gates above, not before: those take minutes and
+# this takes milliseconds, and a gate that runs first would send you back
+# to a review stage before your tests had compiled.
+#
 # Full local gate: format, lint, tests, coverage, CRAP
 dev: fmt lint test crap
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -e templates/keeler.yml ]; then
+        cargo xtask pipeline-check
+    fi
 
 # Mutation tests for a specific file: just mutants src/lib.rs
 # --workspace, or a member crate's file yields "Found 0 mutants" and the
