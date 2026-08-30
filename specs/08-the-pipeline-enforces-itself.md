@@ -225,7 +225,7 @@ job block to `.github/workflows/ci.yml` under its own job name.
       `review-record:` job copied verbatim from `templates/keeler.yml`
       into our own workflow. Scenarios: _This repository runs the check
       it ships_. Tests: acceptance.
-- [ ] **T9 — The rules stop claiming nothing can notice.**
+- [x] **T9 — The rules stop claiming nothing can notice.**
       `.claude/keeler.md`'s review-stage warning and CONTRIBUTING's
       "Nothing enforces this" both redrawn: enforced here, documented
       for adopters. Needs: T7. Scenarios: _The rules stop claiming

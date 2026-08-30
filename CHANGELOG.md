@@ -19,6 +19,16 @@ Installations pin a version with `KEELER_REF` and record it at the top of
   Each question is phrased as the scenario it will become, so the settled
   frontier reads straight into the Acceptance Tests. Adapted from
   mattpocock/skills' `grilling`.
+- **The rules draw the review stage's boundary.** They used to tell every
+  project that nothing can notice a skipped review. In the repository that
+  ships Keeler that stopped being true — `cargo xtask pipeline-check`
+  refuses a ticked task with no review record and no line of accepted
+  debt, and `just dev`, CI and the release guard all run it. The gate is
+  repository machinery Keeler does not install, so the rules now say which
+  half is which: enforced there, and in your project the linear road's
+  review stage stays documented rather than enforced, with the `keeler/*`
+  pull-request check in `.github/workflows/keeler.yml` the part of it you
+  do have.
 - **/keeler:fix gained a diagnosis discipline.** The regression test must
   be tight — red on the user's exact symptom, deterministic, seconds —
   and reproduction is claimed only by showing the red run; a flaky bug is

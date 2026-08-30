@@ -24,6 +24,20 @@ fn command(name: &str) -> String {
         .unwrap_or_else(|why| panic!("cannot read {}: {why}", path.display()))
 }
 
+/// The shipped workflow rules — the file `install.sh` copies into every
+/// adopting project, so a claim made here is made in their repository too.
+fn rules() -> String {
+    std::fs::read_to_string(repo_root().join(".claude/keeler.md")).unwrap()
+}
+
+/// One `## ` section of a Markdown document, from its heading to the next.
+fn section(doc: &str, heading: &str) -> String {
+    doc.split("\n## ")
+        .find(|section| section.starts_with(heading))
+        .unwrap_or_else(|| panic!("no `## {heading}` section"))
+        .to_string()
+}
+
 /// The pipeline, in order, as `(stage, the stage that follows it)`.
 const PIPELINE: [(&str, &str); 3] = [
     ("tdd", "/keeler:qa"),
@@ -85,10 +99,7 @@ fn the_checkbox_is_ticked_by_the_stage_that_can_honestly_tick_it() {
 #[test]
 fn the_rules_say_which_stage_ticks_the_box() {
     // Given the workflow rules Keeler ships
-    let rules = std::fs::read_to_string(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".claude/keeler.md"),
-    )
-    .unwrap();
+    let rules = rules();
 
     // Then they agree with the commands. Rules that contradict the
     // commands are worse than no rules: both look authoritative.
@@ -105,18 +116,15 @@ fn the_rules_say_which_stage_ticks_the_box() {
 #[test]
 fn the_rules_warn_that_a_skipped_review_goes_unnoticed() {
     // Given the workflow rules Keeler ships into other people's projects
-    let rules = std::fs::read_to_string(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".claude/keeler.md"),
-    )
-    .unwrap();
 
-    // Then they say the review stage is enforced in Keeler's own
-    // repository and not in theirs. Describing a gate an adopter does not
-    // have is worse than describing none: they would believe it is there.
-    let review = rules
-        .split("## ")
-        .find(|section| section.starts_with("Quality gates"))
-        .expect("the rules no longer describe the quality gates");
+    // Then the Quality gates section still carries the review-stage
+    // warning: a skipped review leaves no artifact whose absence anything
+    // trips over. That is the half an adopting project lives with, and the
+    // phrase is what both this test and
+    // `the_rules_stop_claiming_nothing_can_notice` find the paragraph by.
+    // Which enforcement regime the paragraph then describes is that test's
+    // business — this one is here so the warning cannot vanish entirely.
+    let review = section(&rules(), "Quality gates");
     assert!(
         review.contains("leaves no artifact"),
         "the rules do not warn that a skipped review goes unnoticed:\n{review}",
@@ -312,6 +320,92 @@ fn the_gate_is_one_recipe_away_everywhere_the_gates_live() {
     assert!(
         !job.lines().any(|line| line.trim_start().starts_with("if:")),
         "ci.yml's pipeline-check job is conditional — it must run on a push and on a pull request alike:\n{job}",
+    );
+}
+
+// T9 — the rules stop claiming nothing can notice.
+
+/// The paragraph of the rules' Quality gates section that warns about the
+/// review stage, found by the phrase `the_rules_warn_that_a_skipped_review_
+/// goes_unnoticed` pins it by — so the two tests keep talking about the
+/// same paragraph however it is rewritten around them.
+fn review_stage_warning() -> String {
+    section(&rules(), "Quality gates")
+        .split("\n\n")
+        .find(|paragraph| paragraph.contains("leaves no artifact"))
+        .expect("the rules' Quality gates section no longer warns about the review stage")
+        .to_string()
+}
+
+/// Prose with its line breaks taken out, so a phrase is looked for in the
+/// sentence and not in the wrapping. `cargo xtask pipeline-check` falls
+/// across a line break in the paragraph below; a raw `contains` would
+/// demand a rewrap of any paragraph these phrases move within, which is
+/// editing prose to suit a test.
+fn unwrapped(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+#[test]
+fn the_rules_stop_claiming_nothing_can_notice() {
+    // Given the shipped workflow rules' review-stage warning
+    // When the rules are read
+    let paragraph = review_stage_warning();
+    let warning = unwrapped(&paragraph);
+
+    // Then they say the gate runs in the repository that ships Keeler. The
+    // sentence they carried instead — "there is no mechanism that will
+    // catch this for you" — was false here the moment the gate landed, and
+    // rules that are wrong about their own gates are worse than silent
+    // ones: both read as authoritative.
+    assert!(
+        !warning.contains("no mechanism that will catch this"),
+        "the rules still say nothing can catch a skipped review:\n{paragraph}",
+    );
+    assert!(
+        warning.contains("cargo xtask pipeline-check"),
+        "the rules do not name the gate that catches it here:\n{paragraph}",
+    );
+
+    // And that an adopting project's review stage remains unenforced,
+    // naming the one check they do get. This half is the load-bearing one:
+    // describing a gate an adopter does not have would leave them trusting
+    // a mechanism that is not in their repository.
+    assert!(
+        warning.contains("documented rather than enforced"),
+        "the rules do not say an adopting project's review stage is unenforced:\n{paragraph}",
+    );
+    assert!(
+        warning.contains("keeler/*"),
+        "the rules do not name the check an adopting project does get:\n{paragraph}",
+    );
+}
+
+/// CONTRIBUTING carried the same claim as the rules did — "Nothing
+/// enforces this", under Review debt — and T9 redraws both. It is this
+/// repository's own doc and not a shipped file, so it is no part of the
+/// scenario above; a regression here is a regression in what contributors
+/// here are told, and says so under its own name rather than failing a
+/// test about the workflow rules.
+#[test]
+fn contributing_says_what_enforces_the_review_stage() {
+    // Given the paragraph that named a gate parked on a branch
+    let section = section(
+        &std::fs::read_to_string(repo_root().join("CONTRIBUTING.md")).unwrap(),
+        "Review debt",
+    );
+    let debt = unwrapped(&section);
+
+    // Then it names the gate that replaced it, and where the debt it
+    // measures against is written down — a contributor who reads only that
+    // nothing enforces the stage has no reason to look for either.
+    assert!(
+        !debt.contains("Nothing enforces this"),
+        "CONTRIBUTING still says nothing enforces the review stage:\n{section}",
+    );
+    assert!(
+        debt.contains("cargo xtask pipeline-check") && debt.contains("reviews/BACKLOG.md"),
+        "CONTRIBUTING does not say what now enforces it, nor where the debt is recorded:\n{section}",
     );
 }
 
