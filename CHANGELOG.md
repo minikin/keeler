@@ -37,6 +37,14 @@ Installations pin a version with `KEELER_REF` and record it at the top of
   load-bearing, and rank 3–5 falsifiable hypotheses before touching code
   — skipped, saying so, when minimisation has already cornered the cause.
   Adapted from mattpocock/skills' `diagnosing-bugs`.
+- **The spawn runner survives its one turn.** A spawned agent is told its
+  turn is the only one and that nothing resumes it; the harness's
+  foreground timeout is raised so the gate never moves to the background
+  (`BASH_DEFAULT_TIMEOUT_MS`); the runner script is verified to parse
+  under macOS's `/bin/bash` 3.2, which an unbalanced apostrophe in the
+  prompt used to break; and when the machine has sccache, every runner
+  shares one compile cache across the wave's worktrees
+  (`RUSTC_WRAPPER=sccache`, incremental compilation off beside it).
 
 ## [0.4.1] — 2026-08-27
 

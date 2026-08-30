@@ -149,7 +149,10 @@ balance: specs 01 through 04, whose areas are reviewed and recorded in the
 table above, and spec 06's T1 and T2, which are debt of review as well as
 of record and so come off first. Adding a line to `reviews/BACKLOG.md` is
 how a tick without a review gets past the gate, and it is a diff someone
-has to justify. Working lines off is the point: review the task, write the
+has to justify. The file itself is bare by design — one
+`<spec-slug>/<task-id>` per line, no headings and no comments, because
+the parser refuses any line it was not told about; this section is where
+the bare lines are explained. Working lines off is the point: review the task, write the
 record, delete the line. When an area is reviewed, add a row above.
 
 ## Dependencies
