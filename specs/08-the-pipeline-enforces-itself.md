@@ -1,6 +1,6 @@
 # Spec 08 — The pipeline enforces itself
 
-**Status:** Approved
+**Status:** Implemented
 **Effort:** Medium
 **Module:** `xtask/`, `.github/workflows/ci.yml`, `Justfile`, `reviews/BACKLOG.md`, `.claude/keeler.md`
 
