@@ -22,7 +22,7 @@ jobs:
     name: Lints
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -34,7 +34,7 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@v2
@@ -46,7 +46,7 @@ jobs:
     name: Coverage + CRAP gate
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: llvm-tools-preview
@@ -73,7 +73,7 @@ jobs:
     name: Mutation tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
@@ -113,7 +113,7 @@ jobs:
     if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'keeler/')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # The check diffs against the merge base; a shallow clone has none.
           fetch-depth: 0
@@ -200,7 +200,7 @@ jobs:
     if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'keeler/')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # The check walks ancestry: a shallow clone sees none, and every
           # honest record would fail.

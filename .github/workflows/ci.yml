@@ -272,13 +272,13 @@ jobs:
   # Copied verbatim from templates/keeler.yml, which also says why the
   # check has the shape it has — tests/pipeline.rs holds the two copies
   # identical, so change the template and re-copy rather than editing
-  # here (that includes version bumps like checkout@v6).
+  # here (that includes version bumps like checkout@v7).
   review-record:
     name: Review record
     if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'keeler/')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # The check walks ancestry: a shallow clone sees none, and every
           # honest record would fail.
