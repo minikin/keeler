@@ -47,7 +47,10 @@ jobs:
       # are the ones the lockfile pinned. xtask/Cargo.toml claims this.
       - name: The lockfile is the one that ships
         run: cargo metadata --locked --format-version 1 > /dev/null
-      - name: The tag tells the truth
+      # The guard runs the pipeline gate too: nothing is published over a
+      # task ticked without a review. The step's name says both, or the
+      # half it omits is a check nobody knows they are relying on.
+      - name: The tag tells the truth, and no review was skipped
         run: cargo xtask release-guard "$GITHUB_REF_NAME"
       - name: Gates before anything is published
         run: just ci

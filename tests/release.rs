@@ -298,6 +298,16 @@ fn release_fixture(name: &str, version: &str) -> PathBuf {
         format!("[package]\nname = \"fixture\"\nversion = \"{version}\"\n"),
     )
     .unwrap();
+    // And it has specs, which spec 08 made the guard read: a release goes
+    // out over a whole pipeline or not at all. Nothing here is ticked, so
+    // the gate passes with nothing to account for and spec 02's scenarios
+    // below still test what they always did.
+    std::fs::create_dir_all(dir.join("specs")).unwrap();
+    std::fs::write(
+        dir.join("specs/01-fixture.md"),
+        "**Status:** Approved\n\n## Tasks\n\n- [ ] **T1 — Not yet.**\n",
+    )
+    .unwrap();
     dir
 }
 

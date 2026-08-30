@@ -77,8 +77,26 @@ jobs:
       # every project must agree with it, or users cannot tell what they
       # run. One owner for that law: the same guard the release workflow
       # runs at tag time (the constructed tag makes its tag-check a no-op).
-      - name: VERSION, marker and CHANGELOG agree
+      # That guard also runs the pipeline gate, so this step refuses a task
+      # ticked without a review too — named here, because a check running
+      # under a name that does not mention it is one nobody knows they
+      # have, and nobody notices going away.
+      - name: VERSION, marker and CHANGELOG agree, and no review was skipped
         run: cargo xtask release-guard "v$(tr -d '[:space:]' < VERSION)"
+
+  # No `if:`, and no fetch-depth: the gate consults no git history at all,
+  # so it reads the same in a shallow checkout as in a full one — and every
+  # route to main, push and pull request alike, passes through it. Ancestry
+  # is the review-record job's question, below, and only there.
+  pipeline-check:
+    name: Pipeline check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Every ticked task holds a review record or a line of accepted debt
+        run: cargo xtask pipeline-check
 
   installer:
     name: Installer (${{ matrix.os }})
@@ -250,3 +268,65 @@ jobs:
           cargo new "$RUNNER_TEMP/fallback"
           ./install.sh "$RUNNER_TEMP/fallback"
           cargo nextest --version
+
+  # Copied verbatim from templates/keeler.yml, which also says why the
+  # check has the shape it has — tests/pipeline.rs holds the two copies
+  # identical, so change the template and re-copy rather than editing
+  # here (that includes version bumps like checkout@v7).
+  review-record:
+    name: Review record
+    if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'keeler/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The check walks ancestry: a shallow clone sees none, and every
+          # honest record would fail.
+          fetch-depth: 0
+      - name: The record names a commit this branch made
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          fail() { echo "review record: $*" >&2; exit 1; }
+          shape="keeler/<spec-slug>/<task-id>"
+          case "${HEAD_REF:-}" in
+            keeler/?*/?*) ;;
+            *) fail "branch '${HEAD_REF:-}' is not $shape" ;;
+          esac
+          rest="${HEAD_REF#keeler/}"
+          case "$rest" in
+            */*/*) fail "branch '$HEAD_REF' is not $shape" ;;
+          esac
+          record="reviews/${rest%/*}/${rest#*/}.md"
+          [ -f "$record" ] || fail "$record is missing — /keeler:review writes it at the end of the stage"
+          lines=$(grep -c '^Commit:' "$record" || true)
+          [ "$lines" -eq 1 ] || fail "$record must carry exactly one Commit: line, found $lines"
+          sha=$(sed -n 's/^Commit:[[:space:]]*//p' "$record" | tr -d '[:space:]')
+          [ -n "$sha" ] || fail "$record: the Commit: line names nothing"
+          # A checkout on a pull request holds the branches as origin/ refs
+          # and a detached HEAD; a local run holds them by name.
+          resolve() {
+            git rev-parse --verify -q "origin/$1^{commit}" \
+              || git rev-parse --verify -q "$1^{commit}"
+          }
+          base_ref="${BASE_REF:-main}"
+          # What was checked out is what is under review, and asking for it
+          # by name is how the wrong history gets judged: a pull request
+          # from a fork resolves `origin/<branch>` against the *base*
+          # repository, so an abandoned branch there of the same name would
+          # stand in for this one. HEAD is unambiguous — the branch tip
+          # locally, the merge commit in CI, whose ancestry is the branch's
+          # plus the base's, and the base is excluded below.
+          head=$(git rev-parse --verify -q "HEAD^{commit}") \
+            || fail "cannot resolve the checked-out commit — is the checkout fetch-depth: 0?"
+          base=$(resolve "$base_ref") || fail "cannot resolve base branch $base_ref"
+          git rev-parse --verify -q "$sha^{commit}" >/dev/null \
+            || fail "$record: Commit: $sha is not a commit in this repository"
+          git merge-base --is-ancestor "$sha" "$head" \
+            || fail "$record: Commit: $sha is not an ancestor of $HEAD_REF — the record does not cover this branch"
+          if git merge-base --is-ancestor "$sha" "$base"; then
+            fail "$record: Commit: $sha is already on $base_ref — the record names no work of this branch"
+          fi
+          echo "$record names $sha, a commit of $HEAD_REF"
