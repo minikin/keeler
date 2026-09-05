@@ -1379,10 +1379,14 @@ fn main_is_resolved_in_one_place() {
     }
 }
 
-/// One recipe's lines — from its header to the next unindented line.
+/// One recipe's lines — from its header to the next unindented line. The
+/// name is matched up to whatever follows it, so a recipe that grows a
+/// parameter stays findable rather than reading as one that vanished.
 fn recipe_body(justfile: &str, recipe: &str) -> String {
-    let header = format!("{recipe}:");
-    let mut lines = justfile.lines().skip_while(|line| *line != header);
+    let mut lines = justfile.lines().skip_while(|line| {
+        line.strip_prefix(recipe)
+            .is_none_or(|rest| !(rest.starts_with(':') || rest.starts_with(' ')))
+    });
     let first = lines
         .next()
         .unwrap_or_else(|| panic!("the Justfile has no `{recipe}` recipe"));
