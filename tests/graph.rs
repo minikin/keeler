@@ -773,8 +773,8 @@ fn the_graph_command_runs_the_recipe_rather_than_reading_the_spec() {
     // Then it instructs running the recipe — so a cycle is refused by a
     // program and not judged by an agent — and reports the three states
     assert!(
-        command.contains("just keeler-graph"),
-        "graph.md does not instruct running `just keeler-graph`"
+        command.contains("keeler keeler-graph"),
+        "graph.md does not instruct running `keeler keeler-graph`"
     );
     for state in ["ready", "blocked", "done"] {
         assert!(

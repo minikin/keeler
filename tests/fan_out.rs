@@ -1941,17 +1941,18 @@ mod fork {
 
         // And the command file instructs running that recipe on "graph", then
         // /keeler:tasks, then the next steps in order: commit the graph, then
-        // `just keeler-fan-out <spec>`
+        // `keeler keeler-fan-out <spec>` — spelled through the wrapper since
+        // spec 09, because the project the human runs it in has no justfile
         // The order is the instruction: each step is looked for in what
         // follows the one before it, so a hand-off that names the wave before
         // the graph is committed fails here rather than reads as present.
         let spec_command = unwrapped(&command("spec"));
         let mut at = 0;
         for said in [
-            "just keeler-feature-branch",
+            "keeler keeler-feature-branch",
             "/keeler:tasks",
             "commit the graph",
-            "just keeler-fan-out",
+            "keeler keeler-fan-out",
         ] {
             let found = spec_command[at..].find(said).unwrap_or_else(|| {
                 panic!("spec.md's graph answer does not say `{said}` where it belongs, in order")
@@ -2245,7 +2246,7 @@ mod fork {
             .find("graph")
             .expect("/keeler:feature never mentions the graph answer");
         let after = &unwrapped[fork..];
-        for said in ["/keeler:tasks", "commit the graph", "just keeler-fan-out"] {
+        for said in ["/keeler:tasks", "commit the graph", "keeler keeler-fan-out"] {
             assert!(
                 after.contains(said),
                 "/keeler:feature's graph answer never says `{said}`:\n{after}",

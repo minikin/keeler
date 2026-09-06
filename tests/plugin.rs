@@ -326,3 +326,340 @@ fn keelers_own_claude_md_imports_the_rules_from_the_plugin_root() {
         stale.join("\n"),
     );
 }
+
+// ---------------------------------------------------------------------------
+// T6 — the commands speak the plugin's language
+// ---------------------------------------------------------------------------
+
+/// Every stage, one file each. `commands/<name>.md` is what makes
+/// `/keeler:<name>` exist, so this list is the pipeline as Claude Code
+/// sees it.
+const COMMANDS: [&str; 10] = [
+    "feature.md",
+    "fix.md",
+    "graph.md",
+    "init.md",
+    "mutants.md",
+    "qa.md",
+    "review.md",
+    "spec.md",
+    "tasks.md",
+    "tdd.md",
+];
+
+fn command(name: &str) -> String {
+    read(&format!("commands/{name}"))
+}
+
+/// A command's frontmatter and the body under it.
+fn split_frontmatter(name: &str, text: &str) -> (String, String) {
+    let Some((frontmatter, body)) = text
+        .strip_prefix("---\n")
+        .and_then(|rest| rest.split_once("\n---\n"))
+    else {
+        panic!("commands/{name} does not open with frontmatter");
+    };
+    (frontmatter.to_string(), body.to_string())
+}
+
+/// Every recipe the plugin's Justfile defines. A command that names one of
+/// these is invoking a recipe and has to spell it the wrapper's way; a
+/// command that names anything else is running something else entirely.
+/// `tests/justfile.rs` reads recipe headers too, in another binary and for
+/// a harder question — here only the names at the left margin matter.
+fn recipe_names() -> Vec<String> {
+    read("Justfile")
+        .lines()
+        .filter_map(|line| {
+            if line.starts_with(char::is_whitespace) || line.trim().is_empty() {
+                return None;
+            }
+            let (head, tail) = line.split_once(':')?;
+            if tail.starts_with('=') || head.contains('#') {
+                return None;
+            }
+            let name = head.split_whitespace().next()?;
+            name.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+                .then(|| name.to_string())
+        })
+        .collect()
+}
+
+/// Every command a command file puts in front of the agent: the content of
+/// each inline code span, and each line of each fenced block. Prose is not
+/// scanned — what a command means to be run, it writes as code.
+fn shown_commands(text: &str) -> Vec<String> {
+    let mut shown = Vec::new();
+    let mut fenced = false;
+    for line in text.lines() {
+        if line.trim_start().starts_with("```") {
+            fenced = !fenced;
+            continue;
+        }
+        if fenced {
+            shown.push(line.trim().to_string());
+            continue;
+        }
+        for (index, span) in line.split('`').enumerate() {
+            if index % 2 == 1 {
+                shown.push(span.trim().to_string());
+            }
+        }
+    }
+    shown.retain(|span| !span.is_empty());
+    shown
+}
+
+#[test]
+fn every_stage_is_a_plugin_command() {
+    // Given the plugin's commands/ directory
+    let mut found: Vec<String> = std::fs::read_dir(repo_root().join("commands"))
+        .expect("the plugin has no commands/ directory")
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    found.sort();
+
+    // Then it holds exactly the ten stages — a file more is a command the
+    // pipeline never names, a file fewer is a stage that cannot be run
+    assert_eq!(found, COMMANDS, "commands/ is not the ten stages");
+
+    // And each opens with frontmatter carrying a description: the line
+    // Claude Code shows in its command list, and all a user has to go on
+    for name in COMMANDS {
+        let (frontmatter, _) = split_frontmatter(name, &command(name));
+        assert!(
+            frontmatter
+                .lines()
+                .any(|line| line.starts_with("description:")),
+            "commands/{name}'s frontmatter has no `description:` line:\n{frontmatter}",
+        );
+    }
+}
+
+#[test]
+fn a_command_that_runs_a_recipe_runs_it_through_the_wrapper() {
+    // Given every file under the plugin's commands/
+    let recipes = recipe_names();
+    let mut wrapped = 0;
+
+    for name in COMMANDS {
+        for shown in shown_commands(&command(name)) {
+            let mut words = shown.split_whitespace();
+            let first = words.next().unwrap_or_default();
+
+            // Then no line invokes `just`: the recipes live in the plugin,
+            // and an adopter's project has no justfile to reach them by
+            assert_ne!(
+                first, "just",
+                "commands/{name} invokes `just`, which an adopter has no \
+                 justfile for: `{shown}`",
+            );
+
+            // And a recipe is never named bare either — `dev` alone is
+            // `just dev` with the word left off
+            assert!(
+                !recipes.iter().any(|recipe| recipe == first),
+                "commands/{name} runs the recipe `{first}` without the \
+                 wrapper: `{shown}`",
+            );
+
+            // And every recipe invocation reads `keeler <recipe>`, naming a
+            // recipe that exists. The bare word is the wrapper itself —
+            // what a command tells a human to put on their PATH — and
+            // invokes nothing.
+            if first == "keeler" {
+                let Some(recipe) = words.next() else { continue };
+                assert!(
+                    recipe.starts_with('-') || recipes.iter().any(|known| known == recipe),
+                    "commands/{name} runs `keeler {recipe}`, which the \
+                     plugin's Justfile does not define: `{shown}`",
+                );
+                wrapped += 1;
+            }
+        }
+    }
+
+    // And the scan saw the invocations at all: a reader that matches
+    // nothing passes a set of commands that has stopped running gates
+    assert!(
+        wrapped >= 12,
+        "only {wrapped} wrapper invocations found; the scan is looking in \
+         the wrong place",
+    );
+}
+
+#[test]
+fn no_command_names_a_file_keeler_no_longer_installs() {
+    // Given every file under the plugin's commands/
+    for name in COMMANDS {
+        let text = command(name);
+
+        // Then none names a path that only an install.sh install ever had.
+        // A command that names one sends the agent to a file that is not
+        // there — or, in a project that adopted Keeler before this version,
+        // to a stale copy left behind, holding rules a release behind.
+        for gone in [
+            ".claude/keeler.md",
+            ".claude/commands/",
+            "scripts/keeler-graph.sh",
+            "KEELER.md",
+        ] {
+            assert!(
+                !text.contains(gone),
+                "commands/{name} names `{gone}`, which no project has any more",
+            );
+        }
+
+        // And every reference to the rules reads the plugin's copy
+        for (at, _) in text.match_indices("keeler.md") {
+            assert!(
+                text[..at].ends_with("${CLAUDE_PLUGIN_ROOT}/"),
+                "commands/{name} names the rules as something other than \
+                 ${{CLAUDE_PLUGIN_ROOT}}/keeler.md: {}",
+                text[..at].lines().next_back().unwrap_or_default(),
+            );
+        }
+    }
+}
+
+#[test]
+fn a_command_is_never_ruleless() {
+    // Given every file under the plugin's commands/
+    for name in COMMANDS {
+        let (_, body) = split_frontmatter(name, &command(name));
+
+        // Then its first instruction is to read the rules. The
+        // SessionStart hook covers the turns between commands, but it
+        // speaks only where specs/*.md already exists and only at a
+        // session's start — a command that assumed it had spoken would be
+        // ruleless in the very session that writes the first spec.
+        let first = body
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .unwrap_or_else(|| panic!("commands/{name} has no body"));
+        for token in [
+            "Read",
+            "${CLAUDE_PLUGIN_ROOT}/keeler.md",
+            "before anything else",
+        ] {
+            assert!(
+                first.contains(token),
+                "commands/{name}'s first instruction does not say `{token}`: {first}",
+            );
+        }
+    }
+}
+
+/// Whether some line of this command tells the agent to read that file.
+fn tells_the_agent_to_read(text: &str, path: &str) -> bool {
+    text.lines()
+        .any(|line| line.contains(path) && line.to_lowercase().contains("read"))
+}
+
+#[test]
+fn the_commands_that_run_gates_are_told_where_the_gate_table_is() {
+    // Given the commands that run gates
+    for name in ["qa.md", "mutants.md", "review.md"] {
+        // Then each tells the agent to read the gate table. The rules keep
+        // only the line saying every gate must be green; the bars, the
+        // baseline discipline and what enforces the review stage left with
+        // the table.
+        assert!(
+            tells_the_agent_to_read(&command(name), "${CLAUDE_PLUGIN_ROOT}/gates.md"),
+            "commands/{name} never tells the agent to read \
+             ${{CLAUDE_PLUGIN_ROOT}}/gates.md",
+        );
+    }
+}
+
+#[test]
+fn the_commands_that_need_graph_mode_are_told_where_it_is() {
+    // Given the commands that act on the graph
+    for name in ["graph.md", "spec.md", "tasks.md"] {
+        // Then each tells the agent to read the chapter that left the
+        // rules — the road question, the `Needs:` lines and the board are
+        // documented there and nowhere else now
+        assert!(
+            tells_the_agent_to_read(&command(name), "${CLAUDE_PLUGIN_ROOT}/graph-mode.md"),
+            "commands/{name} never tells the agent to read \
+             ${{CLAUDE_PLUGIN_ROOT}}/graph-mode.md",
+        );
+    }
+}
+
+#[test]
+fn the_spec_command_prefers_the_projects_template() {
+    // Given the plugin's commands/spec.md
+    let text = command("spec.md");
+
+    // Then one line names both templates, the project's first: a project
+    // that keeps its own specs/TEMPLATE.md has a shape it chose, and the
+    // plugin's is the fallback for the projects that hold nothing of
+    // Keeler's at all
+    let line = text
+        .lines()
+        .find(|line| line.contains("specs/TEMPLATE.md"))
+        .unwrap_or_else(|| panic!("commands/spec.md never names specs/TEMPLATE.md"));
+    let theirs = line
+        .find("specs/TEMPLATE.md")
+        .expect("the line names the project's template");
+    let ours = line
+        .find("${CLAUDE_PLUGIN_ROOT}/templates/spec.md")
+        .unwrap_or_else(|| {
+            panic!("commands/spec.md does not fall back to the plugin's template:\n{line}")
+        });
+    assert!(
+        theirs < ours,
+        "commands/spec.md reaches for the plugin's template first:\n{line}",
+    );
+    for token in ["exists", "otherwise"] {
+        assert!(
+            line.contains(token),
+            "commands/spec.md does not say `{token}`, so the preference is \
+             not a condition:\n{line}",
+        );
+    }
+
+    // And the fallback is a file the plugin ships
+    assert!(
+        repo_root().join("templates/spec.md").is_file(),
+        "the plugin carries no templates/spec.md",
+    );
+}
+
+#[test]
+fn the_init_command_runs_the_installer_from_the_plugin() {
+    // Given the plugin's commands/init.md
+    let text = command("init.md");
+
+    // Then it runs the installer out of the plugin — there is no copy in
+    // the project, and a `curl | bash` would fetch a released Keeler over
+    // the one that is running
+    assert!(
+        text.contains("bash \"${CLAUDE_PLUGIN_ROOT}/install.sh\" ."),
+        "commands/init.md does not run the plugin's installer:\n{text}",
+    );
+
+    // And it forwards the two flags the installer takes
+    for flag in ["--no-tools", "--no-ci"] {
+        assert!(
+            text.contains(flag),
+            "commands/init.md never forwards `{flag}`",
+        );
+    }
+
+    // And it says how a human gets `keeler` in a terminal: the agent's
+    // Bash tool has the plugin's bin/ on PATH while the plugin is enabled,
+    // and nothing else does
+    let path_line = text
+        .lines()
+        .find(|line| line.contains("${CLAUDE_PLUGIN_ROOT}/bin"))
+        .unwrap_or_else(|| panic!("commands/init.md never names the plugin's bin/:\n{text}"));
+    assert!(
+        path_line.contains("PATH"),
+        "commands/init.md names the plugin's bin/ without saying it goes on \
+         PATH:\n{path_line}",
+    );
+}

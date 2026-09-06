@@ -3,9 +3,11 @@ description: Implement one task strictly test-first (red → green → refactor)
 argument-hint: <task, e.g. specs/01-foo.md T2; empty = next unchecked task>
 ---
 
+Read `${CLAUDE_PLUGIN_ROOT}/keeler.md` before anything else — the workflow rules this command is a stage of.
+
 Task to implement: $ARGUMENTS (if empty, take the first unchecked task from the most recent Approved spec).
 
-You are in the **TDD stage** (see .claude/keeler.md). Implement exactly one task, strictly test-first. Never write production code before a failing test exists.
+You are in the **TDD stage**. Implement exactly one task, strictly test-first. Never write production code before a failing test exists.
 
 For the task's each behavior:
 
@@ -19,7 +21,7 @@ For the task's each behavior:
 
 After the task's cycles are done:
 
-4. Run `just dev` (fmt, lint, tests, coverage, CRAP). Fix anything red.
+4. Run `keeler dev` (fmt, lint, tests, coverage, CRAP). Fix anything red.
 5. Report: which tests were written (and the failure you observed at RED), what the implementation does, and gate results.
 
 **Do not tick the task's checkbox.** The box means the whole pipeline ran, and one stage of four has. /keeler:mutants ticks it at the end.

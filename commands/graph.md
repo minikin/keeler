@@ -3,12 +3,14 @@ description: Read a spec's task graph — what is ready, blocked, or done
 argument-hint: <spec file, e.g. specs/01-foo.md; empty = most recent Approved spec>
 ---
 
+Read `${CLAUDE_PLUGIN_ROOT}/keeler.md` before anything else — the workflow rules this command is part of. Then read `${CLAUDE_PLUGIN_ROOT}/graph-mode.md` before acting on the graph: it is where the road below is documented in full.
+
 Spec to read: $ARGUMENTS (if empty, use the most recent spec with Status: Approved).
 
-You are in **graph mode** (see .claude/keeler.md). This command answers one question — which tasks are unblocked right now — and it does not answer it by reading the Tasks section itself. Run:
+You are in **graph mode**. This command answers one question — which tasks are unblocked right now — and it does not answer it by reading the Tasks section itself. Run:
 
 ```
-just keeler-graph <spec>
+keeler keeler-graph <spec>
 ```
 
 and report what it printed, task by task:
@@ -21,8 +23,8 @@ Say plainly when nothing is ready: either the graph is complete (every task done
 
 If the recipe **refuses** — a cycle, a Needs: naming no task, an id defined twice, two Needs: in one item — it exits non-zero naming the line and what is wrong. Report the refusal verbatim and stop: nothing is ready until the Tasks section is fixed, and that is a spec edit — /keeler:tasks, with the user's say-so — not something to patch from here. The refusal is the script's, on purpose: a cycle is refused by a program, so the verdict is machine-checkable and not an agent's opinion. Do not second-guess it by reading the spec.
 
-Readiness is read from the spec on the feature's own branch, **`feat/<spec-slug>`** — which is also the only branch `just keeler-spawn` will run from. A tick on a task branch unblocks nothing until it lands on the feature branch, because arriving there is the landing.
+Readiness is read from the spec on the feature's own branch, **`feat/<spec-slug>`** — which is also the only branch `keeler keeler-spawn` will run from. A tick on a task branch unblocks nothing until it lands on the feature branch, because arriving there is the landing.
 
 The recipe opens with the ref it read — `graph: <spec> on <ref>` — and falls back to HEAD when the feature branch does not exist, which is where a landed feature leaves it. Report that line with the states: it is what makes the difference between two answers visible rather than guessable.
 
-Do not implement anything here — that is /keeler:tdd on a ready task, or `just keeler-spawn <spec> <task>` to hand one to an agent on its own branch.
+Do not implement anything here — that is /keeler:tdd on a ready task, or `keeler keeler-spawn <spec> <task>` to hand one to an agent on its own branch.
