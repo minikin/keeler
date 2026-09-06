@@ -13,6 +13,8 @@
 mod common;
 
 use common::repo_root;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
 
 /// The version every manifest and the rules marker must agree with.
 fn version() -> String {
@@ -25,12 +27,24 @@ fn read(rel: &str) -> String {
 }
 
 /// The value of `"key": "value"` at any depth, first occurrence.
+///
+/// The colon is part of what makes an occurrence a key: `hooks.json` holds
+/// `"type": "command"` beside `"command": "…"`, so a scan that stopped at
+/// the first `"command"` would read the type's value as the command's.
 fn field(json: &str, key: &str) -> Option<String> {
-    let (_, after) = json.split_once(&format!("\"{key}\""))?;
-    let (_, after) = after.split_once(':')?;
-    let (_, value) = after.trim_start().split_once('"')?;
-    let (value, _) = value.split_once('"')?;
-    Some(value.to_string())
+    let needle = format!("\"{key}\"");
+    let mut rest = json;
+    loop {
+        let (_, after) = rest.split_once(&needle)?;
+        match after.trim_start().strip_prefix(':') {
+            Some(value) => {
+                let (_, value) = value.trim_start().split_once('"')?;
+                let (value, _) = value.split_once('"')?;
+                return Some(value.to_string());
+            }
+            None => rest = after,
+        }
+    }
 }
 
 /// The objects of a JSON array field, by brace matching — enough to say how
@@ -324,5 +338,276 @@ fn keelers_own_claude_md_imports_the_rules_from_the_plugin_root() {
         stale.is_empty(),
         "CLAUDE.md still names .claude/keeler.md:\n{}",
         stale.join("\n"),
+    );
+}
+
+// ---------------------------------------------------------------------------
+// T5 — the hook speaks where a spec exists
+// ---------------------------------------------------------------------------
+
+/// A throwaway directory the hook runs in, removed on drop.
+///
+/// The hook reads its working directory and one environment variable, so a
+/// plain directory is the whole fixture — except where a scenario asks for
+/// what `install.sh` leaves behind, which needs a stub `cargo` first on
+/// PATH so the run stays offline.
+struct Project(PathBuf);
+
+impl Project {
+    fn new(name: &str) -> Self {
+        let dir = std::env::temp_dir().join(format!("keeler-hook-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        Self(dir)
+    }
+
+    fn path(&self) -> &Path {
+        &self.0
+    }
+
+    fn write(&self, rel: &str, body: &str) {
+        let path = self.0.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, body).unwrap();
+    }
+
+    /// Runs the plugin's `SessionStart` hook here, with `CLAUDE_PLUGIN_ROOT`
+    /// pointing at the plugin as Claude Code sets it.
+    fn hook(&self) -> Output {
+        self.hook_rooted(Some(repo_root()))
+    }
+
+    /// `hook`, for the scenario that takes `CLAUDE_PLUGIN_ROOT` away: the
+    /// variable is removed rather than emptied, because an inherited one
+    /// would make the refusal untestable.
+    fn hook_rooted(&self, root: Option<PathBuf>) -> Output {
+        let mut command = Command::new("bash");
+        command
+            .arg(repo_root().join("hooks/session-start.sh"))
+            .current_dir(&self.0);
+        match root {
+            Some(root) => command.env("CLAUDE_PLUGIN_ROOT", root),
+            None => command.env_remove("CLAUDE_PLUGIN_ROOT"),
+        };
+        command
+            .output()
+            .expect("failed to run hooks/session-start.sh")
+    }
+
+    /// Runs `install.sh .` here with stub `cargo` and `curl` first on PATH,
+    /// the way `tests/installer.rs` drives it: `--no-tools` because the tool
+    /// block probes the real machine, and this scenario is about what the
+    /// installer leaves in the project.
+    ///
+    /// The `curl` stub refuses rather than being left out: an inherited
+    /// `KEELER_REF` or `KEELER_TARBALL` sends the installer down its fetch
+    /// branch, and a stub that fails loudly turns that into this test
+    /// failing instead of a test run reaching the network.
+    fn install(&self) {
+        let stubs = [
+            ("bin/cargo", "#!/usr/bin/env bash\nexit 0\n"),
+            (
+                "bin/curl",
+                "#!/usr/bin/env bash\necho \"harness: network access refused: curl $*\" >&2\nexit 7\n",
+            ),
+        ];
+        for (rel, script) in stubs {
+            let stub = self.0.join(rel);
+            std::fs::create_dir_all(stub.parent().unwrap()).unwrap();
+            std::fs::write(&stub, script).unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+        }
+        let path = std::env::var("PATH").unwrap();
+        let output = Command::new("bash")
+            .arg(repo_root().join("install.sh"))
+            .arg(".")
+            .arg("--no-tools")
+            .current_dir(&self.0)
+            .env("PATH", format!("{}:{path}", self.0.join("bin").display()))
+            .output()
+            .expect("failed to run install.sh");
+        assert!(
+            output.status.success(),
+            "install.sh failed:\n{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        std::fs::remove_dir_all(self.0.join("bin")).unwrap();
+    }
+}
+
+impl Drop for Project {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// What the hook said, for an assertion message.
+fn spoke(output: &Output) -> String {
+    format!(
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    )
+}
+
+/// The scenarios that expect silence expect it exactly: a hook that exits
+/// zero with anything on stdout has put that text in the session.
+fn assert_silent(output: &Output) {
+    assert!(
+        output.status.success(),
+        "the hook did not exit zero:\n{}",
+        spoke(output),
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "the hook spoke where Keeler was never adopted:\n{}",
+        spoke(output),
+    );
+}
+
+#[test]
+fn a_keeler_projects_session_opens_with_the_rules() {
+    // Given a directory holding specs/01-foo.md
+    let project = Project::new("adopted");
+    project.write("specs/01-foo.md", "# 01 — foo\n\n**Status:** Approved\n");
+
+    // When the hook runs there, with CLAUDE_PLUGIN_ROOT set as Claude Code
+    // sets it
+    let output = project.hook();
+
+    // Then it exits zero ...
+    assert!(
+        output.status.success(),
+        "the hook failed in a Keeler project:\n{}",
+        spoke(&output),
+    );
+
+    // ... and its stdout is byte-identical to the plugin's keeler.md.
+    // Claude Code adds a zero-exit hook's stdout to the session verbatim,
+    // so anything the hook wrapped around the rules would be text the agent
+    // reads as law.
+    let rules = std::fs::read(repo_root().join("keeler.md")).unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&rules),
+        "the hook's stdout is not the rules",
+    );
+}
+
+#[test]
+fn a_rust_project_that_never_adopted_keeler_gets_no_rules() {
+    // Given a directory holding Cargo.toml and no specs/ directory — every
+    // Rust checkout on the machine once the plugin is enabled
+    let project = Project::new("never-adopted");
+    project.write("Cargo.toml", "[package]\nname = \"theirs\"\n");
+
+    // When the hook runs there
+    // Then it exits zero and says nothing
+    assert_silent(&project.hook());
+}
+
+#[test]
+fn a_freshly_initialised_project_is_silent_until_its_first_spec() {
+    // Given a fresh crate where install.sh . has just run
+    let project = Project::new("freshly-initialised");
+    project.write(
+        "Cargo.toml",
+        "[package]\nname = \"fresh\"\nversion = \"0.1.0\"\n",
+    );
+    project.write(".gitignore", "/target\n");
+    project.install();
+
+    // When the hook runs there
+    // Then it exits zero and says nothing: /keeler:init creates no specs/,
+    // and the gap that leaves is why every command reads the rules itself.
+    assert_silent(&project.hook());
+    assert!(
+        !project.path().join("specs").exists(),
+        "install.sh created a specs/ directory — the predicate would fire on init",
+    );
+}
+
+#[test]
+fn an_empty_specs_directory_is_not_adoption() {
+    // Given a directory holding an empty specs/ directory
+    let project = Project::new("empty-specs");
+    std::fs::create_dir_all(project.path().join("specs")).unwrap();
+
+    // When the hook runs there
+    // Then it exits zero and says nothing: the predicate is a spec, not a
+    // directory somebody made.
+    assert_silent(&project.hook());
+}
+
+#[test]
+fn the_hook_refuses_to_guess_where_the_rules_are() {
+    // Given a directory holding specs/01-foo.md, and CLAUDE_PLUGIN_ROOT unset
+    let project = Project::new("rootless");
+    project.write("specs/01-foo.md", "# 01 — foo\n");
+
+    // When the hook runs there
+    let output = project.hook_rooted(None);
+
+    // Then it exits non-zero, says nothing to the session, and names the
+    // variable on stderr. Guessing the plugin root — a relative path, a
+    // cache directory — would print some other version's rules, or a
+    // stranger's, without saying so.
+    assert!(
+        !output.status.success(),
+        "the hook exited zero with no plugin root:\n{}",
+        spoke(&output),
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "the hook put something in the session anyway:\n{}",
+        spoke(&output),
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("CLAUDE_PLUGIN_ROOT"),
+        "the hook's complaint does not name CLAUDE_PLUGIN_ROOT:\n{stderr}",
+    );
+}
+
+#[test]
+fn the_hook_is_registered_for_every_way_a_session_begins() {
+    // Given the plugin's hooks/hooks.json
+    let manifest = read("hooks/hooks.json");
+
+    // Then it registers one SessionStart group ...
+    let groups = entries(&manifest, "SessionStart");
+    assert_eq!(
+        groups.len(),
+        1,
+        "hooks.json registers {} SessionStart groups, not one:\n{manifest}",
+        groups.len(),
+    );
+    let group = &groups[0];
+
+    // ... running hooks/session-start.sh from the plugin, wherever Claude
+    // Code cached it
+    let command = field(group, "command").unwrap_or_else(|| panic!("no command:\n{group}"));
+    assert_eq!(
+        command, "${CLAUDE_PLUGIN_ROOT}/hooks/session-start.sh",
+        "the SessionStart hook does not run the plugin's script",
+    );
+    assert!(
+        repo_root().join("hooks/session-start.sh").is_file(),
+        "hooks.json names a script the plugin does not carry",
+    );
+
+    // And the matcher covers every way a session begins. A session that
+    // resumes, is cleared or is compacted is a session whose context no
+    // longer holds the rules — matching only `startup` would leave the
+    // longest sessions running without them.
+    assert_eq!(
+        field(group, "matcher").as_deref(),
+        Some("startup|resume|clear|compact"),
+        "the SessionStart matcher does not cover every way a session begins:\n{group}",
     );
 }
