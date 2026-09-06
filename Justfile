@@ -500,10 +500,11 @@ _write-runner SPEC TASK BRANCH WORKTREE RUNNER EXIT_FILE LOG_FILE STREAM_FILE:
     set -euo pipefail
     rel="$SPEC"
     task="$TASK"
-    # Derived here, in the main checkout, and baked into the runner: the
-    # runner executes in the task's worktree, where the parser it needs is
-    # the branch's own copy rather than this one.
-    root="$(git rev-parse --show-toplevel)"
+    # Baked into the runner rather than resolved by it: the runner executes
+    # in the task's worktree, under a tmux session that has none of the
+    # plugin's environment, and Keeler's own files are in neither the
+    # worktree nor the main checkout. This is where they are.
+    plugin_root="{{justfile_directory()}}"
     slug="$(basename "$rel" .md)"
     tid="$(printf '%s' "$task" | tr '[:upper:]' '[:lower:]')"
     branch="$BRANCH"
@@ -512,13 +513,17 @@ _write-runner SPEC TASK BRANCH WORKTREE RUNNER EXIT_FILE LOG_FILE STREAM_FILE:
     exit_file="$EXIT_FILE"
     log_file="$LOG_FILE"
     stream_file="$STREAM_FILE"
+    # \${CLAUDE_PLUGIN_ROOT} reaches the agent as text, not as this shell's
+    # idea of it: the plugin's cache path carries its version and only the
+    # session that loaded it knows where it is.
     prompt="Implement task $task of $rel, and nothing else.
 
-    Read $rel in full first, then .claude/keeler.md.
+    Read $rel in full first, then \${CLAUDE_PLUGIN_ROOT}/keeler.md and
+    \${CLAUDE_PLUGIN_ROOT}/graph-mode.md.
 
     Run the whole per-task pipeline for this one task, in order and without
     stopping between stages: /keeler:tdd, then /keeler:qa, then
-    /keeler:review, then /keeler:mutants. The gate is 'just keeler-branch';
+    /keeler:review, then /keeler:mutants. The gate is 'keeler keeler-branch';
     it must be green before the task is done.
 
     You have exactly one turn: when your reply ends, the session is over
@@ -537,8 +542,9 @@ _write-runner SPEC TASK BRANCH WORKTREE RUNNER EXIT_FILE LOG_FILE STREAM_FILE:
     never open a pull request."
     # Enough to edit, test and commit inside the worktree, and no more. Not
     # bypassPermissions: a headless agent with an unrestricted shell is not
-    # a decision a recipe should make by default.
-    tools='Bash(cargo:*),Bash(just:*),Bash(git:*)'
+    # a decision a recipe should make by default. `keeler` is how every
+    # recipe is run now — an agent denied it cannot reach its own gate.
+    tools='Bash(cargo:*),Bash(just:*),Bash(git:*),Bash(keeler:*)'
     # Bash(git:*) grants push. "Nothing is pushed" has to be a permission,
     # not a sentence in a prompt: take it back explicitly. The match is on
     # the command prefix, so this stops the ordinary `git push` and not a
@@ -550,6 +556,11 @@ _write-runner SPEC TASK BRANCH WORKTREE RUNNER EXIT_FILE LOG_FILE STREAM_FILE:
     #!/usr/bin/env bash
     # Written by 'keeler keeler-spawn' for $branch. Re-runnable by hand:
     #     bash "$runner"
+    # First, before anything: a runner is a bash script tmux starts outside
+    # any agent, so the plugin's bin/ is not on its PATH by itself — and a
+    # 'keeler' that resolves only inside the agent's Bash tool is one this
+    # script cannot use.
+    export PATH="$plugin_root/bin:\$PATH"
     cd "$worktree" || exit 1
     # One compile cache across every worktree: a wave otherwise builds
     # the same workspace from scratch once per task. Decided at run time,
@@ -578,6 +589,7 @@ _write-runner SPEC TASK BRANCH WORKTREE RUNNER EXIT_FILE LOG_FILE STREAM_FILE:
         # and its absence is the death, however calm the exit.
         BASH_DEFAULT_TIMEOUT_MS=1800000 BASH_MAX_TIMEOUT_MS=1800000 \
         claude -p "\$prompt" --verbose --output-format stream-json \
+            --plugin-dir "$plugin_root" \
             --permission-mode acceptEdits --allowedTools '$tools' --disallowedTools '$blocked' \
             | tee "$stream_file"
         if ! grep -q '"type":"result"' "$stream_file" 2>/dev/null; then
@@ -591,9 +603,10 @@ _write-runner SPEC TASK BRANCH WORKTREE RUNNER EXIT_FILE LOG_FILE STREAM_FILE:
             # Everything is asked of the branch, not of the worktree, so
             # the sentence below is literally true and a tree that walked
             # off to another branch cannot answer for this one. The parser
-            # is the main checkout's: a task branch editing that script —
-            # which this project's own tasks do — would otherwise decide
-            # whether its own box is ticked.
+            # is the plugin's: a task branch editing that script — which
+            # this project's own tasks do — would otherwise decide whether
+            # its own box is ticked, and the main checkout's copy is no
+            # safer, since a landing merges those edits into it.
             k_why=""
             [ "\$(git symbolic-ref --quiet --short HEAD 2>/dev/null)" = "$branch" ] \
                 || k_why="the worktree is no longer on $branch"
@@ -603,7 +616,7 @@ _write-runner SPEC TASK BRANCH WORKTREE RUNNER EXIT_FILE LOG_FILE STREAM_FILE:
                 && k_why="reviews/$slug/$tid.md is not committed on the branch"
             if [ -z "\$k_why" ]; then
                 k_state="\$(git show "$branch:$rel" 2>/dev/null > "$stream_file.spec" \
-                    && bash "$root/scripts/keeler-graph.sh" "$stream_file.spec" 2>/dev/null \
+                    && bash "$plugin_root/scripts/keeler-graph.sh" "$stream_file.spec" 2>/dev/null \
                     | awk -v t="$task" 'tolower(\$1) == tolower(t) { print \$2 }')"
                 rm -f "$stream_file.spec"
                 [ "\$k_state" = done ] || k_why="$task is not ticked on the branch"
