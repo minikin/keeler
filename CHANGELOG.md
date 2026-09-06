@@ -4,13 +4,38 @@ All notable changes to Keeler are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-Installations pin a version with `KEELER_REF` and record it at the top of
-`.claude/keeler.md`.
+The plugin's version is the one in `.claude-plugin/plugin.json`, which
+`/plugin update` compares; a project's CI pins its own with the
+`KEELER_REF:` line in `.github/workflows/keeler.yml`.
 
 ## [Unreleased]
 
 ### Changed
 
+- **Keeler is a Claude Code plugin.** `/plugin marketplace add
+  minikin/keeler` then `/plugin install keeler@keeler` installs it, and
+  `/keeler:init` prepares a project. **[breaking]** Nothing of Keeler's is
+  copied into your repository any more: the commands, the skills, the
+  rules, the `Justfile` and the graph parser all live in the plugin, and
+  the install leaves only what something else has to read from the
+  repository — `.github/workflows/keeler.yml`, `clippy.toml` and
+  `rustfmt.toml`. The recipes are reached as `keeler <recipe>` (a wrapper
+  in the plugin's `bin/`, on the agent's PATH already; put it on yours for
+  a terminal), the rules arrive from a `SessionStart` hook in any project
+  holding a `specs/*.md` rather than through your `CLAUDE.md`, which is
+  never touched, and CI runs the gates from a Keeler it fetches at the tag
+  its `KEELER_REF:` line names. Upgrading a project you had already
+  adopted Keeler in: run `/keeler:init`, which names every file the old
+  installer left behind and gives the one `git rm -r --` line that removes
+  them — it deletes nothing itself, since an edited copy is
+  indistinguishable from an untouched one. README's "Migrating from an
+  install.sh install" walks it through.
+- **The coverage and CRAP bars are environment variables.** `KEELER_COV_MIN`
+  (default 90) and `KEELER_CRAP_MAX` (default 15) are what `cov`, `crap`
+  and `crap-delta` read. **[breaking]** for anyone who had edited the
+  thresholds in their copy of the recipes: the recipes are no longer in
+  your project to edit. The installed workflow carries both as
+  commented-out `env:` lines; export them in your shell for local runs.
 - **/keeler:spec interviews in rounds.** The clarify step is now a
   mechanism, not a wish: open questions form a tree, the frontier — every
   question whose prerequisites are settled — is asked in one numbered
@@ -45,6 +70,20 @@ Installations pin a version with `KEELER_REF` and record it at the top of
   prompt used to break; and when the machine has sccache, every runner
   shares one compile cache across the wave's worktrees
   (`RUSTC_WRAPPER=sccache`, incremental compilation off beside it).
+
+### Removed
+
+- **[breaking]** The `keeler-upgrade` recipe. `/plugin update` is the
+  upgrade; there is nothing in your repository left for a recipe to
+  replace.
+- **[breaking]** `.cargo-mutants.toml` is no longer installed. Every
+  setting it carried is a flag on the `cargo mutants` invocations in the
+  `mutants`, `mutants-all` and `mutants-diff` recipes, so mutation testing
+  runs the same way from the plugin, from CI and from your shell.
+- **[breaking]** `KEELER.md` and `specs/TEMPLATE.md` no longer land in a
+  project. The reasoning travels with the plugin as `docs/KEELER.md`, and
+  `/keeler:spec` copies the plugin's `templates/spec.md` — unless your
+  project has a `specs/TEMPLATE.md` of its own, which still wins.
 
 ## [0.4.1] — 2026-08-27
 

@@ -274,6 +274,72 @@ fn the_verification_story_is_documented_where_adopters_look() {
     );
 }
 
+/// The body of a Markdown section: its heading, then everything down to the
+/// next heading of the same depth or shallower. Reading the whole README
+/// instead would let a mention anywhere in the file satisfy an assertion
+/// about the Install section — which is where a reader who has just landed
+/// stops, and so the one place the plugin has to be named.
+fn section<'a>(doc: &'a str, heading: &str) -> &'a str {
+    let depth = heading.chars().take_while(|c| *c == '#').count();
+    let start = doc
+        .find(heading)
+        .unwrap_or_else(|| panic!("README.md has no `{heading}` section"));
+    let body = &doc[start..];
+    let end = body
+        .match_indices('\n')
+        .find(|(index, _)| {
+            let line = &body[index + 1..];
+            let hashes = line.chars().take_while(|c| *c == '#').count();
+            hashes > 0 && hashes <= depth && line[hashes..].starts_with(' ')
+        })
+        .map_or(body.len(), |(index, _)| index);
+    &body[..end]
+}
+
+#[test]
+fn the_readme_leads_with_the_plugin() {
+    // Given the repository's README.md Install section
+    let readme = std::fs::read_to_string(repo_root().join("README.md")).unwrap();
+    let install = section(&readme, "## Install");
+
+    // Then it names the two lines that install the plugin, and the command
+    // that prepares a project afterwards
+    for named in [
+        "/plugin marketplace add minikin/keeler",
+        "/plugin install keeler@keeler",
+        "/keeler:init",
+    ] {
+        assert!(
+            install.contains(named),
+            "README's Install section does not name `{named}`:\n{install}",
+        );
+    }
+
+    // And it lists `keeler --list` as where the recipes are — they are in
+    // the plugin now, so `just` in the project answers nothing
+    assert!(
+        readme.contains("keeler --list"),
+        "README never says where the recipes are listed",
+    );
+
+    // And its ratcheting section moves the bars through the variables the
+    // recipes read, not by editing a recipe no longer in the project
+    let ratchet = section(&readme, "### Adopting it in an existing codebase");
+    for bar in ["KEELER_COV_MIN", "KEELER_CRAP_MAX"] {
+        assert!(
+            ratchet.contains(bar),
+            "README's ratcheting section does not name `{bar}`:\n{ratchet}",
+        );
+    }
+
+    // And nothing still sends a reader to the upgrade recipe spec 09
+    // deleted: `/plugin update` is the upgrade
+    assert!(
+        !readme.contains("keeler-upgrade"),
+        "README still points at the recipe that was removed",
+    );
+}
+
 /// A directory shaped like the repo's release-relevant corner: VERSION,
 /// the rules-file marker, and a CHANGELOG with the version's section.
 fn release_fixture(name: &str, version: &str) -> PathBuf {
