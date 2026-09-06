@@ -180,7 +180,7 @@ third on every `keeler/*` pull request:
 - A branch **measures** the shared reference — `crap-baseline.json` — and
   never moves it; it settles at fan-in, on main. The bars moved out of the
   project with the recipes: `KEELER_COV_MIN` and `KEELER_CRAP_MAX` sit in
-  the workflow, where no branch edit reaches them unseen.
+  the workflow, and CI guards nothing but the baseline.
 - A branch ticks its own task and leaves the spec's `Status:` alone.
 - Review leaves a committed record, `reviews/<spec-slug>/<task-id>.md`,
   naming the commit it examined. At a fan-in of five branches, "nobody

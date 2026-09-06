@@ -2781,7 +2781,7 @@ impl Cursor {
             return Err(format!("line {}: a tab in the indentation", self.at + 1));
         }
         let trimmed = line.trim_start().to_string();
-        if trimmed == "-" || trimmed.starts_with("- ") {
+        if opens_a_list(&trimmed) {
             self.list(indent)
         } else if split_key(&trimmed).is_some() {
             self.map(indent)
@@ -2803,8 +2803,7 @@ impl Cursor {
                     self.at + 1
                 ));
             }
-            let trimmed = line.trim_start();
-            if !(trimmed == "-" || trimmed.starts_with("- ")) {
+            if !opens_a_list(line.trim_start()) {
                 break;
             }
             // The dash becomes a space, so `- name: x` reads as the mapping
@@ -2831,7 +2830,7 @@ impl Cursor {
                 return Err(format!("line {}: a tab in the indentation", self.at + 1));
             }
             let trimmed = line.trim_start().to_string();
-            if trimmed == "-" || trimmed.starts_with("- ") {
+            if opens_a_list(&trimmed) {
                 break;
             }
             let Some((key, rest)) = split_key(&trimmed) else {
@@ -2843,7 +2842,16 @@ impl Cursor {
             }
             self.at += 1;
             let value = if rest.is_empty() {
-                self.node(indent + 1)?
+                // A block sequence may sit at its key's own column — valid
+                // YAML, and the house style of half the workflows there
+                // are. Reading only deeper lines would refuse a file
+                // GitHub runs without complaint.
+                match self.peek() {
+                    Some((found, next)) if found == indent && opens_a_list(next.trim_start()) => {
+                        self.list(indent)?
+                    }
+                    _ => self.node(indent + 1)?,
+                }
             } else if rest.starts_with('|') || rest.starts_with('>') {
                 self.block_scalar(indent, &rest, at)?
             } else {
@@ -2878,6 +2886,11 @@ impl Cursor {
         }
         Ok(Yaml::Scalar(body.join("\n")))
     }
+}
+
+/// Whether a line, already trimmed of its indentation, opens a list item.
+fn opens_a_list(trimmed: &str) -> bool {
+    trimmed == "-" || trimmed.starts_with("- ")
 }
 
 /// The first byte of `text` outside quotes for which `wanted` holds, and
@@ -3029,7 +3042,10 @@ fn a_workflow_yaml_cannot_read_fails_the_gate() {
         );
     }
 
-    // And it reads the shapes a workflow is written in
+    // And it reads the shapes a workflow is written in — including a block
+    // sequence at its key's own column, which is valid YAML and the house
+    // style of half the workflows there are. Refusing one would be this
+    // gate failing a file GitHub runs.
     let workflow = concat!(
         "name: a\n\n",
         "on:\n  push:\n    branches: [main]\n  pull_request:\n\n",
@@ -3040,6 +3056,28 @@ fn a_workflow_yaml_cannot_read_fails_the_gate() {
         "      - name: A step\n        run: |\n          set -eu\n",
         "          # not a comment, a line of the script\n          echo hi\n",
     );
+    let flush = concat!(
+        "jobs:\n",
+        "  test:\n",
+        "    runs-on: ubuntu-latest\n",
+        "    steps:\n",
+        "    - uses: actions/checkout@v7\n",
+        "      with:\n",
+        "        fetch-depth: 0\n",
+        "    - run: echo hi\n",
+    );
+    let flush = parse_yaml(flush)
+        .unwrap_or_else(|err| panic!("the reader refused a sequence at its key's column: {err}"));
+    let flush = flush
+        .get("jobs")
+        .and_then(|jobs| jobs.get("test"))
+        .and_then(|test| test.get("steps"))
+        .expect("the flush-style steps did not read as the key's value");
+    let Yaml::List(flush) = flush else {
+        panic!("the flush-style steps did not read as a list: {flush:?}");
+    };
+    assert_eq!(flush.len(), 2, "the reader lost a step: {flush:?}");
+
     let parsed = parse_yaml(workflow).expect("the reader cannot read a plain workflow");
     assert_eq!(parsed.keys(), ["name", "on", "jobs"]);
     let steps = parsed

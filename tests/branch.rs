@@ -934,11 +934,28 @@ const FETCHED_JUSTFILE: &str = "just --justfile \"$RUNNER_TEMP/keeler/Justfile\"
 /// gives it.
 const FETCH_STEP: &str = "Fetch Keeler at the pinned tag";
 
+/// Shell words a command may open with. `then just crap-delta` is a
+/// recipe run, and a finder that did not know so would let the whole CRAP
+/// gate out of the scenario below the day someone wrote it on one line.
+const SHELL_KEYWORDS: [&str; 8] = ["if", "elif", "then", "else", "do", "while", "until", "!"];
+
+/// `command` with any leading shell keywords removed.
+fn command_proper(command: &str) -> &str {
+    let mut rest = command.trim();
+    while let Some((first, tail)) = rest.split_once(char::is_whitespace) {
+        if !SHELL_KEYWORDS.contains(&first) {
+            break;
+        }
+        rest = tail.trim_start();
+    }
+    rest
+}
+
 /// Every command in `text` whose first token is `just`, as `(line number,
 /// command)`. The line is stripped of a step's `- ` and `run: ` prefixes and
 /// split on the shell's separators, so `uses: taiki-e/install-action@just`
 /// and `tool: cargo-nextest,just` are not invocations while a `just` after
-/// `&&` is one.
+/// `&&`, `;` or `then` is one.
 fn just_invocations(text: &str) -> Vec<(usize, String)> {
     let mut found = Vec::new();
     for (index, line) in text.lines().enumerate() {
@@ -949,7 +966,7 @@ fn just_invocations(text: &str) -> Vec<(usize, String)> {
         rest = rest.strip_prefix("- ").unwrap_or(rest).trim_start();
         rest = rest.strip_prefix("run: ").unwrap_or(rest).trim_start();
         for command in rest.split(['&', '|', ';']) {
-            let command = command.trim();
+            let command = command_proper(command);
             if command.split_whitespace().next() == Some("just") {
                 found.push((index + 1, command.to_string()));
             }
@@ -1003,6 +1020,20 @@ fn the_workflow_runs_every_gate_from_the_fetched_justfile() {
     assert!(
         !invocations.is_empty(),
         "the shipped workflow runs no gate through a recipe at all"
+    );
+
+    // ... by a reader that finds one wherever a command may begin. A finder
+    // that only looked at the head of a line would let a one-line rewrite
+    // of the CRAP gate drop out of this scenario without a word.
+    let hidden = "        run: if [ -f crap-baseline.json ]; then just crap-delta; else just crap; fi";
+    assert_eq!(
+        just_invocations(hidden)
+            .iter()
+            .map(|(_, command)| command.as_str())
+            .collect::<Vec<&str>>(),
+        ["just crap-delta", "just crap"],
+        "the finder misses a recipe run after a shell keyword: {:?}",
+        just_invocations(hidden)
     );
 
     // Then each one names the fetched Justfile and the project as the
