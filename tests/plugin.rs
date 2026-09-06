@@ -394,18 +394,32 @@ impl Project {
             .expect("failed to run hooks/session-start.sh")
     }
 
-    /// Runs `install.sh .` here with a stub `cargo` first on PATH, the way
-    /// `tests/installer.rs` drives it: `--no-tools` because the tool block
-    /// probes the real machine, and this scenario is about what the
+    /// Runs `install.sh .` here with stub `cargo` and `curl` first on PATH,
+    /// the way `tests/installer.rs` drives it: `--no-tools` because the tool
+    /// block probes the real machine, and this scenario is about what the
     /// installer leaves in the project.
+    ///
+    /// The `curl` stub refuses rather than being left out: an inherited
+    /// `KEELER_REF` or `KEELER_TARBALL` sends the installer down its fetch
+    /// branch, and a stub that fails loudly turns that into this test
+    /// failing instead of a test run reaching the network.
     fn install(&self) {
-        let stub = self.0.join("bin/cargo");
-        std::fs::create_dir_all(stub.parent().unwrap()).unwrap();
-        std::fs::write(&stub, "#!/usr/bin/env bash\nexit 0\n").unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let stubs = [
+            ("bin/cargo", "#!/usr/bin/env bash\nexit 0\n"),
+            (
+                "bin/curl",
+                "#!/usr/bin/env bash\necho \"harness: network access refused: curl $*\" >&2\nexit 7\n",
+            ),
+        ];
+        for (rel, script) in stubs {
+            let stub = self.0.join(rel);
+            std::fs::create_dir_all(stub.parent().unwrap()).unwrap();
+            std::fs::write(&stub, script).unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
         }
         let path = std::env::var("PATH").unwrap();
         let output = Command::new("bash")

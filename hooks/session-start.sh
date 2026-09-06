@@ -6,8 +6,10 @@
 # what this prints is what the agent reads as law — hence `cat` and no
 # framing. Output starting with `{` would be parsed as JSON instead, and
 # output over 10,000 characters is filed away and replaced by a preview:
-# the rules arriving partially and silently. `cargo xtask plugin-check`
-# holds keeler.md under 9,500 bytes so neither can happen here.
+# the rules arriving partially and silently. Neither can happen here
+# because keeler.md is held under 9,500 bytes and away from a leading
+# brace — by `tests/plugin.rs::the_rules_fit_the_hook` today, and by
+# `cargo xtask plugin-check` before a tag once T7 has written it.
 set -euo pipefail
 
 # The plugin root is Claude Code's to tell us, and it moves with every
