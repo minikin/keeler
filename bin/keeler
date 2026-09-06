@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Keeler's front door: run the plugin's recipes against the project you are
+# standing in.
+#
+#     keeler <recipe> [arguments...]
+#
+# The Justfile lives in the plugin, not in your repository, so `just
+# <recipe>` has nothing to find. This wrapper supplies the two flags that
+# close that gap — `--justfile` naming the plugin's file, and
+# `--working-directory` naming your project — and hands `just` everything
+# else untouched.
+#
+# The agent gets it for free: Claude Code puts an enabled plugin's bin/ on
+# the Bash tool's PATH. A human puts it on theirs, directly or through a
+# symlink from somewhere already on it — hence the symlink resolution
+# below. CI has neither, and calls `just --justfile` against its own
+# fetched checkout.
+set -euo pipefail
+
+# Where the plugin is. `readlink -f` so a symlink on PATH resolves to the
+# real file and the Justfile is looked for beside *that* — a symlinked
+# `keeler` in ~/.local/bin would otherwise send us to ~/.local/Justfile.
+# `readlink -f` is GNU coreutils and macOS since 12.3, which is the floor
+# README states. `cd -P` because the answer is compared with, and printed
+# beside, paths the shell has already resolved.
+plugin_root="$(cd -P -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/.." && pwd)"
+
+# Which project. The repository root and not the current directory, so a
+# recipe run from src/ measures the whole project — and in a linked
+# worktree `--show-toplevel` is the worktree, which is exactly what a
+# spawned task's gate must see. Outside a repository there is nothing to
+# ascend to, so the directory the human is in is the project.
+root="$(git rev-parse --show-toplevel 2>/dev/null || pwd -P)"
+
+# `just` from PATH: the one the human or the agent would have run, and the
+# one a test can stub to watch what a recipe asks for.
+exec just --justfile "$plugin_root/Justfile" --working-directory "$root" "$@"
