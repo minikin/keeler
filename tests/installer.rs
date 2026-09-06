@@ -2140,3 +2140,262 @@ fn a_crate_without_a_claude_md_does_not_get_one() {
         "the installer created a CLAUDE.md nobody asked for",
     );
 }
+
+// --- Spec 09 — what an earlier install left behind -------------------------
+//
+// A project installed before spec 09 holds Keeler's commands, skills, rules,
+// recipes and graph parser. They are dead weight now — the plugin carries
+// them — but removing them is not the installer's call: an edited copy is
+// indistinguishable from an untouched one, and a deleted edit is the one
+// loss this script has always promised not to cause. So they are named, with
+// the command that removes them, and left exactly as they are.
+
+/// The eight traces an earlier install leaves, as `(what a past install
+/// wrote, the path the report names it by)`. The two directories are named
+/// whole: every file under them was Keeler's, and `git rm -r --` is how they
+/// go. `CLAUDE.md` is the odd one — the file is the project's, only the
+/// import line is ours, so what the report names is the line.
+const STALE_MARKERS: [(&str, &str); 8] = [
+    (".claude/commands/keeler/spec.md", ".claude/commands/keeler"),
+    (
+        ".claude/skills/gherkin-specs/SKILL.md",
+        ".claude/skills/gherkin-specs",
+    ),
+    (".claude/keeler.md", ".claude/keeler.md"),
+    ("scripts/keeler-graph.sh", "scripts/keeler-graph.sh"),
+    ("KEELER.md", "KEELER.md"),
+    (".cargo-mutants.toml", ".cargo-mutants.toml"),
+    ("Justfile", "Justfile"),
+    ("CLAUDE.md", "@.claude/keeler.md"),
+];
+
+/// Files an earlier install would have left with this content. The two that
+/// are detected by what is inside them rather than by their name get the
+/// content that identifies them; the rest may hold anything.
+fn stale_content(path: &str) -> &'static str {
+    match path {
+        "Justfile" => "default:\n    @just --list\n\nkeeler-spawn SPEC TASK:\n    @echo spawning\n",
+        "CLAUDE.md" => "# Theirs\n\n@.claude/keeler.md\n",
+        _ => "left by an earlier Keeler\n",
+    }
+}
+
+/// Writes the fixture for each named marker into the project.
+fn leave_behind(project: &TempProject, markers: &[(&str, &str)]) {
+    for (file, _) in markers {
+        let path = project.path().join(file);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, stale_content(file)).unwrap();
+    }
+}
+
+/// The paths the report lists as an earlier Keeler's — the bullets under its
+/// heading, which run until the blank line before the removal command.
+fn stale_bullets(report: &str) -> Vec<String> {
+    report
+        .lines()
+        .skip_while(|line| !line.contains("Left by an earlier Keeler"))
+        .skip(1)
+        .map_while(|line| line.trim().strip_prefix("· ").map(str::to_string))
+        .collect()
+}
+
+/// The one `git rm -r --` line the report offers, split into the paths it
+/// names. `None` when the report gives no such line at all.
+fn removal_line(report: &str) -> Option<Vec<String>> {
+    let lines: Vec<&str> = report
+        .lines()
+        .filter(|line| line.contains("git rm -r --"))
+        .collect();
+    assert!(
+        lines.len() <= 1,
+        "the report gives more than one removal line: {lines:?}",
+    );
+    lines.first().map(|line| {
+        line.split_once("git rm -r --")
+            .unwrap()
+            .1
+            .split_whitespace()
+            .map(str::to_string)
+            .collect()
+    })
+}
+
+#[test]
+fn files_an_earlier_install_left_behind_are_named_and_kept() {
+    // Given a crate holding everything a pre-plugin install put there
+    let project = TempProject::new("stale-report", MANIFEST_WITH_PROPTEST);
+    leave_behind(&project, &STALE_MARKERS);
+    let before = project.tree_snapshot();
+
+    // When the installer runs
+    let output = project.try_install();
+    let report = String::from_utf8_lossy(&output.stdout).into_owned();
+
+    // Then it exits zero
+    assert!(
+        output.status.success(),
+        "the installer refused a project an earlier Keeler had touched:\n{report}{}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+    // And it names each of those paths as left by an earlier Keeler
+    let bullets = stale_bullets(&report);
+    for (_, named) in STALE_MARKERS {
+        if named.starts_with('@') {
+            continue;
+        }
+        assert!(
+            bullets.iter().any(|listed| listed == named),
+            "the report does not name {named}:\n{report}",
+        );
+    }
+    // And it gives one `git rm -r --` line listing exactly those files
+    let removal = removal_line(&report).unwrap_or_else(|| panic!("no removal line:\n{report}"));
+    assert_eq!(removal, bullets, "the removal line and the list disagree");
+    // And it names the import line in CLAUDE.md as one to delete by hand —
+    // the file is the project's, so only the line is ours to point at
+    assert!(
+        report.contains("@.claude/keeler.md") && report.contains("by hand"),
+        "the report does not name the CLAUDE.md import as one to delete by hand:\n{report}",
+    );
+    assert!(
+        !removal.iter().any(|path| path == "CLAUDE.md"),
+        "the removal line offers to delete the project's own CLAUDE.md: {removal:?}",
+    );
+    // And it says where those relative paths are rooted, next to the line
+    // itself: the destination is an argument, so the reader is not
+    // necessarily standing in it.
+    let lines: Vec<&str> = report.lines().collect();
+    let at = lines
+        .iter()
+        .position(|line| line.contains("git rm -r --"))
+        .unwrap();
+    let dest = project.path().display().to_string();
+    assert!(
+        lines[..at].iter().rev().take(3).any(|l| l.contains(&dest)),
+        "nothing near the removal line says where its paths are rooted:\n{report}",
+    );
+    // And every one of those files is byte-identical afterwards
+    let after = project.tree_snapshot();
+    for (file, _) in STALE_MARKERS {
+        assert_eq!(
+            before.get(file),
+            after.get(file),
+            "{file} was not left as it was found",
+        );
+    }
+}
+
+#[test]
+fn the_traces_the_scenarios_do_not_name_are_found_too() {
+    // Given a crate holding the two an earlier install could leave that the
+    // scenarios' fixture does not: the second skill, and a justfile under
+    // the dotted spelling `just` accepts alongside the plain one
+    let project = TempProject::new("stale-remainder", MANIFEST_WITH_PROPTEST);
+    let skill = project.path().join(".claude/skills/property-testing");
+    std::fs::create_dir_all(&skill).unwrap();
+    std::fs::write(skill.join("SKILL.md"), "left behind\n").unwrap();
+    std::fs::write(project.path().join(".justfile"), stale_content("Justfile")).unwrap();
+
+    // When the installer runs
+    let report = project.install();
+
+    // Then both are named. Neither is reachable through STALE_MARKERS, so
+    // without this test the two lines that find them could go unnoticed.
+    assert_eq!(
+        stale_bullets(&report),
+        [".claude/skills/property-testing", ".justfile"],
+        "a trace of an earlier install went unreported:\n{report}",
+    );
+}
+
+#[test]
+fn a_projects_own_justfile_is_not_mistaken_for_keelers() {
+    // Given a crate whose justfile defines only its own recipes
+    // (The fixture's directory name says nothing about recipes: the report
+    // prints the destination path, and a name containing "justfile" would
+    // satisfy the check below without the installer saying a word.)
+    let project = TempProject::new("own-recipes", MANIFEST_WITH_PROPTEST);
+    std::fs::write(
+        project.path().join("justfile"),
+        "build:\n    cargo build\n\nspawn-workers:\n    ./workers.sh\n",
+    )
+    .unwrap();
+
+    // When the installer runs
+    let report = project.install();
+
+    // Then the output does not name it. Sharing a name with Keeler's recipes
+    // is what every project with its own justfile does; telling them to
+    // `git rm` it would be telling them to delete their own work.
+    assert!(
+        !report.to_lowercase().contains("justfile"),
+        "the installer named a justfile that was never Keeler's:\n{report}",
+    );
+    assert!(
+        removal_line(&report).is_none(),
+        "the installer offered to remove files from a project it left nothing in:\n{report}",
+    );
+}
+
+proptest::proptest! {
+    // Each case runs the installer as a subprocess; the count stays low for
+    // the same reason the properties above keep theirs low.
+    #![proptest_config(proptest::prelude::ProptestConfig {
+        cases: 10,
+        failure_persistence: Some(Box::new(
+            proptest::test_runner::FileFailurePersistence::WithSource("proptest-regressions"),
+        )),
+        ..proptest::prelude::ProptestConfig::default()
+    })]
+
+    #[test]
+    fn any_subset_of_stale_files_is_reported_exactly(
+        left in proptest::sample::subsequence(STALE_MARKERS.to_vec(), 0..=STALE_MARKERS.len()),
+    ) {
+        // Given any subset of the traces an earlier install leaves
+        let project = TempProject::new("stale-subset", MANIFEST_WITH_PROPTEST);
+        leave_behind(&project, &left);
+        let before = project.tree_snapshot();
+
+        // When the installer runs
+        let report = project.install();
+
+        // Then the paths it names are exactly the subset's, and no other
+        let expected: Vec<String> = STALE_MARKERS
+            .iter()
+            .filter(|(file, named)| !named.starts_with('@') && left.iter().any(|(l, _)| l == file))
+            .map(|(_, named)| (*named).to_string())
+            .collect();
+        proptest::prop_assert_eq!(
+            stale_bullets(&report), expected.clone(),
+            "report vs what was left:\n{}", report,
+        );
+        proptest::prop_assert_eq!(
+            removal_line(&report), (!expected.is_empty()).then_some(expected),
+            "removal line vs what was left:\n{}", report,
+        );
+        // And the CLAUDE.md import is named when, and only when, it is there
+        proptest::prop_assert_eq!(
+            report.contains("@.claude/keeler.md"),
+            left.iter().any(|(file, _)| *file == "CLAUDE.md"),
+            "the CLAUDE.md import was misreported:\n{}", report,
+        );
+
+        // And nothing outside the install set differs afterwards
+        let after = project.tree_snapshot();
+        let touched: Vec<&String> = after
+            .iter()
+            .filter(|(name, bytes)| before.get(*name).is_none_or(|was| was != *bytes))
+            .map(|(name, _)| name)
+            .filter(|name| ![
+                "Cargo.toml",
+                ".gitignore",
+                "clippy.toml",
+                "rustfmt.toml",
+                ".github/workflows/keeler.yml",
+            ].contains(&name.as_str()))
+            .collect();
+        proptest::prop_assert!(touched.is_empty(), "the install touched {:?}", touched);
+    }
+}
