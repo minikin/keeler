@@ -67,9 +67,9 @@ The installer keeps its hands off your files. Anything you already had is
 never overwritten: if it differs from what Keeler ships, the new version
 lands alongside as `<name>.keeler` and the run names it — except a workflow
 that differs only by its `KEELER_REF:` line, which is you having repinned on
-purpose and is left alone. Running it twice changes nothing. It refuses
-rather than install into a project it would break: a directory with no
-`Cargo.toml`, or a `Cargo.toml` cargo cannot read.
+purpose and is left alone. Running it twice changes nothing. A directory
+with no `Cargo.toml` it refuses outright; a manifest it edited and left
+unreadable it puts back as it found it, and says so.
 
 Outside Claude Code, `install.sh` is the same one-liner it has always been —
 this is what `/keeler:init` runs for you:
@@ -202,12 +202,10 @@ wave: T2 T3
 spawn T2 T3? [yes/no] yes
 ```
 
-One yes spawns them all, into one tmux window with a pane per run. Each
-agent gets the plugin — the runner passes `--plugin-dir`, so a spawned
-session has the same commands, rules and recipes you do, whatever your own
-settings say. `keeler keeler-status <spec>` is the board afterwards; you
-merge the finished branches into the feature branch, and
-`keeler keeler-land` runs the gates and clears the landed worktrees.
+One yes spawns them all, into one tmux window with a pane per run.
+`keeler keeler-status <spec>` is the board afterwards; you merge the
+finished branches into the feature branch, and `keeler keeler-land` runs the
+gates and clears the landed worktrees.
 
 It is opt-in and changes nothing on the linear road: a project that never
 runs these recipes never meets them. Its one extra requirement is **tmux**.

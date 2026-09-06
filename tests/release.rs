@@ -279,21 +279,45 @@ fn the_verification_story_is_documented_where_adopters_look() {
 /// instead would let a mention anywhere in the file satisfy an assertion
 /// about the Install section — which is where a reader who has just landed
 /// stops, and so the one place the plugin has to be named.
+///
+/// Fenced blocks are skipped rather than read as prose: the Install
+/// section's own example opens with a `# pin a release` comment, which taken
+/// for a heading ends the section a few lines into it — and an assertion
+/// about anything below the fence would then fail saying the words are
+/// missing when they are there.
 fn section<'a>(doc: &'a str, heading: &str) -> &'a str {
     let depth = heading.chars().take_while(|c| *c == '#').count();
-    let start = doc
-        .find(heading)
-        .unwrap_or_else(|| panic!("README.md has no `{heading}` section"));
-    let body = &doc[start..];
-    let end = body
-        .match_indices('\n')
-        .find(|(index, _)| {
-            let line = &body[index + 1..];
-            let hashes = line.chars().take_while(|c| *c == '#').count();
-            hashes > 0 && hashes <= depth && line[hashes..].starts_with(' ')
-        })
-        .map_or(body.len(), |(index, _)| index);
-    &body[..end]
+    let mut start = None;
+    let mut fenced = false;
+    let mut offset = 0;
+    for line in doc.lines() {
+        let here = offset;
+        offset += line.len() + 1;
+        if line.starts_with("```") {
+            fenced = !fenced;
+            continue;
+        }
+        if fenced {
+            continue;
+        }
+        match start {
+            // The whole line, not a substring: `## Install` is also the
+            // opening of `## Installing from source`, and matching that
+            // would hand back a section nobody asked about.
+            None => {
+                if line == heading {
+                    start = Some(here);
+                }
+            }
+            Some(start) => {
+                let hashes = line.chars().take_while(|c| *c == '#').count();
+                if hashes > 0 && hashes <= depth && line[hashes..].starts_with(' ') {
+                    return &doc[start..here];
+                }
+            }
+        }
+    }
+    &doc[start.unwrap_or_else(|| panic!("README.md has no `{heading}` section"))..]
 }
 
 #[test]
@@ -314,6 +338,13 @@ fn the_readme_leads_with_the_plugin() {
             "README's Install section does not name `{named}`:\n{install}",
         );
     }
+
+    // And it still shows the installer one-liner `/keeler:init` runs, for
+    // the reader who has no Claude Code in front of them
+    assert!(
+        install.contains("curl -fsSL"),
+        "README's Install section no longer shows what /keeler:init runs:\n{install}",
+    );
 
     // And it lists `keeler --list` as where the recipes are — they are in
     // the plugin now, so `just` in the project answers nothing
