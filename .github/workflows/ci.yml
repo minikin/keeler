@@ -149,7 +149,12 @@ jobs:
             cat upgrade.log; exit 1; }
           cat upgrade.log
           test -f "$workflow.keeler"
-          cmp "$workflow.keeler" templates/keeler.yml
+          # The copy is what we ship with the pin resolved, so it is compared
+          # with that line ignored — and then the line itself, which must
+          # name the version that wrote it.
+          pin='s|^\([[:space:]]*KEELER_REF:\).*|\1|'
+          diff <(sed "$pin" "$workflow.keeler") <(sed "$pin" templates/keeler.yml)
+          grep -qxF "  KEELER_REF: v$(cat VERSION)" "$workflow.keeler"
           grep -q 'hand-edited by the project' "$workflow"
           # The conflict is reported, and every note names the file it wrote
           # — a nameless one means a mangled bookkeeping list.

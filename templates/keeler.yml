@@ -16,6 +16,10 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # The Keeler these gates come from, written by the install that put this
+  # file here. Change it to move this project to another version — nothing
+  # else here needs editing, and nothing rewrites it for you.
+  KEELER_REF: v@VERSION@
 
 jobs:
   lints:
