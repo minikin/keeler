@@ -159,8 +159,9 @@ repeating them:
 | **[SECURITY.md](SECURITY.md)**             | anyone about to pipe curl to bash | What the installer trusts, what it never overwrites, how to report a hole              |
 | **[CHANGELOG.md](CHANGELOG.md)**           | upgraders                         | What each release changed, and what it broke                                           |
 
-`KEELER.md` and `.claude/keeler.md` are installed into your project — the
-reasoning and the rules travel with the workflow. The rest stay here.
+`docs/KEELER.md` and `keeler.md` travel with the plugin — the reasoning
+and the rules reach you without a file landing in your repository. The
+rest stay here.
 
 ## This repository
 
@@ -168,8 +169,9 @@ Both the product and its test bench:
 
 - `install.sh` — the deliverable
 - `templates/keeler.yml` — the CI workflow adopters receive
-- `.claude/` — the commands, the skills and the rules file, exactly as installed
-- `specs/` — the Gherkin specs this repository is built from; `TEMPLATE.md` starts yours
+- `.claude-plugin/`, `commands/`, `skills/`, `keeler.md`, `graph-mode.md`, `gates.md` — the plugin itself, which this repository is
+- `templates/spec.md` — the spec template `/keeler:spec` copies, and what starts yours
+- `specs/` — the Gherkin specs this repository is built from
 - `xtask/` — the release tooling: `cargo xtask release-guard`, `release-notes`, `checksum`
 - `scripts/integration-check.sh` — the contract checker CI runs against pinned clones of anyhow, serde and ripgrep
 - `tests/` — the harness that drives `install.sh` against generated projects, offline
