@@ -449,9 +449,10 @@ fn a_command_that_runs_a_recipe_runs_it_through_the_wrapper() {
             // `KEELER_FAN_OUT_YES=1 keeler keeler-fan-out` is a line the
             // Justfile prints — so the invocation starts at the first word
             // that is not an assignment.
-            let mut words = shown
-                .split_whitespace()
-                .skip_while(|word| word.split_once('=').is_some_and(|(name, _)| !name.is_empty()));
+            let mut words = shown.split_whitespace().skip_while(|word| {
+                word.split_once('=')
+                    .is_some_and(|(name, _)| !name.is_empty())
+            });
             let first = words.next().unwrap_or_default();
 
             // Then no line invokes `just`, wherever in the line it sits:
