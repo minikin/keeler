@@ -308,7 +308,9 @@ fn the_installer_lands_cleanly_on_a_real_library_crate() {
 
 #[test]
 fn an_installer_that_skips_a_file_is_caught() {
-    // Given an installer that does everything right but drops one file
+    // Given an installer that does everything right but drops one file.
+    // A tool config, because the checker's tracked set is whatever a
+    // reference install adds — and since spec 09 the Justfile is not in it.
     let fixture = Fixture::library("skips-a-file");
     let defective = fixture.write_script(
         "bin/defective-install.sh",
@@ -316,7 +318,7 @@ fn an_installer_that_skips_a_file_is_caught() {
             "#!/usr/bin/env bash\n\
              set -euo pipefail\n\
              bash {} \"$@\"\n\
-             rm -f \"$1/Justfile\"\n",
+             rm -f \"$1/clippy.toml\"\n",
             repo_root().join("install.sh").display(),
         ),
     );
@@ -331,7 +333,7 @@ fn an_installer_that_skips_a_file_is_caught() {
         "the checker passed an installer that skipped a file:\n{report}",
     );
     assert!(
-        report.contains("Justfile"),
+        report.contains("clippy.toml"),
         "the checker did not name the missing file:\n{report}",
     );
 }
