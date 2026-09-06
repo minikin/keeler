@@ -3,9 +3,11 @@ description: Review the change — spec conformance ourselves, then the built-in
 argument-hint: <spec file; empty = most recent Implemented/Approved spec>
 ---
 
-Spec under review: $ARGUMENTS (if empty, use the spec whose tasks were just implemented).
+Read `${CLAUDE_PLUGIN_ROOT}/keeler.md` before anything else — the workflow rules this command is a stage of. Then read `${CLAUDE_PLUGIN_ROOT}/gates.md`, whose gate table this stage sits in and whose closing paragraph says what does and does not enforce it.
 
-You are in the **review stage** (see .claude/keeler.md). The review has two parts: a spec-conformance pass that only this project can do, then the built-in code-review skill for everything generic.
+Spec under review: $ARGUMENTS (if empty, use the spec whose tasks this change implemented).
+
+You are in the **review stage**. The review has two parts: a spec-conformance pass that only this project can do, then the built-in code-review skill for everything generic.
 
 ## Part 1 — Spec conformance (do this yourself)
 
