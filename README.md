@@ -15,7 +15,7 @@ agent to be careful — it makes carelessness fail the build.
 > it records several independent channels at once, on the theory that you can
 > fool one but not all of them.
 
-**[KEELER.md](KEELER.md)** explains why the workflow is shaped this way. The
+**[docs/KEELER.md](docs/KEELER.md)** explains why the workflow is shaped this way. The
 installer ships it into your project, so the reasoning arrives with the rules.
 
 ## Install
@@ -117,7 +117,7 @@ clears the landed worktrees.
 
 It is opt-in and changes nothing on the linear road: a project that never
 runs these recipes never meets them. Its one extra requirement is **tmux**.
-[KEELER.md](KEELER.md#graph-mode-the-same-pipeline-in-parallel) has the day,
+[docs/KEELER.md](docs/KEELER.md#graph-mode-the-same-pipeline-in-parallel) has the day,
 start to finish.
 
 ## What Keeler is not
@@ -153,14 +153,15 @@ repeating them:
 | File                                       | Written for                       | What it answers                                                                       |
 | ------------------------------------------ | --------------------------------- | ------------------------------------------------------------------------------------- |
 | **README.md**                              | you, right now                    | What is this, how do I install it, what do I type first                               |
-| **[KEELER.md](KEELER.md)**                 | your team                         | *Why* each stage and gate exists, what AI failure mode each one catches, the graph-mode day start to finish |
-| **[.claude/keeler.md](.claude/keeler.md)** | the agent                         | The workflow as law: the pipeline, the change classes, the commit rule, the gate table |
+| **[docs/KEELER.md](docs/KEELER.md)**       | your team                         | *Why* each stage and gate exists, what AI failure mode each one catches, the graph-mode day start to finish |
+| **[keeler.md](keeler.md)**                 | the agent                         | The workflow as law: the pipeline, the change classes, the commit rule, the gate table |
 | **[CONTRIBUTING.md](CONTRIBUTING.md)**     | contributors to Keeler itself     | Which road a change takes here, the release checklist, the standing review debt        |
 | **[SECURITY.md](SECURITY.md)**             | anyone about to pipe curl to bash | What the installer trusts, what it never overwrites, how to report a hole              |
 | **[CHANGELOG.md](CHANGELOG.md)**           | upgraders                         | What each release changed, and what it broke                                           |
 
-`KEELER.md` and `.claude/keeler.md` are installed into your project — the
-reasoning and the rules travel with the workflow. The rest stay here.
+`docs/KEELER.md` and `keeler.md` travel with the plugin — the reasoning
+and the rules reach you without a file landing in your repository. The
+rest stay here.
 
 ## This repository
 
@@ -168,8 +169,9 @@ Both the product and its test bench:
 
 - `install.sh` — the deliverable
 - `templates/keeler.yml` — the CI workflow adopters receive
-- `.claude/` — the commands, the skills and the rules file, exactly as installed
-- `specs/` — the Gherkin specs this repository is built from; `TEMPLATE.md` starts yours
+- `.claude-plugin/`, `commands/`, `skills/`, `keeler.md`, `graph-mode.md`, `gates.md` — the plugin itself, which this repository is
+- `templates/spec.md` — the spec template `/keeler:spec` copies, and what starts yours
+- `specs/` — the Gherkin specs this repository is built from
 - `xtask/` — the release tooling: `cargo xtask release-guard`, `release-notes`, `checksum`
 - `scripts/integration-check.sh` — the contract checker CI runs against pinned clones of anyhow, serde and ripgrep
 - `tests/` — the harness that drives `install.sh` against generated projects, offline

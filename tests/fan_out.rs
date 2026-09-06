@@ -1561,9 +1561,9 @@ mod wave {
 
     #[test]
     fn no_command_file_sets_the_yes_in_advance() {
-        // Given every command file under .claude/commands/
+        // Given every command file the plugin ships
         let mut files = Vec::new();
-        collect_files(&repo_root().join(".claude/commands"), &mut files);
+        collect_files(&repo_root().join("commands"), &mut files);
         assert!(!files.is_empty(), "no command files found");
 
         // Then none of them sets KEELER_FAN_OUT_YES: the zero-yes path is the
@@ -1823,9 +1823,7 @@ mod fork {
 
     /// A shipped command file, read as the agent reads it.
     fn command(name: &str) -> String {
-        let path = repo_root()
-            .join(".claude/commands/keeler")
-            .join(format!("{name}.md"));
+        let path = repo_root().join("commands").join(format!("{name}.md"));
         std::fs::read_to_string(&path)
             .unwrap_or_else(|why| panic!("cannot read {}: {why}", path.display()))
     }
@@ -2173,8 +2171,8 @@ mod fork {
 
     #[test]
     fn the_rules_describe_the_fork_and_the_wave() {
-        // Given the shipped rules and KEELER.md
-        for name in [".claude/keeler.md", "KEELER.md"] {
+        // Given the graph-mode chapter the rules point at, and the guide
+        for name in ["graph-mode.md", "docs/KEELER.md"] {
             let text = std::fs::read_to_string(repo_root().join(name)).unwrap();
 
             // Then the graph-mode day names both commands in the steps a human

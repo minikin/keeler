@@ -635,8 +635,7 @@ fn a_branch_ticks_its_task_and_nothing_else() {
     // Given a task branch keeler/<spec-slug>/t2 whose pipeline reached
     // /keeler:mutants with zero survivors — which is the stage that ticks,
     // and the stage the branch condition had to reach
-    let mutants =
-        std::fs::read_to_string(repo_root().join(".claude/commands/keeler/mutants.md")).unwrap();
+    let mutants = std::fs::read_to_string(repo_root().join("commands/mutants.md")).unwrap();
     assert!(
         mutants.contains("Tick the task's checkbox"),
         "mutants.md no longer ticks the task's checkbox"

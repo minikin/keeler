@@ -649,7 +649,7 @@ fn no_shipped_file_carries_an_unresolved_merge() {
     // A conflict marker is invisible to every gate this project has: the
     // suite reads these files for content, not for shape, and markdown
     // renders `<<<<<<< HEAD` as a line of text. So one rode into main and
-    // out to adopters inside .claude/keeler.md — the rules file an agent
+    // out to adopters inside the rules file — the one an agent
     // is told to read first — and it was a spawned agent in a demo
     // project that noticed, not us.
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -831,7 +831,7 @@ fn listed_description(list: &str, recipe: &str) -> Option<String> {
 /// those the install still writes.
 fn assert_graph_mode_landed(project: &TempProject, justfile: &str) {
     for file in [
-        ".claude/commands/keeler/graph.md",
+        "commands/graph.md",
         // The command shells out to it; without it /keeler:graph exits 127.
         "scripts/keeler-graph.sh",
     ] {
@@ -885,24 +885,31 @@ fn assert_graph_mode_is_documented(project: &TempProject) {
             "`just --list` describes {recipe} with a fragment of the prose above it: {description:?}",
         );
     }
-    // /keeler:graph tells the agent to see the rules for graph mode; rules
-    // that never mention it send the reader to a section that is not there.
-    let rules = std::fs::read_to_string(repo_root().join(".claude/keeler.md")).unwrap();
+    // /keeler:graph tells the agent to read the graph-mode chapter, which
+    // left the rules for a file of its own; a chapter that never mentions a
+    // recipe sends the reader to a section that is not there.
+    let chapter = std::fs::read_to_string(repo_root().join("graph-mode.md")).unwrap();
     for (recipe, _) in GRAPH_MODE_RECIPES {
         assert!(
-            rules.contains(&format!("just {recipe}")),
-            "the rules never mention `just {recipe}` — an agent reading them stays on the linear road",
+            chapter.contains(&format!("just {recipe}")),
+            "graph-mode.md never mentions `just {recipe}` — an agent reading it stays on the linear road",
         );
     }
     assert!(
-        rules.contains("/keeler:graph"),
-        "the rules never mention the /keeler:graph command",
+        chapter.contains("/keeler:graph"),
+        "graph-mode.md never mentions the /keeler:graph command",
+    );
+    // And the rules must still send the reader there at all.
+    let rules = std::fs::read_to_string(repo_root().join("keeler.md")).unwrap();
+    assert!(
+        rules.contains("graph-mode.md"),
+        "the rules never name graph-mode.md — the chapter left with no pointer behind it",
     );
     // And the guide the reasoning lives in.
-    let guide = std::fs::read_to_string(repo_root().join("KEELER.md")).unwrap();
+    let guide = std::fs::read_to_string(repo_root().join("docs/KEELER.md")).unwrap();
     assert!(
         guide.to_lowercase().contains("graph mode") && guide.contains("just keeler-spawn"),
-        "KEELER.md describes the workflow without the parallel road",
+        "docs/KEELER.md describes the workflow without the parallel road",
     );
 }
 
@@ -945,8 +952,7 @@ fn assert_the_linear_road_is_unchanged(justfile: &str) {
         justfile.contains("\ndev: fmt lint test crap\n"),
         "the `dev` recipe is no longer `dev: fmt lint test crap`",
     );
-    let feature =
-        std::fs::read_to_string(repo_root().join(".claude/commands/keeler/feature.md")).unwrap();
+    let feature = std::fs::read_to_string(repo_root().join("commands/feature.md")).unwrap();
     let mut at = 0;
     for stage in [
         "/keeler:spec",
