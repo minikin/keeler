@@ -320,6 +320,58 @@ for entry in '/target' 'lcov.info' 'crap-report.json' 'mutants.out*/' '.keeler/'
 done
 ok "$added entry(ies) added"
 
+# --- 5. What an earlier install left behind -------------------------------
+# Keeler used to copy its commands, skills, rules, recipes and graph parser
+# into the project; the plugin carries them now. Removing them here is not
+# this script's call: an edited copy is indistinguishable from an untouched
+# one without every released version at hand, and a deleted edit is the one
+# loss the installer has always promised not to cause. So they are named,
+# with the command that removes them, and left exactly as they are.
+stale=()
+for path in .claude/commands/keeler .claude/skills/gherkin-specs \
+    .claude/skills/property-testing .claude/keeler.md \
+    scripts/keeler-graph.sh KEELER.md .cargo-mutants.toml; do
+    if [ -e "$DEST/$path" ] || [ -L "$DEST/$path" ]; then
+        stale+=("$path")
+    fi
+done
+# A justfile is Keeler's by what is in it, never by its name: sharing the
+# name is what every project with its own recipes does, and naming theirs
+# would be telling them to delete their own work. The entry is matched the
+# way `just` matches it — case-insensitively, either spelling — so the path
+# reported is the one the project actually has.
+shopt -s nullglob dotglob nocasematch
+for entry in "$DEST"/*; do
+    base="${entry##*/}"
+    if [ -f "$entry" ] && [[ "$base" == justfile || "$base" == .justfile ]] \
+        && grep -qE '^keeler-spawn[^:]*:' "$entry"; then
+        stale+=("$base")
+    fi
+done
+shopt -u nullglob dotglob nocasematch
+# The file is the project's and only the line is ours, so the line is what
+# the report names — and nothing offers to delete the file.
+claude_import=""
+if [ -f "$DEST/CLAUDE.md" ] && grep -qE '^@\.claude/keeler\.md' "$DEST/CLAUDE.md"; then
+    claude_import="@.claude/keeler.md"
+fi
+
+if [ "${#stale[@]}" -gt 0 ] || [ -n "$claude_import" ]; then
+    say "Left by an earlier Keeler"
+    if [ "${#stale[@]}" -gt 0 ]; then
+        for path in "${stale[@]}"; do
+            note "$path"
+        done
+        printf '\n  These are no longer installed — the plugin carries them. Nothing\n'
+        printf '  here was touched; remove them when you are ready:\n\n'
+        printf '    git rm -r -- %s\n' "${stale[*]}"
+    fi
+    if [ -n "$claude_import" ]; then
+        printf '\n  CLAUDE.md still imports the old rules: delete its %s line\n' "$claude_import"
+        printf '  by hand. The rules now arrive at every session start, from the plugin.\n'
+    fi
+fi
+
 # --- Done -----------------------------------------------------------------
 say "Keeler installed in $DEST"
 cat <<'NEXT'
