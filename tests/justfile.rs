@@ -292,8 +292,11 @@ fn recipe_header(line: &str) -> Option<String> {
     if line.starts_with(char::is_whitespace) || line.trim().is_empty() {
         return None;
     }
-    let (head, _) = line.split_once(':')?;
-    if head.contains(":=") || head.contains('#') {
+    // The colon of an assignment is the one in `:=`, so the tail is where
+    // it shows: everything before the colon was split away, and a `head`
+    // asked whether it holds `:=` can only ever answer no.
+    let (head, tail) = line.split_once(':')?;
+    if tail.starts_with('=') || head.contains('#') {
         return None;
     }
     let name = head.split_whitespace().next()?;
@@ -350,11 +353,18 @@ fn heredoc_terminator(line: &str) -> Option<String> {
     (!word.is_empty()).then_some(word)
 }
 
-/// Where a command can begin: nothing before it, or a shell operator, or a
-/// keyword that introduces one.
+/// Where a command can begin: nothing before it, a `just` line prefix, a
+/// shell operator, or a keyword that introduces one.
 fn is_command_start(before: &str) -> bool {
     let before = before.trim_end();
     if before.is_empty() {
+        return true;
+    }
+    // `just` strips a leading `@` (run quietly) or `-` (ignore a failure)
+    // off a recipe line before running what follows, so a call begins
+    // behind one — as `default`'s `@just … --list` does. A scan blind to
+    // those reports a file with a bare self-call in it as clean.
+    if before.trim_start().chars().all(|c| c == '@' || c == '-') {
         return true;
     }
     let last = before.chars().next_back().expect("a non-empty prefix");
@@ -376,10 +386,14 @@ fn self_calls(line: &str) -> Vec<Vec<String>> {
     for (at, _) in line.match_indices("just") {
         let before = &line[..at];
         let after = &line[at + "just".len()..];
+        // A word boundary, `@` and `-` among the characters that make one:
+        // `is_command_start` is what decides whether the boundary opens a
+        // command, and `--justfile` survives this only to be turned away
+        // by the whitespace test below.
         if !before
             .chars()
             .next_back()
-            .is_none_or(|c| c.is_whitespace() || "|&;({!".contains(c))
+            .is_none_or(|c| c.is_whitespace() || "|&;({!@-".contains(c))
         {
             continue;
         }
@@ -424,8 +438,10 @@ fn every_self_call_in_the_justfile_names_its_own_file() {
 
 /// Where a `just` call can begin — every shape the Justfile's own recipes
 /// use, and the ones a future recipe would reach for.
-const COMMAND_STARTS: [&str; 12] = [
+const COMMAND_STARTS: [&str; 15] = [
     "", "if ", "if ! ", "! ", "then ", "while ", "x=$(", "x=\"$(", "a | ", "a && ", "a || ", "a; ",
+    // `just`'s own line prefixes: quiet, ignore-failure, and both at once.
+    "@", "-", "@-",
 ];
 
 /// What can follow the recipe name without hiding the call.
