@@ -15,25 +15,48 @@ The full rules live in [keeler.md](keeler.md), with graph mode in
 [graph-mode.md](graph-mode.md), the gate table in [gates.md](gates.md), and
 the reasoning in [docs/KEELER.md](docs/KEELER.md).
 
+## Working on the plugin
+
+This repository *is* the plugin: `.claude-plugin/`, `commands/`, `skills/`,
+`hooks/`, `bin/`, `keeler.md`, `graph-mode.md`, `gates.md` and the `Justfile`
+are all at its root. To develop against your own change rather than the
+released copy, start Claude Code with it:
+
+```bash
+claude --plugin-dir .
+```
+
+That registers the commands as `/keeler:*`, runs the `SessionStart` hook
+from `hooks/`, and puts `bin/` on the agent's PATH — so `keeler <recipe>`
+in a session is your working tree's recipes, not the installed plugin's.
+There is no `.claude/commands/` or `.claude/skills/` here on purpose: with
+one, every command would be registered twice.
+
+`cargo xtask plugin-check` holds the two manifests, the version marker in
+`keeler.md` and the rules' byte ceiling in agreement with `VERSION`.
+`just lint` runs it here and the release guard runs it before a tag.
+
 ## Before you push
 
 ```bash
 just dev    # fmt, clippy (pedantic), shellcheck, tests, coverage, CRAP
 ```
 
-The deliverable is `install.sh` and the files it ships — its tests live in
-`tests/installer.rs` and drive the installer against generated projects,
-offline. If you change installer behavior, add a test there; if you add a
-workflow file (a command, a skill), `install.sh` must ship it — a test will
-remind you.
+The deliverable is the plugin, and `install.sh` — which is now only what
+`/keeler:init` runs to leave the CI workflow and the two tool configs in an
+adopter's project. Its tests live in `tests/installer.rs` and drive it
+against generated projects, offline; `tests/plugin.rs`, `tests/wrapper.rs`
+and `tests/justfile.rs` hold the plugin's own shape. If you change installer
+behavior, add a test there.
 
 ## Docs that have to keep up
 
 Each doc has one job, and a change that outgrows its doc is not finished:
 
 - **`CHANGELOG.md`** — every user-visible change, under `[Unreleased]`.
-- **`README.md`** — only if the change alters what the installer puts in a
-  project, what you need to run it, or the first commands you type.
+- **`README.md`** — only if the change alters what the plugin carries, what
+  the installer puts in a project, what you need to run either, or the first
+  commands you type.
 - **`docs/KEELER.md`** — only if the *reasoning* changed: a new stage, a new
   gate, a new failure mode one of them defends against.
 - **`keeler.md`** — only if the rules the agent obeys changed. It carries the
@@ -82,7 +105,8 @@ instruction the agent would *not* derive on its own.
 Everything `just dev` does, plus end-to-end installer runs on Linux and
 macOS, a from-scratch bootstrap (the installer installing its own tools,
 including the forced source-compile fallback), and version consistency
-(`VERSION` ↔ the marker in `keeler.md` ↔ a `CHANGELOG.md` entry).
+(`VERSION` ↔ the marker in `keeler.md` ↔ the two plugin manifests ↔ a
+`CHANGELOG.md` entry).
 The guard that checks that last one also runs the pipeline gate, so CI
 refuses a push whose specs tick a task no review record and no line of
 `reviews/BACKLOG.md` accounts for.
@@ -92,14 +116,17 @@ refuses a push whose specs tick a task no review record and no line of
 1. Move the `[Unreleased]` entries into a new `## [X.Y.Z] — date` section.
    An empty section is refused: the notes are that section verbatim, and a
    release must not ship blank ones.
-2. Bump `VERSION`, the `<!-- keeler-version: -->` marker in
-   `keeler.md`, and the `version` in every manifest — the root
-   `Cargo.toml` and each workspace member. `cargo xtask release-guard`
-   holds all of them in agreement and names every one that disagrees.
-3. Bump the pinned tag in the worked examples — README's install section,
-   `install.sh`'s usage text, the `keeler-upgrade` comment in the
-   `Justfile`. Nothing mechanical checks these; `grep -rn vX.Y.Z` for the
-   old tag is the check.
+2. Bump `VERSION`, the `<!-- keeler-version: -->` marker in `keeler.md`,
+   the `version` in every manifest — the root `Cargo.toml` and each
+   workspace member — and the plugin's two: `.claude-plugin/plugin.json`
+   and the `keeler` entry in `.claude-plugin/marketplace.json`. `/plugin
+   update` compares `plugin.json`'s version, so a release that leaves it
+   behind ships nothing to anyone and says so nowhere. `cargo xtask
+   release-guard` holds all of them in agreement — through
+   `plugin-check` for the last two — and names every one that disagrees.
+3. Bump the pinned tag in the worked examples — README's install section
+   and `install.sh`'s usage text. Nothing mechanical checks these;
+   `grep -rn vX.Y.Z` for the old tag is the check.
 4. `cargo check` to refresh `Cargo.lock`, which CI verifies is in step.
 5. Open the release PR, merge it, then `git tag vX.Y.Z && git push origin
    vX.Y.Z`.
