@@ -15,9 +15,46 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::OnceLock;
 
 pub fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+}
+
+/// The xtask binary this test binary was built beside.
+///
+/// `cargo xtask` would need the alias and this repository's working
+/// directory, and both are the wrong thing to give a test that runs the
+/// command inside a fixture. The suite must be run with the workspace
+/// selected for the binary to exist at all, which is what the message says.
+pub fn xtask_bin() -> PathBuf {
+    let mut path = std::env::current_exe().expect("the test binary has a path");
+    path.pop();
+    if path.ends_with("deps") {
+        path.pop();
+    }
+    let binary = path.join("xtask");
+    assert!(
+        binary.is_file(),
+        "{} is not built — run the suite with `--workspace` so it is",
+        binary.display(),
+    );
+    binary
+}
+
+/// The absolute path of the real `just`, resolved once against the
+/// harness's own PATH — a fixture's PATH carries stub tools, and `just`
+/// itself must still be the real one.
+pub fn real_just() -> &'static str {
+    static JUST: OnceLock<String> = OnceLock::new();
+    JUST.get_or_init(|| {
+        let out = Command::new("sh")
+            .args(["-c", "command -v just"])
+            .output()
+            .expect("failed to look for just");
+        assert!(out.status.success(), "just is not on PATH");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    })
 }
 
 pub fn shipped_workflow() -> String {
@@ -26,6 +63,31 @@ pub fn shipped_workflow() -> String {
 
 pub fn indent_of(line: &str) -> usize {
     line.len() - line.trim_start().len()
+}
+
+/// The names of the top-level jobs, in the order `jobs:` lists them.
+pub fn job_names(workflow: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut in_jobs = false;
+    for line in workflow.lines() {
+        if !line.trim().is_empty() && !line.starts_with(char::is_whitespace) {
+            in_jobs = line.trim_end() == "jobs:";
+            continue;
+        }
+        if !in_jobs {
+            continue;
+        }
+        let Some(entry) = line.strip_prefix("  ") else {
+            continue;
+        };
+        if entry.starts_with(' ') || entry.starts_with('#') {
+            continue;
+        }
+        if let Some(name) = entry.trim_end().strip_suffix(':') {
+            names.push(name.to_string());
+        }
+    }
+    names
 }
 
 /// The lines of one top-level job under `jobs:` — from its key to the next
@@ -55,6 +117,26 @@ pub fn job_block(workflow: &str, job: &str) -> String {
             break;
         }
         block.append(&mut pending);
+        block.push(line);
+    }
+    block.join("\n")
+}
+
+/// The lines of one step of a job, found by its `name:`. A job may hold
+/// several `run:` steps, and `run_script` takes the first — so a test about
+/// one of them names it rather than counting on its position.
+pub fn step_block(job: &str, name: &str) -> String {
+    let head = format!("- name: {name}");
+    let mut lines = job.lines().skip_while(|line| line.trim() != head);
+    let Some(first) = lines.next() else {
+        panic!("the job has no `{name}` step");
+    };
+    let indent = indent_of(first);
+    let mut block = vec![first];
+    for line in lines {
+        if !line.trim().is_empty() && indent_of(line) <= indent {
+            break;
+        }
         block.push(line);
     }
     block.join("\n")

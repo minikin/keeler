@@ -24,9 +24,9 @@ profiler, the complexity score, an independent review, and mutation testing.
 
 This file is the *why*. Two others carry the rest, and neither repeats it:
 Keeler's README is how to install it and what to type first, and
-`.claude/keeler.md` — installed beside this file, in your project — is this
-same workflow written as law for the agent: the file it actually reads while
-it works.
+`keeler.md` — the plugin's rules, printed into your session at its start —
+is this same workflow written as law for the agent: the file it actually
+reads while it works.
 
 > **Verdicts.** Every task's final report ends with a one-line status:
 >
@@ -177,8 +177,10 @@ either way, and the **yes** it asks for is yours.
 Three rules keep parallel branches honest, and CI enforces the first and
 third on every `keeler/*` pull request:
 
-- A branch **measures** the shared references — `crap-baseline.json`, the
-  coverage bar — and never moves them; they settle at fan-in, on main.
+- A branch **measures** the shared reference — `crap-baseline.json` — and
+  never moves it; it settles at fan-in, on main. The bars moved out of the
+  project with the recipes: `KEELER_COV_MIN` and `KEELER_CRAP_MAX` sit in
+  the workflow, and CI guards nothing but the baseline.
 - A branch ticks its own task and leaves the spec's `Status:` alone.
 - Review leaves a committed record, `reviews/<spec-slug>/<task-id>.md`,
   naming the commit it examined. At a fan-in of five branches, "nobody

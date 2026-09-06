@@ -6,12 +6,15 @@
 //! loudly), so they stay fast and can never touch the network. The
 //! end-to-end installer jobs in CI cover the rest.
 
+mod common;
+
 use std::path::{Path, PathBuf};
+
+use common::{indent_of, job_names};
 
 /// Jobs a project that adopts Keeler can actually run: they need nothing but
 /// the project's own sources and the tools the installer set up. The last
-/// two read only git history, a file the review stage writes, and the
-/// project's own `crap-baseline.json` and `Justfile`.
+/// two read only git history, and a file the review stage writes.
 const USER_FACING_JOBS: [&str; 6] = [
     "lints",
     "test",
@@ -55,47 +58,17 @@ fn files_under(dir: &Path) -> Vec<PathBuf> {
 
 /// The workflow `install.sh` copies to `.github/workflows/keeler.yml`, read
 /// out of the installer itself so this test follows the installer instead of
-/// drifting from it.
+/// drifting from it. The installer resolves the `KEELER_REF:` pin into a
+/// temporary copy before installing it, so what it names is the template
+/// that copy is made from.
 fn shipped_workflow_path() -> PathBuf {
     let installer = std::fs::read_to_string(repo_root().join("install.sh")).unwrap();
-    let install = installer
+    let template = installer
         .lines()
         .map(str::trim)
-        .find(|line| {
-            line.starts_with("install_file ") && line.ends_with(".github/workflows/keeler.yml")
-        })
-        .expect("install.sh no longer installs a workflow to keeler.yml");
-    let source = install
-        .split_whitespace()
-        .nth(1)
-        .expect("install_file was given no source path");
-    repo_root().join(source)
-}
-
-/// Names of the top-level entries under `jobs:` — enough YAML for a file we
-/// also own.
-fn job_names(workflow: &str) -> Vec<String> {
-    let mut names = Vec::new();
-    let mut in_jobs = false;
-    for line in workflow.lines() {
-        if !line.trim().is_empty() && !line.starts_with(char::is_whitespace) {
-            in_jobs = line.trim_end() == "jobs:";
-            continue;
-        }
-        if !in_jobs {
-            continue;
-        }
-        let Some(entry) = line.strip_prefix("  ") else {
-            continue;
-        };
-        if entry.starts_with(' ') || entry.starts_with('#') {
-            continue;
-        }
-        if let Some(name) = entry.trim_end().strip_suffix(':') {
-            names.push(name.to_string());
-        }
-    }
-    names
+        .find_map(|line| line.strip_prefix("WORKFLOW_TEMPLATE="))
+        .expect("install.sh no longer names the workflow template it ships");
+    repo_root().join(template)
 }
 
 /// A throwaway project for one test run, removed on drop. Its `bin/` holds
@@ -158,11 +131,17 @@ impl TempProject {
     /// Runs `install.sh <project> --no-tools` with the stub cargo first on
     /// PATH, succeeding or not.
     fn try_install(&self) -> std::process::Output {
+        self.try_install_args(&["--no-tools"])
+    }
+
+    /// `try_install` for the flags a scenario names itself — `--no-ci`, or
+    /// no `--no-tools` at all when the tool path is what is under test.
+    fn try_install_args(&self, args: &[&str]) -> std::process::Output {
         let path_var = std::env::var("PATH").unwrap();
         std::process::Command::new("bash")
             .arg(repo_root().join("install.sh"))
             .arg(&self.dir)
-            .arg("--no-tools")
+            .args(args)
             .env(
                 "PATH",
                 format!("{}:{path_var}", self.dir.join("bin").display()),
@@ -173,7 +152,12 @@ impl TempProject {
 
     /// Runs the installer and panics if it fails.
     fn install(&self) -> String {
-        let output = self.try_install();
+        self.install_args(&["--no-tools"])
+    }
+
+    /// `install` for the flags a scenario names itself.
+    fn install_args(&self, args: &[&str]) -> String {
+        let output = self.try_install_args(args);
         assert!(
             output.status.success(),
             "install.sh failed:\n{}{}",
@@ -181,6 +165,62 @@ impl TempProject {
             String::from_utf8_lossy(&output.stderr),
         );
         String::from_utf8_lossy(&output.stdout).into_owned()
+    }
+
+    /// Replaces the refusing `curl` stub with one that answers any URL with
+    /// a tarball of `source`, as codeload does — offline, and without the
+    /// harness ever leaving the machine. An explicit pin makes the installer
+    /// fetch rather than use the checkout it was started from, so a scenario
+    /// about what a *fetched* Keeler installs needs the fetch to arrive.
+    fn with_curl_serving(&self, source: &KeelerSource) {
+        let stub = self.dir.join("bin/curl");
+        std::fs::write(
+            &stub,
+            format!(
+                "#!/usr/bin/env bash\nexec tar -cz -C {} {}\n",
+                source.dir.parent().unwrap().display(),
+                source.dir.file_name().unwrap().to_string_lossy(),
+            ),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
+
+    /// Puts Keeler's `Justfile` where `run_just` can reach it. The installer
+    /// no longer copies it — the recipes are Keeler's and stay Keeler's —
+    /// but the recipe tests below are about the recipes, not about how they
+    /// arrive, so the harness stands in for the delivery mechanism.
+    fn with_keeler_recipes(&self) {
+        std::fs::copy(repo_root().join("Justfile"), self.dir.join("Justfile")).unwrap();
+    }
+
+    /// The graph parser `keeler-graph` shells out to, beside the recipes.
+    fn with_graph_parser(&self) {
+        std::fs::create_dir_all(self.dir.join("scripts")).unwrap();
+        std::fs::copy(
+            repo_root().join("scripts/keeler-graph.sh"),
+            self.dir.join("scripts/keeler-graph.sh"),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(
+                self.dir.join("scripts/keeler-graph.sh"),
+                std::fs::Permissions::from_mode(0o755),
+            )
+            .unwrap();
+        }
+    }
+
+    /// Every file in the project, without reading any of them — the shape a
+    /// scenario means when it says "the files created".
+    fn names(&self) -> std::collections::BTreeSet<String> {
+        self.tree_snapshot().into_keys().collect()
     }
 
     fn cargo_calls(&self) -> String {
@@ -260,6 +300,7 @@ fn coverage_and_crap_recipes_are_honest_about_a_project_with_no_rust_sources() {
     // Given a project with no src/ directory
     let project = TempProject::new("no-src-recipes", MANIFEST_WITH_PROPTEST);
     project.install();
+    project.with_keeler_recipes();
 
     for recipe in ["cov", "crap"] {
         // When the coverage recipe or the CRAP recipe runs
@@ -286,6 +327,7 @@ fn crap_baseline_and_delta_recipes_are_honest_without_rust_sources() {
     // Given a project with no src/ directory
     let project = TempProject::new("no-src-baseline", MANIFEST_WITH_PROPTEST);
     project.install();
+    project.with_keeler_recipes();
 
     // When the baseline or delta recipe runs, the same honesty applies
     for recipe in ["crap-baseline", "crap-delta"] {
@@ -309,6 +351,7 @@ fn mutation_testing_reports_what_it_did_not_measure() {
     // Given a git project whose only change touches no file under src/
     let project = TempProject::new("mutants-reach", MANIFEST_WITH_PROPTEST);
     project.install();
+    project.with_keeler_recipes();
     project.git(&["init", "-q"]);
     project.git(&["add", "-A"]);
     project.git(&["commit", "-qm", "init"]);
@@ -350,6 +393,7 @@ fn a_statically_detectable_shell_defect_fails_the_gate() {
     // split on whitespace
     let project = TempProject::new("shell-defect", MANIFEST_WITH_PROPTEST);
     project.install();
+    project.with_keeler_recipes();
     std::fs::create_dir_all(project.path().join("templates")).unwrap();
     std::fs::write(project.path().join("templates/keeler.yml"), "").unwrap();
     // The repo shape includes scripts/ — the gate globs it without nullglob.
@@ -392,6 +436,7 @@ fn release_scripts_are_gated_like_the_installer() {
     // scripts/ (and an install.sh that is itself clean)
     let project = TempProject::new("script-defect", MANIFEST_WITH_PROPTEST);
     project.install();
+    project.with_keeler_recipes();
     std::fs::create_dir_all(project.path().join("templates")).unwrap();
     std::fs::write(project.path().join("templates/keeler.yml"), "").unwrap();
     std::fs::copy(
@@ -528,8 +573,12 @@ fn equivalent_gitignore_patterns_are_not_duplicated() {
 fn repo_only_references(workflow: &str) -> Vec<String> {
     let mut findings = Vec::new();
     for (index, line) in workflow.lines().enumerate() {
+        // `@VERSION@` is the placeholder the installer resolves into the
+        // `KEELER_REF:` pin before the workflow reaches a project — a marker
+        // it replaces, not a reference to the VERSION file, which is ours.
+        let scanned = line.replace("@VERSION@", "");
         for path in REPO_ONLY_PATHS {
-            if line.contains(path) {
+            if scanned.contains(path) {
                 findings.push(format!(
                     "line {}: references `{path}` in `{}`",
                     index + 1,
@@ -596,32 +645,11 @@ fn a_shipped_file_that_talks_about_us_fails_the_gate() {
 }
 
 #[test]
-fn a_command_that_needs_a_script_ships_with_it() {
-    // Given the installer's file list
-    let installer =
-        std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("install.sh"))
-            .unwrap();
-
-    // Then a command that shells out to a script does not arrive without
-    // it: /keeler:graph runs `just keeler-graph`, which runs
-    // scripts/keeler-graph.sh, and an adopter who got the first two and
-    // not the third has a slash command that exits 127.
-    assert!(
-        installer.contains(".claude/commands/keeler/graph.md"),
-        "the graph command is not installed"
-    );
-    assert!(
-        installer.contains("scripts/keeler-graph.sh"),
-        "the graph command is installed but the script it runs is not"
-    );
-}
-
-#[test]
 fn no_shipped_file_carries_an_unresolved_merge() {
     // A conflict marker is invisible to every gate this project has: the
     // suite reads these files for content, not for shape, and markdown
     // renders `<<<<<<< HEAD` as a line of text. So one rode into main and
-    // out to adopters inside .claude/keeler.md — the rules file an agent
+    // out to adopters inside the rules file — the one an agent
     // is told to read first — and it was a spawned agent in a demo
     // project that noticed, not us.
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -692,6 +720,13 @@ fn what_adopters_receive_describes_their_project_not_ours() {
             leaks.push(format!("{rel}: {finding}"));
         }
     }
+    // And the recipes, which an adopter reads too — they reach them through
+    // the plugin rather than through the install, so scanning the installed
+    // tree alone would leave the file this gate was written for ungated.
+    let justfile = std::fs::read_to_string(repo_root().join("Justfile")).unwrap();
+    for finding in repo_only_prose(&justfile) {
+        leaks.push(format!("Justfile: {finding}"));
+    }
 
     // Then none of them describes the Keeler repository's own internals
     assert!(
@@ -741,7 +776,7 @@ fn an_adopting_project_still_receives_every_gate() {
         "crap-baseline",
         "crap-delta",
         "mutants FILE",
-        "mutants-diff",
+        "mutants-diff BASE=\"HEAD\"",
     ] {
         assert!(
             justfile.lines().any(|line| line == format!("{recipe}:")),
@@ -790,16 +825,19 @@ fn listed_description(list: &str, recipe: &str) -> Option<String> {
     })
 }
 
-/// Graph mode's file set, in the project the installer just wrote it to.
+/// Graph mode's file set. The command and the parser are Keeler's and stay
+/// Keeler's — the install no longer copies them — so they are checked where
+/// they live; the workflow and the ignore entry are the adopter's, and
+/// those the install still writes.
 fn assert_graph_mode_landed(project: &TempProject, justfile: &str) {
     for file in [
-        ".claude/commands/keeler/graph.md",
+        "commands/graph.md",
         // The command shells out to it; without it /keeler:graph exits 127.
         "scripts/keeler-graph.sh",
     ] {
         assert!(
-            project.path().join(file).is_file(),
-            "the install left the project without {file}",
+            repo_root().join(file).is_file(),
+            "Keeler no longer carries {file}",
         );
     }
     for (_, signature) in GRAPH_MODE_RECIPES {
@@ -847,31 +885,38 @@ fn assert_graph_mode_is_documented(project: &TempProject) {
             "`just --list` describes {recipe} with a fragment of the prose above it: {description:?}",
         );
     }
-    // /keeler:graph tells the agent to "see .claude/keeler.md" for graph
-    // mode; rules that never mention it send the reader to a section that
-    // is not there.
-    let rules = std::fs::read_to_string(project.path().join(".claude/keeler.md")).unwrap();
+    // /keeler:graph tells the agent to read the graph-mode chapter, which
+    // left the rules for a file of its own; a chapter that never mentions a
+    // recipe sends the reader to a section that is not there.
+    let chapter = std::fs::read_to_string(repo_root().join("graph-mode.md")).unwrap();
     for (recipe, _) in GRAPH_MODE_RECIPES {
         assert!(
-            rules.contains(&format!("just {recipe}")),
-            "the installed rules never mention `just {recipe}` — an agent reading them stays on the linear road",
+            chapter.contains(&format!("just {recipe}")),
+            "graph-mode.md never mentions `just {recipe}` — an agent reading it stays on the linear road",
         );
     }
     assert!(
-        rules.contains("/keeler:graph"),
-        "the installed rules never mention the /keeler:graph command",
+        chapter.contains("/keeler:graph"),
+        "graph-mode.md never mentions the /keeler:graph command",
     );
-    // And the guide the installer points humans at when it finishes.
-    let guide = std::fs::read_to_string(project.path().join("KEELER.md")).unwrap();
+    // And the rules must still send the reader there at all.
+    let rules = std::fs::read_to_string(repo_root().join("keeler.md")).unwrap();
+    assert!(
+        rules.contains("graph-mode.md"),
+        "the rules never name graph-mode.md — the chapter left with no pointer behind it",
+    );
+    // And the guide the reasoning lives in.
+    let guide = std::fs::read_to_string(repo_root().join("docs/KEELER.md")).unwrap();
     assert!(
         guide.to_lowercase().contains("graph mode") && guide.contains("just keeler-spawn"),
-        "KEELER.md describes the workflow without the parallel road the install just added",
+        "docs/KEELER.md describes the workflow without the parallel road",
     );
 }
 
 /// A spec with no dependency annotation anywhere: every task is a root, so
 /// every task is ready.
 fn assert_an_old_spec_reads_as_a_graph(project: &TempProject) {
+    std::fs::create_dir_all(project.path().join("specs")).unwrap();
     std::fs::write(project.path().join("specs/07-legacy.md"), OLD_FORMAT_SPEC).unwrap();
     // The recipe answers from the spec as committed; with no feature
     // branch here, that is the fallback to HEAD.
@@ -902,13 +947,12 @@ fn assert_an_old_spec_reads_as_a_graph(project: &TempProject) {
 
 /// Behaviour, not bytes: the gate an adopter runs is the recipe it was, and
 /// /keeler:feature routes through the same six stages in the same order.
-fn assert_the_linear_road_is_unchanged(project: &TempProject, justfile: &str) {
+fn assert_the_linear_road_is_unchanged(justfile: &str) {
     assert!(
         justfile.contains("\ndev: fmt lint test crap\n"),
-        "the installed `dev` recipe is no longer `dev: fmt lint test crap`",
+        "the `dev` recipe is no longer `dev: fmt lint test crap`",
     );
-    let feature =
-        std::fs::read_to_string(project.path().join(".claude/commands/keeler/feature.md")).unwrap();
+    let feature = std::fs::read_to_string(repo_root().join("commands/feature.md")).unwrap();
     let mut at = 0;
     for stage in [
         "/keeler:spec",
@@ -964,7 +1008,9 @@ fn adopters_opt_in_not_out() {
 
     // When Keeler is installed into it
     project.install();
-    let justfile = std::fs::read_to_string(project.path().join("Justfile")).unwrap();
+    project.with_keeler_recipes();
+    project.with_graph_parser();
+    let justfile = std::fs::read_to_string(repo_root().join("Justfile")).unwrap();
 
     // Then the graph command, the spawn, status, branch and land recipes,
     // and the review-evidence check land alongside the existing pipeline
@@ -976,34 +1022,30 @@ fn adopters_opt_in_not_out() {
     assert_an_old_spec_reads_as_a_graph(&project);
 
     // And `just dev` is the recipe it was, and /keeler:feature routes as it did
-    assert_the_linear_road_is_unchanged(&project, &justfile);
+    assert_the_linear_road_is_unchanged(&justfile);
 }
 
-/// Files from the install set a generated project may already contain, with
-/// content of its own.
+/// Files a generated project may already contain that the installer has an
+/// opinion about — the install set, the two files it edits, and two of the
+/// names an earlier Keeler left behind, which it must now leave alone.
 const PREEXISTING_CANDIDATES: &[&str] = &[
     "CLAUDE.md",
-    ".claude/keeler.md",
-    "KEELER.md",
-    "Justfile",
-    "specs/TEMPLATE.md",
     ".gitignore",
+    "clippy.toml",
     "rustfmt.toml",
+    ".github/workflows/keeler.yml",
+    "Justfile",
+    "KEELER.md",
 ];
 
 /// Install-set files as `(destination in the project, source in this repo)`
-/// — the pairs the conflict convention applies to.
+/// — the pairs the conflict convention applies to. Three, now that the
+/// workflow files are the plugin's: two tool configs that configure the
+/// project's own toolchain, and the CI workflow, which GitHub reads from
+/// the repository and nowhere else.
 const INSTALL_SET: &[(&str, &str)] = &[
-    ("KEELER.md", "KEELER.md"),
-    ("Justfile", "Justfile"),
-    ("specs/TEMPLATE.md", "specs/TEMPLATE.md"),
     ("clippy.toml", "clippy.toml"),
     ("rustfmt.toml", "rustfmt.toml"),
-    (".cargo-mutants.toml", ".cargo-mutants.toml"),
-    (
-        ".claude/commands/keeler/spec.md",
-        ".claude/commands/keeler/spec.md",
-    ),
     (".github/workflows/keeler.yml", "templates/keeler.yml"),
 ];
 
@@ -1032,24 +1074,15 @@ proptest::proptest! {
     #[test]
     fn a_projects_own_content_is_never_overwritten(
         preexisting in proptest::sample::subsequence(
-            PREEXISTING_CANDIDATES.to_vec(),
-            1..=PREEXISTING_CANDIDATES.len(),
+            INSTALL_SET.iter().map(|(dest, _)| *dest).collect::<Vec<_>>(),
+            1..=INSTALL_SET.len(),
         ),
-        contents in proptest::collection::vec("[ -~]{0,40}", PREEXISTING_CANDIDATES.len()),
+        contents in proptest::collection::vec("[ -~]{0,40}", INSTALL_SET.len()),
     ) {
         // Given a project containing files Keeler installs, with content of
-        // its own (the rules file is the documented exception — T8)
+        // its own
         let project = TempProject::new("never-overwrite", MANIFEST_WITH_PROPTEST);
-        let own: Vec<(&str, &String)> = preexisting
-            .iter()
-            .copied()
-            .zip(&contents)
-            .filter(|(file, _)| {
-                // These are modified by design: the rules file is replaced,
-                // CLAUDE.md gains an import, .gitignore gains entries.
-                !matches!(*file, ".claude/keeler.md" | "CLAUDE.md" | ".gitignore")
-            })
-            .collect();
+        let own: Vec<(&str, &String)> = preexisting.iter().copied().zip(&contents).collect();
         for (file, content) in &own {
             let path = project.path().join(file);
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -1241,6 +1274,7 @@ fn a_workspace_with_rust_targets_is_still_measured() {
     )
     .unwrap();
     project.install();
+    project.with_keeler_recipes();
 
     // When the coverage recipe runs
     let output = project.run_just("cov");
@@ -1282,6 +1316,7 @@ fn an_adopters_install_sh_is_not_keelers_to_gate() {
     // Given an adopting project with a script of its own named install.sh
     let project = TempProject::new("adopter-script", MANIFEST_WITH_PROPTEST);
     project.install();
+    project.with_keeler_recipes();
     std::fs::write(
         project.path().join("install.sh"),
         "#!/usr/bin/env bash\nls $1\n",
@@ -1315,6 +1350,7 @@ fn committed_src_changes_on_a_branch_stay_measured() {
     // commit did not
     let project = TempProject::new("branch-mutants", MANIFEST_WITH_PROPTEST);
     project.install();
+    project.with_keeler_recipes();
     std::fs::create_dir_all(project.path().join("src")).unwrap();
     std::fs::write(
         project.path().join("src/lib.rs"),
@@ -1353,6 +1389,7 @@ fn mutants_diff_survives_untracked_paths_with_spaces() {
     // Given an untracked src file whose name contains a space
     let project = TempProject::new("spaced-untracked", MANIFEST_WITH_PROPTEST);
     project.install();
+    project.with_keeler_recipes();
     std::fs::create_dir_all(project.path().join("src")).unwrap();
     std::fs::write(
         project.path().join("src/lib.rs"),
@@ -1449,37 +1486,6 @@ fn the_installer_refuses_a_directory_that_is_not_a_rust_project() {
     );
 }
 
-#[test]
-fn the_rules_file_is_replaced_and_the_replaced_text_is_kept() {
-    // Given a project whose .claude/keeler.md differs from the shipped rules
-    let project = TempProject::new("rules-file", MANIFEST_WITH_PROPTEST);
-    let rules = project.path().join(".claude/keeler.md");
-    std::fs::create_dir_all(rules.parent().unwrap()).unwrap();
-    std::fs::write(&rules, "my own edits\n").unwrap();
-
-    // When the installer runs
-    project.install();
-
-    // Then .claude/keeler.md matches the shipped rules
-    let shipped = std::fs::read(repo_root().join(".claude/keeler.md")).unwrap();
-    assert_eq!(
-        std::fs::read(&rules).unwrap(),
-        shipped,
-        "the rules file was not replaced with the shipped rules",
-    );
-    // And the text it replaced is available as .claude/keeler.md.bak
-    assert_eq!(
-        std::fs::read_to_string(project.path().join(".claude/keeler.md.bak")).unwrap(),
-        "my own edits\n",
-        "the replaced text was not kept as .bak",
-    );
-    // And no .claude/keeler.md.keeler is left behind
-    assert!(
-        !project.path().join(".claude/keeler.md.keeler").exists(),
-        "the rules file wrongly got the conflict-file treatment",
-    );
-}
-
 /// Pins the counterexample the idempotence property found: a .gitignore
 /// whose final line has no newline glued the first appended entry onto it,
 /// so the already-present check never matched and every run appended again.
@@ -1505,35 +1511,6 @@ fn a_gitignore_missing_its_final_newline_still_converges() {
     assert!(
         gitignore.lines().any(|line| line == "/target"),
         "the entry was not appended cleanly:\n{gitignore}",
-    );
-}
-
-/// Guards the installer's hard-coded file list behaviorally: every file of
-/// every kind under the command and skill trees must actually land in an
-/// installed project — a path merely mentioned in a comment of install.sh
-/// does not count, and a skill's non-Markdown companion assets count too.
-#[test]
-fn every_workflow_file_in_the_repository_is_installed() {
-    let project = TempProject::new("ship-everything", MANIFEST_WITH_PROPTEST);
-    project.install();
-    let installed = project.tree_snapshot();
-
-    let mut missing = Vec::new();
-    for dir in [".claude/commands/keeler", ".claude/skills"] {
-        for path in files_under(&repo_root().join(dir)) {
-            let rel = path
-                .strip_prefix(repo_root())
-                .unwrap()
-                .to_string_lossy()
-                .into_owned();
-            if !installed.contains_key(&rel) {
-                missing.push(rel);
-            }
-        }
-    }
-    assert!(
-        missing.is_empty(),
-        "these files exist in the repository but never land in an installed project: {missing:?}",
     );
 }
 
@@ -1697,9 +1674,9 @@ fn a_symlink_is_the_projects_own_content_not_a_place_to_write() {
     let project = TempProject::new("symlink", MANIFEST_WITH_PROPTEST);
     let outside = project.path().join("outside");
     std::fs::create_dir_all(&outside).unwrap();
-    let target = outside.join("theirs.md");
+    let target = outside.join("theirs.toml");
     #[cfg(unix)]
-    std::os::unix::fs::symlink(&target, project.path().join("KEELER.md")).unwrap();
+    std::os::unix::fs::symlink(&target, project.path().join("clippy.toml")).unwrap();
 
     // When Keeler is installed
     let report = project.install();
@@ -1712,7 +1689,7 @@ fn a_symlink_is_the_projects_own_content_not_a_place_to_write() {
         "the installer wrote outside the project, through a symlink",
     );
     assert!(
-        project.path().join("KEELER.md.keeler").is_file(),
+        project.path().join("clippy.toml.keeler").is_file(),
         "the symlink was not treated as the project's own content:\n{report}",
     );
 }
@@ -1771,11 +1748,15 @@ fn a_failed_dependency_add_is_not_reported_as_success() {
 
 #[test]
 fn a_projects_own_conflict_file_is_not_overwritten() {
-    // Given a project that already has both its own KEELER.md and its own
-    // KEELER.md.keeler — the ordinary state after one upgrade
+    // Given a project that already has both its own clippy.toml and its own
+    // clippy.toml.keeler — the ordinary state after one upgrade
     let project = TempProject::new("keeler-collision", MANIFEST_WITH_PROPTEST);
-    std::fs::write(project.path().join("KEELER.md"), "theirs\n").unwrap();
-    std::fs::write(project.path().join("KEELER.md.keeler"), "from last time\n").unwrap();
+    std::fs::write(project.path().join("clippy.toml"), "theirs\n").unwrap();
+    std::fs::write(
+        project.path().join("clippy.toml.keeler"),
+        "from last time\n",
+    )
+    .unwrap();
 
     // When Keeler is installed
     project.install();
@@ -1783,32 +1764,8 @@ fn a_projects_own_conflict_file_is_not_overwritten() {
     // Then last time's copy survives. Overwriting it loses whatever the
     // project had not merged yet, silently and with no conflict reported.
     assert_eq!(
-        std::fs::read_to_string(project.path().join("KEELER.md.keeler")).unwrap(),
+        std::fs::read_to_string(project.path().join("clippy.toml.keeler")).unwrap(),
         "from last time\n",
-    );
-}
-
-#[test]
-fn an_upgrade_does_not_destroy_the_previous_upgrades_backup() {
-    // Given a project upgraded once already, whose rules were edited again
-    let project = TempProject::new("bak-collision", MANIFEST_WITH_PROPTEST);
-    std::fs::create_dir_all(project.path().join(".claude")).unwrap();
-    std::fs::write(project.path().join(".claude/keeler.md"), "second edit\n").unwrap();
-    std::fs::write(
-        project.path().join(".claude/keeler.md.bak"),
-        "the original\n",
-    )
-    .unwrap();
-
-    // When Keeler is installed
-    project.install();
-
-    // Then the first backup is still there. The whole point of keeping the
-    // replaced text is that it is not lost; a second upgrade overwriting
-    // the first one's .bak loses the original for good.
-    assert_eq!(
-        std::fs::read_to_string(project.path().join(".claude/keeler.md.bak")).unwrap(),
-        "the original\n",
     );
 }
 
@@ -1906,7 +1863,7 @@ fn a_mistyped_flag_is_refused_rather_than_taken_for_a_path() {
     );
     assert!(said.contains("--no-tool"), "{said}");
     assert!(
-        !project.path().join("KEELER.md").exists(),
+        !project.path().join("clippy.toml").exists(),
         "it installed anyway"
     );
 }
@@ -1951,41 +1908,724 @@ fn a_pinned_version_is_fetched_even_from_inside_a_clone() {
     );
 }
 
-/// The names `just` searches for. It compares each directory entry
-/// against them with `eq_ignore_ascii_case` and refuses to run when more
-/// than one matches.
-const JUSTFILE_CANDIDATES: [&str; 2] = ["justfile", ".justfile"];
+// --- Spec 09 — the installer stops copying Keeler's files ------------------
+//
+// What lands in an adopter's repository is what GitHub and the project's own
+// toolchain read from there and nowhere else: the CI workflow and the two
+// tool configs. The commands, the skills, the rules, the Justfile and the
+// graph parser stay Keeler's, reached through the plugin.
 
-/// The entries of `dir` that `just` would take as candidates, spelled as
-/// the filesystem spells them. By listing, not `Path::exists`, which on a
-/// case-insensitive filesystem answers yes for a spelling that is absent.
-fn justfile_names(dir: &Path) -> Vec<String> {
-    let mut names: Vec<String> = std::fs::read_dir(dir)
-        .unwrap()
-        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
-        .filter(|name| {
-            JUSTFILE_CANDIDATES
-                .iter()
-                .any(|candidate| name.eq_ignore_ascii_case(candidate))
-        })
+/// The three files a fresh install writes, and the two it edits.
+const CREATED_IN_A_FRESH_CRATE: [&str; 3] = [
+    ".github/workflows/keeler.yml",
+    "clippy.toml",
+    "rustfmt.toml",
+];
+
+/// Names that were part of the install set before spec 09 and must not
+/// reappear. `.claude/` and `specs/` are directories, so they are probed as
+/// prefixes; the rest are files.
+const NO_LONGER_INSTALLED: [&str; 6] = [
+    ".claude/",
+    "specs/",
+    "scripts/",
+    "Justfile",
+    "KEELER.md",
+    ".cargo-mutants.toml",
+];
+
+/// The files a run created and the files it changed, as a scenario words it.
+fn created_and_modified(
+    before: &std::collections::BTreeMap<String, Vec<u8>>,
+    after: &std::collections::BTreeMap<String, Vec<u8>>,
+) -> (Vec<String>, Vec<String>) {
+    let created = after
+        .keys()
+        .filter(|name| !before.contains_key(*name))
+        .cloned()
         .collect();
-    names.sort();
-    names
+    let modified = after
+        .iter()
+        .filter(|(name, bytes)| before.get(*name).is_some_and(|was| was != *bytes))
+        .map(|(name, _)| name.clone())
+        .collect();
+    (created, modified)
 }
 
-/// Whether `dir` holds an entry spelled exactly `name` — again by listing,
-/// for the reason above.
-fn holds_exactly(dir: &Path, name: &str) -> bool {
-    std::fs::read_dir(dir)
-        .unwrap()
-        .any(|entry| entry.unwrap().file_name() == name)
+/// Nothing of the retired install set is anywhere in the project.
+fn assert_nothing_of_keelers_landed(project: &TempProject) {
+    let present: Vec<String> = project
+        .names()
+        .into_iter()
+        .filter(|name| {
+            NO_LONGER_INSTALLED
+                .iter()
+                .any(|retired| name == retired || name.starts_with(retired))
+        })
+        .collect();
+    assert!(
+        present.is_empty(),
+        "the install put Keeler's own files in the project: {present:?}",
+    );
+}
+
+#[test]
+fn init_leaves_the_workflow_and_two_tool_configs_in_a_fresh_crate() {
+    // Given a fresh crate with a .gitignore
+    let project = TempProject::new("fresh-crate", MANIFEST_WITH_PROPTEST);
+    std::fs::write(project.path().join(".gitignore"), "/target\n").unwrap();
+    let before = project.tree_snapshot();
+
+    // When the installer runs
+    project.install();
+
+    // Then the files created are the workflow and the two tool configs ...
+    let (created, modified) = created_and_modified(&before, &project.tree_snapshot());
+    assert_eq!(
+        created, CREATED_IN_A_FRESH_CRATE,
+        "a fresh install created something other than the workflow and the tool configs",
+    );
+    // ... and the only files modified are Cargo.toml and .gitignore
+    assert_eq!(
+        modified,
+        [".gitignore", "Cargo.toml"],
+        "the install edited a file that is not its to edit",
+    );
+    // And none of the files Keeler used to copy is there
+    assert_nothing_of_keelers_landed(&project);
+}
+
+#[test]
+fn a_crate_without_a_gitignore_gets_one() {
+    // Given a fresh crate with no .gitignore
+    let project = TempProject::new("no-gitignore", MANIFEST_WITH_PROPTEST);
+    let before = project.tree_snapshot();
+
+    // When the installer runs
+    project.install();
+
+    // Then the .gitignore is created alongside the workflow and the configs
+    let (created, _) = created_and_modified(&before, &project.tree_snapshot());
+    assert_eq!(
+        created,
+        [
+            ".github/workflows/keeler.yml",
+            ".gitignore",
+            "clippy.toml",
+            "rustfmt.toml",
+        ],
+    );
+}
+
+#[test]
+fn init_without_ci_leaves_no_workflow() {
+    // Given a fresh crate with a .gitignore
+    let project = TempProject::new("no-ci", MANIFEST_WITH_PROPTEST);
+    std::fs::write(project.path().join(".gitignore"), "/target\n").unwrap();
+    let before = project.tree_snapshot();
+
+    // When the installer runs with --no-ci
+    project.install_args(&["--no-tools", "--no-ci"]);
+
+    // Then only the two tool configs are created ...
+    let (created, modified) = created_and_modified(&before, &project.tree_snapshot());
+    assert_eq!(created, ["clippy.toml", "rustfmt.toml"]);
+    // ... no .github/ exists at all ...
+    assert!(
+        !project.path().join(".github").exists(),
+        "--no-ci still left a .github directory behind",
+    );
+    // ... and the only files modified are Cargo.toml and .gitignore
+    assert_eq!(modified, [".gitignore", "Cargo.toml"]);
+}
+
+#[test]
+fn the_tool_configs_still_land() {
+    // Given a fresh crate
+    let project = TempProject::new("tool-configs", MANIFEST_WITH_PROPTEST);
+
+    // When the installer runs
+    project.install();
+
+    // Then both configs are there, byte-identical to the ones Keeler ships
+    for config in ["clippy.toml", "rustfmt.toml"] {
+        assert_eq!(
+            std::fs::read(project.path().join(config)).unwrap(),
+            std::fs::read(repo_root().join(config)).unwrap(),
+            "{config} did not land with Keeler's content",
+        );
+    }
+}
+
+#[test]
+fn tools_are_skipped_on_request() {
+    // Given a fresh crate and a PATH where no cargo tool answers
+    let project = TempProject::new("skip-tools", MANIFEST_WITH_PROPTEST);
+    cargo_fails_at(&project, "nextest");
+
+    // When the installer runs with --no-tools
+    let output = project.try_install_args(&["--no-tools"]);
+
+    // Then it exits zero ...
+    assert!(
+        output.status.success(),
+        "--no-tools failed on a machine without the tools:\n{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    // ... and nothing was installed to make that true
+    let calls = project.cargo_calls();
+    for reach in ["binstall", "install "] {
+        assert!(
+            !calls.lines().any(|call| call.starts_with(reach)),
+            "--no-tools still reached for the toolchain: {calls}",
+        );
+    }
+}
+
+#[test]
+fn the_run_directory_is_ignored() {
+    // Given a fresh crate with an empty .gitignore
+    let project = TempProject::new("ignore-entries", MANIFEST_WITH_PROPTEST);
+    std::fs::write(project.path().join(".gitignore"), "").unwrap();
+
+    // When the installer runs
+    project.install();
+
+    // Then every entry the workflow's artifacts need is there
+    let gitignore = std::fs::read_to_string(project.path().join(".gitignore")).unwrap();
+    for entry in [
+        "/target",
+        "lcov.info",
+        "crap-report.json",
+        "mutants.out*/",
+        ".keeler/",
+    ] {
+        assert!(
+            gitignore.lines().any(|line| line == entry),
+            "the install did not ignore {entry}:\n{gitignore}",
+        );
+    }
+}
+
+#[test]
+fn the_adopters_claude_md_is_not_touched() {
+    // Given a crate whose CLAUDE.md is its own
+    let project = TempProject::new("claude-md-untouched", MANIFEST_WITH_PROPTEST);
+    std::fs::write(project.path().join("CLAUDE.md"), "# Mine\n").unwrap();
+
+    // When the installer runs
+    project.install();
+
+    // Then not a byte of it moved. The rules reach the agent through the
+    // plugin's SessionStart hook, so there is nothing to import and no
+    // reason to write into a file that is not Keeler's.
+    assert_eq!(
+        std::fs::read_to_string(project.path().join("CLAUDE.md")).unwrap(),
+        "# Mine\n",
+    );
+}
+
+#[test]
+fn a_crate_without_a_claude_md_does_not_get_one() {
+    // Given a crate with no CLAUDE.md
+    let project = TempProject::new("no-claude-md", MANIFEST_WITH_PROPTEST);
+
+    // When the installer runs
+    project.install();
+
+    // Then none appears
+    assert!(
+        !project.path().join("CLAUDE.md").exists(),
+        "the installer created a CLAUDE.md nobody asked for",
+    );
+}
+
+// --- Spec 09 — the workflow pins the version that installed it -------------
+//
+// CI cannot see the plugin cache, so the workflow fetches Keeler itself at a
+// tag. That tag is the version that installed the workflow: the gates in the
+// fetched Justfile are the ones this workflow was written against. It is one
+// `env:` line, so an adopter moves to another Keeler by editing it — and a
+// workflow that differs from ours only there has been repinned on purpose,
+// which is not a conflict to merge by hand.
+
+/// A Keeler source directory the installer accepts as its own: the
+/// installer, the workflow template, the two tool configs and a `VERSION` the
+/// scenario chooses. The version has to be the fixture's rather than this
+/// repository's, or every assertion about the pin would have to be rewritten
+/// the day VERSION is bumped.
+struct KeelerSource {
+    dir: PathBuf,
+}
+
+impl KeelerSource {
+    fn new(name: &str, version: &str) -> Self {
+        let dir = std::env::temp_dir().join(format!("keeler-src-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("templates")).unwrap();
+        for file in [
+            "install.sh",
+            "clippy.toml",
+            "rustfmt.toml",
+            "templates/keeler.yml",
+        ] {
+            std::fs::copy(repo_root().join(file), dir.join(file)).unwrap();
+        }
+        std::fs::write(dir.join("VERSION"), format!("{version}\n")).unwrap();
+        Self { dir }
+    }
+
+    /// The workflow template this source ships, unresolved.
+    fn template(&self) -> String {
+        std::fs::read_to_string(self.dir.join("templates/keeler.yml")).unwrap()
+    }
+
+    /// Runs this Keeler's installer against `project`, with the stubs first
+    /// on PATH and the environment the scenario names, and returns its
+    /// output.
+    fn install_into(&self, project: &TempProject, env: &[(&str, &str)]) -> String {
+        let path_var = std::env::var("PATH").unwrap();
+        let mut command = std::process::Command::new("bash");
+        command
+            .arg(self.dir.join("install.sh"))
+            .arg(project.path())
+            .arg("--no-tools")
+            .env(
+                "PATH",
+                format!("{}:{path_var}", project.path().join("bin").display()),
+            );
+        for (name, value) in env {
+            command.env(name, value);
+        }
+        let output = command.output().expect("failed to run install.sh");
+        assert!(
+            output.status.success(),
+            "install.sh failed:\n{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    }
+}
+
+impl Drop for KeelerSource {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+/// The `env:` line a workflow pins its Keeler with.
+fn pin_line(version: &str) -> String {
+    format!("  KEELER_REF: v{version}")
+}
+
+/// `template` as a Keeler of `version` installs it: the pin resolved, every
+/// other line untouched.
+fn pinned(template: &str, version: &str) -> String {
+    let mut resolved = String::new();
+    for line in template.lines() {
+        if line.trim_start().starts_with("KEELER_REF:") {
+            resolved.push_str(&pin_line(version));
+        } else {
+            resolved.push_str(line);
+        }
+        resolved.push('\n');
+    }
+    resolved
+}
+
+/// The workflow a project holds, as text.
+fn installed_workflow(project: &TempProject) -> String {
+    std::fs::read_to_string(project.path().join(".github/workflows/keeler.yml")).unwrap()
+}
+
+#[test]
+fn the_installed_workflow_pins_the_version_that_installed_it() {
+    // Given a Keeler whose VERSION reads 0.5.0, and a fresh crate
+    let source = KeelerSource::new("pin-fresh", "0.5.0");
+    let project = TempProject::new("pin-fresh", MANIFEST_WITH_PROPTEST);
+
+    // When it installs
+    source.install_into(&project, &[]);
+
+    // Then the workflow pins the Keeler that wrote it ...
+    let workflow = installed_workflow(&project);
+    assert!(
+        workflow.lines().any(|line| line == pin_line("0.5.0")),
+        "the installed workflow does not pin v0.5.0:\n{workflow}",
+    );
+    // ... with nothing left for the adopter to substitute
+    assert!(
+        !workflow.contains("@VERSION@"),
+        "the installed workflow still carries the template's placeholder:\n{workflow}",
+    );
+}
+
+#[test]
+fn a_repinned_workflow_is_left_alone() {
+    // Given a project holding the shipped workflow, repinned to v0.4.1
+    let source = KeelerSource::new("repinned", "0.5.0");
+    let project = TempProject::new("repinned", MANIFEST_WITH_PROPTEST);
+    let repinned = pinned(&source.template(), "0.4.1");
+    std::fs::create_dir_all(project.path().join(".github/workflows")).unwrap();
+    std::fs::write(
+        project.path().join(".github/workflows/keeler.yml"),
+        &repinned,
+    )
+    .unwrap();
+
+    // When a Keeler of 0.5.0 installs
+    let report = source.install_into(&project, &[]);
+
+    // Then the pin the project chose is still the pin ...
+    assert_eq!(
+        installed_workflow(&project),
+        repinned,
+        "the install rewrote a workflow the project had repinned",
+    );
+    // ... and no copy landed beside it to merge: a repin is a decision, not
+    // a conflict
+    assert!(
+        !project
+            .path()
+            .join(".github/workflows/keeler.yml.keeler")
+            .exists(),
+        "a deliberate repin was answered with a .keeler copy:\n{report}",
+    );
+    assert!(
+        !report.contains("keeler.yml differs"),
+        "the install reported a repin as a conflict:\n{report}",
+    );
+}
+
+#[test]
+fn a_workflow_that_differs_beyond_its_pin_gets_the_new_one_alongside() {
+    // Given that same repinned workflow, with a job of the project's own
+    let source = KeelerSource::new("repinned-and-edited", "0.5.0");
+    let project = TempProject::new("repinned-and-edited", MANIFEST_WITH_PROPTEST);
+    let theirs = format!(
+        "{}\n  mine:\n    name: Mine\n    runs-on: ubuntu-latest\n    steps:\n      - run: true\n",
+        pinned(&source.template(), "0.4.1"),
+    );
+    std::fs::create_dir_all(project.path().join(".github/workflows")).unwrap();
+    std::fs::write(project.path().join(".github/workflows/keeler.yml"), &theirs).unwrap();
+
+    // When a Keeler of 0.5.0 installs
+    let report = source.install_into(&project, &[]);
+
+    // Then their workflow is untouched ...
+    assert_eq!(
+        installed_workflow(&project),
+        theirs,
+        "the install overwrote a workflow the project had edited",
+    );
+    // ... and ours lands beside it, pinning the version that wrote it
+    let alongside =
+        std::fs::read_to_string(project.path().join(".github/workflows/keeler.yml.keeler"))
+            .unwrap_or_else(|err| panic!("no copy landed to merge: {err}\n{report}"));
+    assert!(
+        alongside.lines().any(|line| line == pin_line("0.5.0")),
+        "the copy left to merge does not pin v0.5.0:\n{alongside}",
+    );
+}
+
+#[test]
+fn the_copy_left_to_merge_pins_the_version_that_wrote_it() {
+    // Given a project whose edited workflow already has a copy beside it,
+    // left unmerged by an install of 0.4.1
+    let project = TempProject::new("stale-copy", MANIFEST_WITH_PROPTEST);
+    let older = KeelerSource::new("stale-copy-older", "0.4.1");
+    let theirs = format!(
+        "{}\n  mine:\n    name: Mine\n    runs-on: ubuntu-latest\n    steps:\n      - run: true\n",
+        pinned(&older.template(), "0.4.1"),
+    );
+    std::fs::create_dir_all(project.path().join(".github/workflows")).unwrap();
+    std::fs::write(project.path().join(".github/workflows/keeler.yml"), &theirs).unwrap();
+    older.install_into(&project, &[]);
+
+    // When a Keeler of 0.5.0 installs over it
+    let newer = KeelerSource::new("stale-copy-newer", "0.5.0");
+    let report = newer.install_into(&project, &[]);
+
+    // Then a copy pinning 0.5.0 is there to merge. The pin is the whole of
+    // what an upgrade changes when nothing else in the workflow moved, so a
+    // run that points at the older copy tells the project to merge the
+    // version it is upgrading away from.
+    let copies: Vec<String> = files_under(&project.path().join(".github/workflows"))
+        .iter()
+        .filter(|path| path.to_string_lossy().contains("keeler.yml.keeler"))
+        .map(|path| std::fs::read_to_string(path).unwrap())
+        .collect();
+    assert!(
+        copies
+            .iter()
+            .any(|copy| copy.lines().any(|line| line == pin_line("0.5.0"))),
+        "no copy left to merge pins the version that just installed:\n{report}\n{copies:?}",
+    );
+    // And the earlier one is still there: an unmerged copy holds text nobody
+    // has read yet, and overwriting it loses exactly what it was saved for.
+    assert!(
+        copies
+            .iter()
+            .any(|copy| copy.lines().any(|line| line == pin_line("0.4.1"))),
+        "the upgrade overwrote a copy the project had not merged yet:\n{copies:?}",
+    );
+}
+
+#[test]
+fn the_installed_workflow_is_as_readable_as_the_files_beside_it() {
+    // Given a fresh crate where Keeler has installed
+    let source = KeelerSource::new("workflow-mode", "0.5.0");
+    let project = TempProject::new("workflow-mode", MANIFEST_WITH_PROPTEST);
+    source.install_into(&project, &[]);
+
+    // Then the workflow's permissions are the other installed files' — it
+    // goes through a temporary copy to have its pin resolved, and mktemp's
+    // private mode is the installer's business, not something to hand to
+    // the project along with the file.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |file: &str| {
+            std::fs::metadata(project.path().join(file))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777
+        };
+        assert_eq!(
+            mode(".github/workflows/keeler.yml"),
+            mode("clippy.toml"),
+            "the workflow landed with permissions of its own",
+        );
+    }
+}
+
+#[test]
+fn the_pin_comes_from_the_installing_keeler_not_the_fetch_variable() {
+    // Given a Keeler whose VERSION reads 0.5.0, reached the way a pinned run
+    // reaches one — KEELER_REF forces the fetch, so the scenario's answer
+    // has to come over the wire that curl stands in for
+    let source = KeelerSource::new("pin-not-the-fetch-var", "0.5.0");
+    let project = TempProject::new("pin-not-the-fetch-var", MANIFEST_WITH_PROPTEST);
+    project.with_curl_serving(&source);
+
+    // When it installs with KEELER_REF naming a different version
+    source.install_into(&project, &[("KEELER_REF", "v0.4.1")]);
+
+    // Then the pin is the version that did the installing. KEELER_REF says
+    // which Keeler to fetch; what the workflow pins is which Keeler CI runs,
+    // and that is the one whose gates this project just received.
+    let workflow = installed_workflow(&project);
+    assert!(
+        workflow.lines().any(|line| line == pin_line("0.5.0")),
+        "the workflow pinned the fetch variable instead of the installing version:\n{workflow}",
+    );
+}
+
+// --- Spec 09 — what an earlier install left behind -------------------------
+//
+// A project installed before spec 09 holds Keeler's commands, skills, rules,
+// recipes and graph parser. They are dead weight now — the plugin carries
+// them — but removing them is not the installer's call: an edited copy is
+// indistinguishable from an untouched one, and a deleted edit is the one
+// loss this script has always promised not to cause. So they are named, with
+// the command that removes them, and left exactly as they are.
+
+/// The eight traces an earlier install leaves, as `(what a past install
+/// wrote, the path the report names it by)`. The two directories are named
+/// whole: every file under them was Keeler's, and `git rm -r --` is how they
+/// go. `CLAUDE.md` is the odd one — the file is the project's, only the
+/// import line is ours, so what the report names is the line.
+const STALE_MARKERS: [(&str, &str); 8] = [
+    (".claude/commands/keeler/spec.md", ".claude/commands/keeler"),
+    (
+        ".claude/skills/gherkin-specs/SKILL.md",
+        ".claude/skills/gherkin-specs",
+    ),
+    (".claude/keeler.md", ".claude/keeler.md"),
+    ("scripts/keeler-graph.sh", "scripts/keeler-graph.sh"),
+    ("KEELER.md", "KEELER.md"),
+    (".cargo-mutants.toml", ".cargo-mutants.toml"),
+    ("Justfile", "Justfile"),
+    ("CLAUDE.md", "@.claude/keeler.md"),
+];
+
+/// Files an earlier install would have left with this content. The two that
+/// are detected by what is inside them rather than by their name get the
+/// content that identifies them; the rest may hold anything.
+fn stale_content(path: &str) -> &'static str {
+    match path {
+        "Justfile" => "default:\n    @just --list\n\nkeeler-spawn SPEC TASK:\n    @echo spawning\n",
+        "CLAUDE.md" => "# Theirs\n\n@.claude/keeler.md\n",
+        _ => "left by an earlier Keeler\n",
+    }
+}
+
+/// Writes the fixture for each named marker into the project.
+fn leave_behind(project: &TempProject, markers: &[(&str, &str)]) {
+    for (file, _) in markers {
+        let path = project.path().join(file);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, stale_content(file)).unwrap();
+    }
+}
+
+/// The paths the report lists as an earlier Keeler's — the bullets under its
+/// heading, which run until the blank line before the removal command.
+fn stale_bullets(report: &str) -> Vec<String> {
+    report
+        .lines()
+        .skip_while(|line| !line.contains("Left by an earlier Keeler"))
+        .skip(1)
+        .map_while(|line| line.trim().strip_prefix("· ").map(str::to_string))
+        .collect()
+}
+
+/// The one `git rm -r --` line the report offers, split into the paths it
+/// names. `None` when the report gives no such line at all.
+fn removal_line(report: &str) -> Option<Vec<String>> {
+    let lines: Vec<&str> = report
+        .lines()
+        .filter(|line| line.contains("git rm -r --"))
+        .collect();
+    assert!(
+        lines.len() <= 1,
+        "the report gives more than one removal line: {lines:?}",
+    );
+    lines.first().map(|line| {
+        line.split_once("git rm -r --")
+            .unwrap()
+            .1
+            .split_whitespace()
+            .map(str::to_string)
+            .collect()
+    })
+}
+
+#[test]
+fn files_an_earlier_install_left_behind_are_named_and_kept() {
+    // Given a crate holding everything a pre-plugin install put there
+    let project = TempProject::new("stale-report", MANIFEST_WITH_PROPTEST);
+    leave_behind(&project, &STALE_MARKERS);
+    let before = project.tree_snapshot();
+
+    // When the installer runs
+    let output = project.try_install();
+    let report = String::from_utf8_lossy(&output.stdout).into_owned();
+
+    // Then it exits zero
+    assert!(
+        output.status.success(),
+        "the installer refused a project an earlier Keeler had touched:\n{report}{}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+    // And it names each of those paths as left by an earlier Keeler
+    let bullets = stale_bullets(&report);
+    for (_, named) in STALE_MARKERS {
+        if named.starts_with('@') {
+            continue;
+        }
+        assert!(
+            bullets.iter().any(|listed| listed == named),
+            "the report does not name {named}:\n{report}",
+        );
+    }
+    // And it gives one `git rm -r --` line listing exactly those files
+    let removal = removal_line(&report).unwrap_or_else(|| panic!("no removal line:\n{report}"));
+    assert_eq!(removal, bullets, "the removal line and the list disagree");
+    // And it names the import line in CLAUDE.md as one to delete by hand —
+    // the file is the project's, so only the line is ours to point at
+    assert!(
+        report.contains("@.claude/keeler.md") && report.contains("by hand"),
+        "the report does not name the CLAUDE.md import as one to delete by hand:\n{report}",
+    );
+    assert!(
+        !removal.iter().any(|path| path == "CLAUDE.md"),
+        "the removal line offers to delete the project's own CLAUDE.md: {removal:?}",
+    );
+    // And it says where those relative paths are rooted, next to the line
+    // itself: the destination is an argument, so the reader is not
+    // necessarily standing in it.
+    let lines: Vec<&str> = report.lines().collect();
+    let at = lines
+        .iter()
+        .position(|line| line.contains("git rm -r --"))
+        .unwrap();
+    let dest = project.path().display().to_string();
+    assert!(
+        lines[..at].iter().rev().take(3).any(|l| l.contains(&dest)),
+        "nothing near the removal line says where its paths are rooted:\n{report}",
+    );
+    // And every one of those files is byte-identical afterwards
+    let after = project.tree_snapshot();
+    for (file, _) in STALE_MARKERS {
+        assert_eq!(
+            before.get(file),
+            after.get(file),
+            "{file} was not left as it was found",
+        );
+    }
+}
+
+#[test]
+fn the_traces_the_scenarios_do_not_name_are_found_too() {
+    // Given a crate holding the two an earlier install could leave that the
+    // scenarios' fixture does not: the second skill, and a justfile under
+    // the dotted spelling `just` accepts alongside the plain one
+    let project = TempProject::new("stale-remainder", MANIFEST_WITH_PROPTEST);
+    let skill = project.path().join(".claude/skills/property-testing");
+    std::fs::create_dir_all(&skill).unwrap();
+    std::fs::write(skill.join("SKILL.md"), "left behind\n").unwrap();
+    std::fs::write(project.path().join(".justfile"), stale_content("Justfile")).unwrap();
+
+    // When the installer runs
+    let report = project.install();
+
+    // Then both are named. Neither is reachable through STALE_MARKERS, so
+    // without this test the two lines that find them could go unnoticed.
+    assert_eq!(
+        stale_bullets(&report),
+        [".claude/skills/property-testing", ".justfile"],
+        "a trace of an earlier install went unreported:\n{report}",
+    );
+}
+
+#[test]
+fn a_projects_own_justfile_is_not_mistaken_for_keelers() {
+    // Given a crate whose justfile defines only its own recipes
+    // (The fixture's directory name says nothing about recipes: the report
+    // prints the destination path, and a name containing "justfile" would
+    // satisfy the check below without the installer saying a word.)
+    let project = TempProject::new("own-recipes", MANIFEST_WITH_PROPTEST);
+    std::fs::write(
+        project.path().join("justfile"),
+        "build:\n    cargo build\n\nspawn-workers:\n    ./workers.sh\n",
+    )
+    .unwrap();
+
+    // When the installer runs
+    let report = project.install();
+
+    // Then the output does not name it. Sharing a name with Keeler's recipes
+    // is what every project with its own justfile does; telling them to
+    // `git rm` it would be telling them to delete their own work.
+    assert!(
+        !report.to_lowercase().contains("justfile"),
+        "the installer named a justfile that was never Keeler's:\n{report}",
+    );
+    assert!(
+        removal_line(&report).is_none(),
+        "the installer offered to remove files from a project it left nothing in:\n{report}",
+    );
 }
 
 proptest::proptest! {
-    // Every case runs the installer as a subprocess, so the count stays
-    // at the file's convention.
+    // Each case runs the installer as a subprocess; the count stays low for
+    // the same reason the properties above keep theirs low.
     #![proptest_config(proptest::prelude::ProptestConfig {
-        cases: 12,
+        cases: 10,
         failure_persistence: Some(Box::new(
             proptest::test_runner::FileFailurePersistence::WithSource("proptest-regressions"),
         )),
@@ -1993,100 +2633,468 @@ proptest::proptest! {
     })]
 
     #[test]
-    fn the_projects_own_justfile_is_found_whatever_it_is_spelled(
-        base in proptest::sample::select(JUSTFILE_CANDIDATES.to_vec()),
-        upper in proptest::collection::vec(proptest::prelude::any::<bool>(), 9),
+    fn any_subset_of_stale_files_is_reported_exactly(
+        left in proptest::sample::subsequence(STALE_MARKERS.to_vec(), 0..=STALE_MARKERS.len()),
     ) {
-        // Given a project whose justfile is spelled in any case just accepts
-        let spelling: String = base
-            .chars()
-            .zip(&upper)
-            .map(|(c, up)| if *up { c.to_ascii_uppercase() } else { c })
-            .collect();
-        let project = TempProject::new("justfile-spelling", MANIFEST_WITH_PROPTEST);
-        let own = "cov:\n    cargo llvm-cov nextest --fail-under-lines 90\n";
-        std::fs::write(project.path().join(&spelling), own).unwrap();
+        // Given any subset of the traces an earlier install leaves
+        let project = TempProject::new("stale-subset", MANIFEST_WITH_PROPTEST);
+        leave_behind(&project, &left);
+        let before = project.tree_snapshot();
 
         // When the installer runs
         let report = project.install();
 
-        // Then that file is treated as the project's own copy of the
-        // Justfile — its content stands, and Keeler's version is kept
-        // beside it under the name the project uses ...
+        // Then the paths it names are exactly the subset's, and no other
+        let expected: Vec<String> = STALE_MARKERS
+            .iter()
+            .filter(|(file, named)| !named.starts_with('@') && left.iter().any(|(l, _)| l == file))
+            .map(|(_, named)| (*named).to_string())
+            .collect();
         proptest::prop_assert_eq!(
-            std::fs::read_to_string(project.path().join(&spelling)).unwrap(),
-            own,
-            "the project's own {} was overwritten", spelling,
+            stale_bullets(&report), expected.clone(),
+            "report vs what was left:\n{}", report,
         );
-        proptest::prop_assert!(
-            holds_exactly(project.path(), &format!("{spelling}.keeler")),
-            "no {spelling}.keeler beside the project's own file:\n{report}",
-        );
-
-        // ... the project holds exactly one name just would take as a
-        // candidate ...
         proptest::prop_assert_eq!(
-            justfile_names(project.path()),
-            vec![spelling.clone()],
-            "the installer left just with more than one candidate:\n{}", report,
+            removal_line(&report), (!expected.is_empty()).then_some(expected),
+            "removal line vs what was left:\n{}", report,
+        );
+        // And the CLAUDE.md import is named when, and only when, it is there
+        proptest::prop_assert_eq!(
+            report.contains("@.claude/keeler.md"),
+            left.iter().any(|(file, _)| *file == "CLAUDE.md"),
+            "the CLAUDE.md import was misreported:\n{}", report,
         );
 
-        // ... and the conflict is reported under that name, which is
-        // what a human — and `git show <ref>:<name>` — goes looking for
-        proptest::prop_assert!(
-            report.contains(&format!("{spelling} differs")),
-            "the report does not name the project's own justfile:\n{report}",
-        );
+        // And nothing outside the install set differs afterwards
+        let after = project.tree_snapshot();
+        let touched: Vec<&String> = after
+            .iter()
+            .filter(|(name, bytes)| before.get(*name).is_none_or(|was| was != *bytes))
+            .map(|(name, _)| name)
+            .filter(|name| ![
+                "Cargo.toml",
+                ".gitignore",
+                "clippy.toml",
+                "rustfmt.toml",
+                ".github/workflows/keeler.yml",
+            ].contains(&name.as_str()))
+            .collect();
+        proptest::prop_assert!(touched.is_empty(), "the install touched {:?}", touched);
+    }
+}
 
-        // And `just` still runs there: with two candidates it refuses
-        // every recipe in the project.
-        let listed = project.run_just_args(&["--list"]);
-        proptest::prop_assert!(
-            listed.status.success(),
-            "just refuses to run after the install:\n{}",
-            String::from_utf8_lossy(&listed.stderr),
-        );
+// ---------------------------------------------------------------------------
+// Spec 09 — T12: the installed workflow is valid YAML
+// ---------------------------------------------------------------------------
+
+/// A YAML value, in the subset a workflow is written in: block mappings,
+/// block sequences, block scalars and flow sequences of scalars.
+///
+/// Hand-rolled rather than pulled in, the way `xtask`'s JSON field readers
+/// are: the harness has one third-party crate, and this is a file the
+/// project owns and writes by hand. It is stricter than YAML in one place
+/// — a key repeated in the same block is refused here, where a parser would
+/// silently keep the last — and every other rejection it makes is one a
+/// real parser makes too, which `a_workflow_yaml_cannot_read_fails_the_gate`
+/// pins case by case.
+#[derive(Debug, PartialEq)]
+enum Yaml {
+    Scalar(String),
+    List(Vec<Yaml>),
+    Map(Vec<(String, Yaml)>),
+}
+
+impl Yaml {
+    /// The value at `key`, if this is a mapping that has one.
+    fn get(&self, key: &str) -> Option<&Yaml> {
+        match self {
+            Yaml::Map(entries) => entries
+                .iter()
+                .find(|(name, _)| name == key)
+                .map(|(_, value)| value),
+            _ => None,
+        }
+    }
+
+    /// A mapping's keys, in the order it lists them; empty for anything else.
+    fn keys(&self) -> Vec<&str> {
+        match self {
+            Yaml::Map(entries) => entries.iter().map(|(name, _)| name.as_str()).collect(),
+            _ => Vec::new(),
+        }
+    }
+}
+
+/// Reads `text`, or says which line defeated it.
+fn parse_yaml(text: &str) -> Result<Yaml, String> {
+    let mut cursor = Cursor {
+        lines: text.lines().map(str::to_string).collect(),
+        at: 0,
+    };
+    let document = cursor.node(0)?;
+    cursor.skip();
+    if cursor.at < cursor.lines.len() {
+        return Err(format!(
+            "line {}: content outside the document's top-level block",
+            cursor.at + 1
+        ));
+    }
+    Ok(document)
+}
+
+struct Cursor {
+    lines: Vec<String>,
+    at: usize,
+}
+
+impl Cursor {
+    /// Advances past blank and comment lines. Never called while reading a
+    /// block scalar, whose body is content whatever it looks like.
+    fn skip(&mut self) {
+        while let Some(line) = self.lines.get(self.at) {
+            let trimmed = line.trim_start();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                self.at += 1;
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn peek(&mut self) -> Option<(usize, String)> {
+        self.skip();
+        self.lines
+            .get(self.at)
+            .map(|line| (indent_of(line), line.clone()))
+    }
+
+    /// A mapping, a list, a lone scalar — or the empty scalar a key with
+    /// nothing under it carries.
+    fn node(&mut self, min_indent: usize) -> Result<Yaml, String> {
+        let Some((indent, line)) = self.peek() else {
+            return Ok(Yaml::Scalar(String::new()));
+        };
+        if indent < min_indent {
+            return Ok(Yaml::Scalar(String::new()));
+        }
+        if line[..indent].contains('\t') {
+            return Err(format!("line {}: a tab in the indentation", self.at + 1));
+        }
+        let trimmed = line.trim_start().to_string();
+        if opens_a_list(&trimmed) {
+            self.list(indent)
+        } else if split_key(&trimmed).is_some() {
+            self.map(indent)
+        } else {
+            self.at += 1;
+            value_of(&trimmed, self.at)
+        }
+    }
+
+    fn list(&mut self, indent: usize) -> Result<Yaml, String> {
+        let mut items = Vec::new();
+        while let Some((found, line)) = self.peek() {
+            if found < indent {
+                break;
+            }
+            if found > indent {
+                return Err(format!(
+                    "line {}: unexpected indentation in a list",
+                    self.at + 1
+                ));
+            }
+            if !opens_a_list(line.trim_start()) {
+                break;
+            }
+            // The dash becomes a space, so `- name: x` reads as the mapping
+            // `name: x` two columns in and the keys under it fall into place
+            // without a second code path for an item's first line.
+            let mut rewritten = line.clone();
+            rewritten.replace_range(indent..=indent, " ");
+            self.lines[self.at] = rewritten;
+            items.push(self.node(indent + 1)?);
+        }
+        Ok(Yaml::List(items))
+    }
+
+    fn map(&mut self, indent: usize) -> Result<Yaml, String> {
+        let mut entries: Vec<(String, Yaml)> = Vec::new();
+        while let Some((found, line)) = self.peek() {
+            if found < indent {
+                break;
+            }
+            if found > indent {
+                return Err(format!("line {}: unexpected indentation", self.at + 1));
+            }
+            if line[..found].contains('\t') {
+                return Err(format!("line {}: a tab in the indentation", self.at + 1));
+            }
+            let trimmed = line.trim_start().to_string();
+            if opens_a_list(&trimmed) {
+                break;
+            }
+            let Some((key, rest)) = split_key(&trimmed) else {
+                break;
+            };
+            let at = self.at + 1;
+            if entries.iter().any(|(seen, _)| *seen == key) {
+                return Err(format!("line {at}: `{key}` is set twice in one block"));
+            }
+            self.at += 1;
+            let value = if rest.is_empty() {
+                // A block sequence may sit at its key's own column — valid
+                // YAML, and the house style of half the workflows there
+                // are. Reading only deeper lines would refuse a file
+                // GitHub runs without complaint.
+                match self.peek() {
+                    Some((found, next)) if found == indent && opens_a_list(next.trim_start()) => {
+                        self.list(indent)?
+                    }
+                    _ => self.node(indent + 1)?,
+                }
+            } else if rest.starts_with('|') || rest.starts_with('>') {
+                self.block_scalar(indent, &rest, at)?
+            } else {
+                value_of(&rest, at)?
+            };
+            entries.push((key, value));
+        }
+        Ok(Yaml::Map(entries))
+    }
+
+    /// The body of a `|` or `>` block: every line indented past the key's
+    /// own, kept verbatim — a `#` in there is content, not a comment.
+    fn block_scalar(&mut self, indent: usize, header: &str, at: usize) -> Result<Yaml, String> {
+        if !matches!(&header[1..], "" | "-" | "+") {
+            return Err(format!(
+                "line {at}: `{header}` is not a block scalar header"
+            ));
+        }
+        let mut body: Vec<String> = Vec::new();
+        while let Some(line) = self.lines.get(self.at) {
+            if !line.trim().is_empty() && indent_of(line) <= indent {
+                break;
+            }
+            body.push(line.clone());
+            self.at += 1;
+        }
+        while body.last().is_some_and(|line| line.trim().is_empty()) {
+            body.pop();
+        }
+        if body.is_empty() {
+            return Err(format!("line {at}: the block scalar has no body"));
+        }
+        Ok(Yaml::Scalar(body.join("\n")))
+    }
+}
+
+/// Whether a line, already trimmed of its indentation, opens a list item.
+fn opens_a_list(trimmed: &str) -> bool {
+    trimmed == "-" || trimmed.starts_with("- ")
+}
+
+/// The first byte of `text` outside quotes for which `wanted` holds, and
+/// whether a quote was left open. One scanner for the two readers below,
+/// which have to agree on what "outside quotes" means.
+fn outside_quotes(text: &str, wanted: impl Fn(usize, &[u8]) -> bool) -> (Option<usize>, bool) {
+    let bytes = text.as_bytes();
+    let mut quote: Option<u8> = None;
+    for (index, &byte) in bytes.iter().enumerate() {
+        if let Some(open) = quote {
+            if byte == open {
+                quote = None;
+            }
+        } else if byte == b'\'' || byte == b'"' {
+            quote = Some(byte);
+        } else if wanted(index, bytes) {
+            return (Some(index), false);
+        }
+    }
+    (None, quote.is_some())
+}
+
+/// A line's `key: value` split, or `None` when it is not a mapping entry.
+/// The separator is the first `:` outside quotes that ends the line or is
+/// followed by a space — YAML's own rule for a plain key.
+fn split_key(line: &str) -> Option<(String, String)> {
+    let index = outside_quotes(line, |index, bytes| {
+        bytes[index] == b':' && bytes.get(index + 1).is_none_or(|next| *next == b' ')
+    })
+    .0?;
+    let key = line[..index].trim();
+    (!key.is_empty()).then(|| (key.to_string(), line[index + 1..].trim().to_string()))
+}
+
+/// One plain, quoted or flow-sequence value, with any trailing comment
+/// removed — and an error for the shapes a real parser refuses.
+fn value_of(text: &str, at: usize) -> Result<Yaml, String> {
+    let text = strip_comment(text, at)?;
+    let text = text.trim();
+    if let Some(inner) = text.strip_prefix('[') {
+        let inner = inner
+            .strip_suffix(']')
+            .ok_or_else(|| format!("line {at}: the flow sequence `{text}` is never closed"))?;
+        return Ok(Yaml::List(
+            inner
+                .split(',')
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .map(|item| Yaml::Scalar(unquote(item)))
+                .collect(),
+        ));
+    }
+    if text.starts_with('{') {
+        return Err(format!(
+            "line {at}: `{text}` opens a flow mapping — quote it"
+        ));
+    }
+    if is_quoted(text) {
+        return Ok(Yaml::Scalar(unquote(text)));
+    }
+    if text.contains(": ") || text.ends_with(':') {
+        return Err(format!(
+            "line {at}: the plain scalar `{text}` holds a `:` — quote it"
+        ));
+    }
+    Ok(Yaml::Scalar(text.to_string()))
+}
+
+/// `text` up to a `#` that opens a comment: one outside quotes, at the
+/// start of the value or after a space. An unclosed quote is an error, not
+/// a value.
+fn strip_comment(text: &str, at: usize) -> Result<String, String> {
+    let (found, unclosed) = outside_quotes(text, |index, bytes| {
+        bytes[index] == b'#' && (index == 0 || bytes[index - 1] == b' ')
+    });
+    if let Some(index) = found {
+        return Ok(text[..index].to_string());
+    }
+    if unclosed {
+        return Err(format!("line {at}: the value `{text}` is never closed"));
+    }
+    Ok(text.to_string())
+}
+
+fn is_quoted(text: &str) -> bool {
+    text.len() >= 2
+        && ((text.starts_with('"') && text.ends_with('"'))
+            || (text.starts_with('\'') && text.ends_with('\'')))
+}
+
+fn unquote(text: &str) -> String {
+    if is_quoted(text) {
+        text[1..text.len() - 1].to_string()
+    } else {
+        text.to_string()
     }
 }
 
 #[test]
-fn a_project_just_already_refuses_is_refused_not_added_to() {
-    // Given a project that already holds more than one justfile
-    // candidate — two spellings differing by more than case, so the
-    // fixture is the same on either kind of filesystem
-    let project = TempProject::new("two-justfiles", MANIFEST_WITH_PROPTEST);
-    let both = ["justfile", ".justfile"];
-    for name in both {
-        std::fs::write(project.path().join(name), "cov:\n    echo cov\n").unwrap();
-    }
-    let before = project.tree_snapshot();
+fn the_installed_workflow_is_valid_yaml() {
+    // Given a fresh crate where the installer has run
+    let project = TempProject::new("workflow-yaml", MANIFEST_WITH_PROPTEST);
+    project.install();
 
-    // When the installer runs against it
-    let output = project.try_install();
-    let said = format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr),
+    // When the workflow it left is read as YAML
+    let workflow = installed_workflow(&project);
+    let parsed = parse_yaml(&workflow).unwrap_or_else(|err| {
+        panic!("the installed workflow is not valid YAML: {err}\n{workflow}")
+    });
+
+    // Then every gate is there as a job. A workflow GitHub cannot parse
+    // fails whole and quietly — no job runs, and the pull request shows no
+    // red check to say why.
+    assert_eq!(
+        parsed.get("jobs").map(Yaml::keys).unwrap_or_default(),
+        [
+            "lints",
+            "test",
+            "quality",
+            "mutants",
+            "branch-baseline",
+            "review-record",
+        ],
+        "the installed workflow's jobs are not the gates:\n{workflow}",
     );
+}
 
-    // Then it exits with a non-zero status ...
-    assert!(
-        !output.status.success(),
-        "the installer added to a project just already refuses:\n{said}",
-    );
-
-    // ... it names every candidate it found ...
-    for name in both {
+#[test]
+fn a_workflow_yaml_cannot_read_fails_the_gate() {
+    // The reader above is only worth a gate if it refuses what a real
+    // parser refuses: one that accepted everything would report success
+    // having looked at nothing.
+    for (fault, text) in [
+        (
+            "a duplicate key",
+            "jobs:\n  test:\n    runs-on: a\n    runs-on: b\n",
+        ),
+        ("a tab in the indentation", "jobs:\n\ttest: a\n"),
+        ("a key that belongs to no block", "name: a\n  stray: b\n"),
+        ("an unclosed quote", "name: \"a\n"),
+        ("a plain scalar holding a colon", "run: echo a: b\n"),
+        ("an empty block scalar", "run: |\nname: a\n"),
+        ("an unclosed flow sequence", "on:\n  branches: [main\n"),
+        ("a value that opens a flow mapping", "env:\n  A: {a: 1\n"),
+    ] {
         assert!(
-            said.contains(name),
-            "the refusal does not name {name}:\n{said}",
+            parse_yaml(text).is_err(),
+            "the reader accepted {fault}:\n{text}",
         );
     }
 
-    // ... and it creates no files there
+    // And it reads the shapes a workflow is written in — including a block
+    // sequence at its key's own column, which is valid YAML and the house
+    // style of half the workflows there are. Refusing one would be this
+    // gate failing a file GitHub runs.
+    let workflow = concat!(
+        "name: a\n\n",
+        "on:\n  push:\n    branches: [main]\n  pull_request:\n\n",
+        "jobs:\n",
+        "  # a comment about the job\n",
+        "  test:\n    runs-on: ubuntu-latest\n    steps:\n",
+        "      - uses: actions/checkout@v7\n        with:\n          fetch-depth: 0\n",
+        "      - name: A step\n        run: |\n          set -eu\n",
+        "          # not a comment, a line of the script\n          echo hi\n",
+    );
+    let flush = concat!(
+        "jobs:\n",
+        "  test:\n",
+        "    runs-on: ubuntu-latest\n",
+        "    steps:\n",
+        "    - uses: actions/checkout@v7\n",
+        "      with:\n",
+        "        fetch-depth: 0\n",
+        "    - run: echo hi\n",
+    );
+    let flush = parse_yaml(flush)
+        .unwrap_or_else(|err| panic!("the reader refused a sequence at its key's column: {err}"));
+    let flush = flush
+        .get("jobs")
+        .and_then(|jobs| jobs.get("test"))
+        .and_then(|test| test.get("steps"))
+        .expect("the flush-style steps did not read as the key's value");
+    let Yaml::List(flush) = flush else {
+        panic!("the flush-style steps did not read as a list: {flush:?}");
+    };
+    assert_eq!(flush.len(), 2, "the reader lost a step: {flush:?}");
+
+    let parsed = parse_yaml(workflow).expect("the reader cannot read a plain workflow");
+    assert_eq!(parsed.keys(), ["name", "on", "jobs"]);
+    let steps = parsed
+        .get("jobs")
+        .and_then(|jobs| jobs.get("test"))
+        .and_then(|test| test.get("steps"))
+        .expect("the reader lost the steps");
+    let Yaml::List(steps) = steps else {
+        panic!("the steps did not read as a list: {steps:?}");
+    };
+    assert_eq!(steps.len(), 2, "the reader lost a step: {steps:?}");
     assert_eq!(
-        project.tree_snapshot(),
-        before,
-        "the refusal still changed the project",
+        steps[1].get("run"),
+        Some(&Yaml::Scalar(
+            "          set -eu\n          # not a comment, a line of the script\n          echo hi"
+                .to_string()
+        )),
+        "the block scalar did not survive the read",
     );
 }

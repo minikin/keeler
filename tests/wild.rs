@@ -308,7 +308,9 @@ fn the_installer_lands_cleanly_on_a_real_library_crate() {
 
 #[test]
 fn an_installer_that_skips_a_file_is_caught() {
-    // Given an installer that does everything right but drops one file
+    // Given an installer that does everything right but drops one file.
+    // A tool config, because the checker's tracked set is whatever a
+    // reference install adds — and since spec 09 the Justfile is not in it.
     let fixture = Fixture::library("skips-a-file");
     let defective = fixture.write_script(
         "bin/defective-install.sh",
@@ -316,7 +318,7 @@ fn an_installer_that_skips_a_file_is_caught() {
             "#!/usr/bin/env bash\n\
              set -euo pipefail\n\
              bash {} \"$@\"\n\
-             rm -f \"$1/Justfile\"\n",
+             rm -f \"$1/clippy.toml\"\n",
             repo_root().join("install.sh").display(),
         ),
     );
@@ -331,7 +333,7 @@ fn an_installer_that_skips_a_file_is_caught() {
         "the checker passed an installer that skipped a file:\n{report}",
     );
     assert!(
-        report.contains("Justfile"),
+        report.contains("clippy.toml"),
         "the checker did not name the missing file:\n{report}",
     );
 }
@@ -880,14 +882,17 @@ fn an_installer_that_declines_every_conflict_is_caught() {
 
 #[test]
 fn a_file_installed_empty_is_caught() {
-    // Completeness was existence-only: an empty .claude/keeler.md is the
-    // whole payload missing, and it passed.
+    // Completeness was existence-only: a file that lands empty is the whole
+    // payload missing, and it passed. A tool config, because the tracked set
+    // is what a reference install adds, and since spec 09 the rules file is
+    // not in it — truncating a path nothing creates would fail the wrapper
+    // on the redirection and pass this test for the wrong reason.
     let fixture = Fixture::lived_in("empty-file");
     must_catch(
         &fixture,
-        "installs-an-empty-rules-file",
-        ": > \"$1/.claude/keeler.md\"",
-        "keeler.md",
+        "installs-an-empty-tool-config",
+        ": > \"$1/clippy.toml\"",
+        "clippy.toml",
     );
 }
 
@@ -917,11 +922,13 @@ fn a_deleted_lockfile_is_not_excused_as_a_refresh() {
 }
 
 #[test]
-fn an_upgrade_over_an_older_rules_file_is_not_called_a_clobber() {
-    // The real installer replaces .claude/keeler.md wholesale and keeps a
-    // .bak — that is its documented job. The checker's exemption list did
-    // not know, so it failed a correct installer on every upgrade.
-    let fixture = Fixture::lived_in("upgrade-rules");
+fn a_rules_file_left_by_an_earlier_install_is_the_projects_own() {
+    // The checker used to excuse a rewrite of .claude/keeler.md: the
+    // installer replaced it wholesale and kept a .bak, and that was its
+    // documented job. Since spec 09 nothing installs it, so the exemption
+    // would excuse a clobber — the file an earlier Keeler left behind is
+    // the project's to keep or delete, like any other file of theirs.
+    let fixture = Fixture::lived_in("stale-rules");
     std::fs::create_dir_all(fixture.project().join(".claude")).unwrap();
     std::fs::write(
         fixture.project().join(".claude/keeler.md"),
@@ -929,11 +936,11 @@ fn an_upgrade_over_an_older_rules_file_is_not_called_a_clobber() {
     )
     .unwrap();
 
-    let output = fixture.check();
-    assert!(
-        output.status.success(),
-        "the checker called a documented replacement a clobber:\n{}",
-        combined(&output),
+    must_catch(
+        &fixture,
+        "rewrites-a-stale-rules-file",
+        "printf 'newer rules\\n' > \"$1/.claude/keeler.md\"",
+        ".claude/keeler.md",
     );
 }
 

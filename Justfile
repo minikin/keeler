@@ -1,6 +1,6 @@
 # List available recipes
 default:
-    @just --list
+    @just --justfile "{{justfile()}}" --working-directory . --list
 
 # Parameters reach a recipe through the environment, under their own
 # names, rather than as text spliced into its body. Without this, `just`
@@ -8,6 +8,18 @@ default:
 # runs it when the recipe is parsed — before any guard inside the body
 # can refuse it. `$SPEC` reads as `{{SPEC}}` did and cannot.
 set export
+
+# This file does not live in the project it measures: it ships inside the
+# Keeler plugin, and `keeler <recipe>` is the wrapper that runs it here
+# with the project as the working directory. So every recipe that calls
+# another names this very file — `just --justfile "{{justfile()}}"
+# --working-directory . <recipe>` — because a bare `just <recipe>` would
+# look for a justfile in the project, where there is none, or find the
+# project's own and run something else entirely. `just` comes from PATH
+# rather than `just_executable()` so that a test's stub `just` sees the
+# call: how these recipes compose is behavior, and behavior is observed.
+# For the same reason the graph parser is named against
+# `{{justfile_directory()}}` and not the repository root.
 
 # Run all tests (doc tests only when a package has a library target).
 # --workspace, not the default: in a project whose root manifest is itself a
@@ -30,9 +42,9 @@ fmt:
     cargo fmt --all
 
 # Check formatting and lints (mirrors CI): your formatting, your clippy.
-# The shellcheck branch below is inert in your project — it is keyed on a
-# marker file only Keeler's own repository has. Your shell scripts are
-# yours to gate, not Keeler's.
+# The branch below is inert in your project — it is keyed on a marker file
+# only Keeler's own repository has. Your shell scripts are yours to gate,
+# not Keeler's, and Keeler's plugin is Keeler's to hold to its version.
 #
 # Check formatting and lints, the way CI does.
 lint:
@@ -46,6 +58,12 @@ lint:
         # glob stops matching, shellcheck fails on the literal pattern
         # rather than the gate vanishing in silence.
         shellcheck install.sh scripts/*.sh
+        # The plugin's manifests and the rules the SessionStart hook prints,
+        # held to VERSION. Both failures they catch are silent ones — an
+        # unbumped plugin.json makes `/plugin update` install nothing, and
+        # rules over the hook's cap reach the agent as a preview — so they
+        # are caught in the gate that runs on every change, not at the tag.
+        cargo xtask plugin-check
     fi
 
 # Fast compile check without building test binaries
@@ -66,20 +84,29 @@ ci: lint test
 _no_src_msg := "no Rust sources to measure — skipping (no library or binary targets)"
 _has_rust_targets := "cargo metadata --no-deps --format-version 1 2>/dev/null | grep -qE '\"kind\":\\[\"(bin|proc-macro|lib|rlib|dylib|cdylib|staticlib)'"
 
-# Line coverage summary; fails mechanically below 90% lines
+# The two bars reach the recipes through the environment, because the
+# recipes are no longer a file in your repository: with the Justfile in the
+# plugin, `--fail-under-lines 90` and `--threshold 15` stopped being lines
+# an adopter could edit. Set them in your shell for `keeler dev`, and in
+# the workflow's `env:` for CI. They move the bar, never the ruler — what
+# the gates measure is not an adopter's to change.
+_cov_min := env("KEELER_COV_MIN", "90")
+_crap_max := env("KEELER_CRAP_MAX", "15")
+
+# Line coverage summary; fails below KEELER_COV_MIN (default 90) lines
 cov:
     #!/usr/bin/env bash
     set -euo pipefail
     {{_has_rust_targets}} || { echo "{{_no_src_msg}}"; exit 0; }
-    cargo llvm-cov nextest --workspace --all-targets --no-tests=pass --summary-only --fail-under-lines 90
+    cargo llvm-cov nextest --workspace --all-targets --no-tests=pass --summary-only --fail-under-lines {{_cov_min}}
 
-# Coverage + CRAP score gate: fails if any function scores above the threshold
+# Coverage + CRAP score gate: fails above KEELER_CRAP_MAX (default 15)
 crap:
     #!/usr/bin/env bash
     set -euo pipefail
     {{_has_rust_targets}} || { echo "{{_no_src_msg}}"; exit 0; }
     cargo llvm-cov nextest --workspace --all-targets --no-tests=pass --lcov --output-path lcov.info
-    cargo crap --lcov lcov.info --workspace --threshold 15 --fail-above
+    cargo crap --lcov lcov.info --workspace --threshold {{_crap_max}} --fail-above
 
 # Record a CRAP baseline (run before starting a feature)
 crap-baseline:
@@ -96,7 +123,7 @@ crap-delta:
     set -euo pipefail
     {{_has_rust_targets}} || { echo "{{_no_src_msg}}"; exit 0; }
     cargo llvm-cov nextest --workspace --all-targets --no-tests=pass --lcov --output-path lcov.info
-    cargo crap --lcov lcov.info --workspace --threshold 15 --fail-above \
+    cargo crap --lcov lcov.info --workspace --threshold {{_crap_max}} --fail-above \
         --baseline crap-baseline.json --fail-regression
 
 # The body below is inert in your project — like the shellcheck branch in
@@ -118,24 +145,34 @@ dev: fmt lint test crap
         cargo xtask pipeline-check
     fi
 
-# Mutation tests for a specific file: just mutants src/lib.rs
+# How the tool runs, not where the bar sits — so unlike the two thresholds
+# above, these are flags and not variables. They were `.cargo-mutants.toml`
+# until the Justfile moved into the plugin, and a config file in the
+# plugin's directory is one `cargo mutants` never reads: it looks beside
+# the crate under test, which is the adopter's repository. On the command
+# line they travel with the recipe that needs them.
+_mutants_flags := "--test-tool nextest --jobs 4 --profile mutants --timeout 60 " + \
+    "--cap-lints true --skip-calls-defaults true " + \
+    "--skip-calls eprintln!,write!,writeln! --exclude 'tests/**/*.rs'"
+
+# Mutation tests for a specific file: keeler mutants src/lib.rs
 # --workspace, or a member crate's file yields "Found 0 mutants" and the
 # gate passes having tested nothing.
 #
-# Mutation tests for one file — `just mutants src/lib.rs`.
+# Mutation tests for one file — `keeler mutants src/lib.rs`.
 mutants FILE:
-    cargo mutants --workspace --file $1
+    cargo mutants --workspace {{_mutants_flags}} --file "$FILE"
 
 # Mutation tests on every member (slow)
 mutants-all:
-    cargo mutants --workspace
+    cargo mutants --workspace {{_mutants_flags}}
 
 # "Main" is one thing, decided once: the first of the four names below
 # that exists in this repository. `mutants-diff` diffs against it and
 # `keeler-land` tells it from a feature branch — through this one helper, so
 # no two recipes can disagree about where main is and be silently wrong in
 # different directions. Private (the leading `_`): it prints a ref for
-# other recipes, not a line for a human reading `just --list`.
+# other recipes, not a line for a human reading `keeler --list`.
 _main-ref:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -156,10 +193,12 @@ _main-ref:
     exit 1
 
 # Mutation tests on changed lines only (--in-diff vs HEAD, else the branch
-# base, else the last commit)
+# base, else the last commit). Naming a BASE replaces that search with one
+# answer — what CI does, where the checkout is clean and the base is the
+# pull request's, not whatever this repository happens to call main.
 #
-# Mutation tests on the lines this branch changed.
-mutants-diff:
+# Mutation tests on the lines this branch changed — `keeler mutants-diff [BASE]`.
+mutants-diff BASE="HEAD":
     #!/usr/bin/env bash
     set -euo pipefail
     # Both shapes: sources beside the root manifest, and sources in a
@@ -167,6 +206,30 @@ mutants-diff:
     # and `src/*.rs` does not match a member's — a gate that watches only
     # one of them is blind to half the projects it ships to.
     paths=('src/*.rs' 'src/**/*.rs' '**/src/*.rs' '**/src/**/*.rs')
+    # The merge base with BASE, not BASE itself, and not `BASE...HEAD`:
+    # three-dot is the range wanted but cannot reach the working tree, and
+    # two-dot would blame this branch for whatever the base gained since it
+    # left. Diffing from the merge base to the working tree is that range
+    # plus the uncommitted lines, in one patch cargo-mutants can read —
+    # where two concatenated diffs would name the same file twice.
+    #
+    # A named base that does not resolve is refused rather than fallen back
+    # from. A shallow checkout, a fork's pull request or a typo in the
+    # workflow would otherwise leave the gate green having compared the
+    # change against nothing — the one thing the message at the bottom of
+    # this recipe exists to prevent. The default is not asked: HEAD is its
+    # own merge base, and a repository too young to have one is the empty
+    # diff the recipe has always handled.
+    #
+    # Resolved before the index is touched, so the refusal cannot leave the
+    # intent-to-add entries below behind it.
+    if [ "$BASE" = "HEAD" ]; then
+        from=HEAD
+    elif ! from=$(git merge-base "$BASE" HEAD 2>/dev/null); then
+        echo "keeler: no merge base with '$BASE' — nothing was measured against it." >&2
+        echo "keeler: the base must be a ref this checkout has; in CI that means fetch-depth: 0." >&2
+        exit 1
+    fi
     # New files aren't in `git diff HEAD` — intent-to-add makes their full
     # content show up in the diff; reset afterwards to leave the index as-is.
     # NUL-delimited into an array: paths with spaces stay whole.
@@ -176,48 +239,55 @@ mutants-diff:
     if [ "${#untracked[@]}" -gt 0 ]; then git add -N -- "${untracked[@]}"; fi
     diff_file=$(mktemp)
     trap 'rm -f "$diff_file"' EXIT
-    git diff HEAD -- "${paths[@]}" > "$diff_file" || true
+    git diff "$from" -- "${paths[@]}" > "$diff_file" || true
     if [ "${#untracked[@]}" -gt 0 ]; then git reset -q -- "${untracked[@]}"; fi
-    if [ ! -s "$diff_file" ]; then
-        # A clean tree is not a measured tree: src changes committed earlier
-        # on this branch still need mutating, so diff against the branch base.
-        # Where main is, is `_main-ref`'s answer and no one else's.
-        base=""
-        if main_ref=$(just _main-ref 2>/dev/null); then
-            base=$(git merge-base HEAD "$main_ref" 2>/dev/null || true)
+    # Only when the base is HEAD — the default, or a caller who named it and
+    # so asked for the same comparison. A caller who named anything else
+    # asked for that comparison and no other: falling back to the branch
+    # base or the last commit would answer a question they did not ask, and
+    # in CI it would measure lines the pull request never touched.
+    if [ "$BASE" = "HEAD" ]; then
+        if [ ! -s "$diff_file" ]; then
+            # A clean tree is not a measured tree: src changes committed earlier
+            # on this branch still need mutating, so diff against the branch base.
+            # Where main is, is `_main-ref`'s answer and no one else's.
+            base=""
+            if main_ref=$(just --justfile "{{justfile()}}" --working-directory . _main-ref 2>/dev/null); then
+                base=$(git merge-base HEAD "$main_ref" 2>/dev/null || true)
+            fi
+            if [ -n "$base" ] && [ "$base" != "$(git rev-parse HEAD)" ]; then
+                git diff "$base" HEAD -- "${paths[@]}" > "$diff_file" || true
+            fi
         fi
-        if [ -n "$base" ] && [ "$base" != "$(git rev-parse HEAD)" ]; then
-            git diff "$base" HEAD -- "${paths[@]}" > "$diff_file" || true
+        if [ ! -s "$diff_file" ]; then
+            git diff HEAD~1 HEAD -- "${paths[@]}" > "$diff_file" 2>/dev/null || true
         fi
-    fi
-    if [ ! -s "$diff_file" ]; then
-        git diff HEAD~1 HEAD -- "${paths[@]}" > "$diff_file" 2>/dev/null || true
     fi
     if [ ! -s "$diff_file" ]; then
         # An honest gate says what it did not measure — it never reports the
         # absence of survivors as evidence about a change it cannot see.
-        # For everything mutants can measure, use `just mutants-all`.
+        # For everything mutants can measure, use `keeler mutants-all`.
         echo "No src/ changes — outside the mutation gate's reach; nothing was measured"
         exit 0
     fi
     echo "Running mutants on changed lines (--in-diff)"
-    cargo mutants --workspace --in-diff "$diff_file"
+    cargo mutants --workspace {{_mutants_flags}} --in-diff "$diff_file"
 
 # Full validation including mutation tests (slow)
 dev-full: dev mutants-all
 
 # Diff-based by construction: all three of these measure this branch's
 # own changes, and `crap-delta` reads the baseline without ever writing
-# it. Moving the baseline is `just keeler-land`'s job, on main, at fan-in;
+# it. Moving the baseline is `keeler keeler-land`'s job, on main, at fan-in;
 # CI refuses a keeler/* pull request whose diff touched it.
 #
-# `just dev` is untouched — an adopter on the linear road runs exactly the
+# `keeler dev` is untouched — an adopter on the linear road runs exactly the
 # recipe they always did, and a spawned agent runs this one instead. The
 # three go through `just` on PATH rather than recipe dependencies, because
 # the order is the contract: dependencies all run before the body, and the
 # sequence would stop being observable.
 #
-# The line below is the one `just --list` shows — `just` carries the last
+# The line below is the one `keeler --list` shows — `just` carries the last
 # comment line above a recipe and no other, which is why each graph-mode
 # recipe here ends its documentation with the one an adopter should read
 # there. The rationale above it is for whoever opens this file.
@@ -226,7 +296,7 @@ dev-full: dev mutants-all
 keeler-branch:
     #!/usr/bin/env bash
     set -euo pipefail
-    just dev
+    just --justfile "{{justfile()}}" --working-directory . dev
     # The delta gate needs a committed baseline to measure against — the
     # same condition /keeler:qa and the shipped workflow already check.
     # Without one, `dev`'s absolute CRAP threshold is the whole gate.
@@ -234,11 +304,11 @@ keeler-branch:
     # uncommitted would have crap-delta measure this branch against itself,
     # a zero delta by construction and a gate that checked nothing.
     if git cat-file -e HEAD:crap-baseline.json 2>/dev/null; then
-        just crap-delta
+        just --justfile "{{justfile()}}" --working-directory . crap-delta
     else
         echo "no crap-baseline.json committed — threshold only, no delta gate"
     fi
-    just mutants-diff
+    just --justfile "{{justfile()}}" --working-directory . mutants-diff
 
 # The fork after approval, as a recipe. /keeler:spec asks which road once
 # it has set `Status: Approved`, and the "graph" answer runs this — so the
@@ -258,7 +328,7 @@ keeler-branch:
 # staged beside it, is not this commit's and stays exactly where it was:
 # the human's consent was for the spec, and the spec is what is committed.
 #
-# Graph mode: cut feat/<spec-slug> from main and commit the approved spec there — `just keeler-feature-branch specs/01-foo.md`.
+# Graph mode: cut feat/<spec-slug> from main and commit the approved spec there — `keeler keeler-feature-branch specs/01-foo.md`.
 keeler-feature-branch SPEC:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -291,7 +361,7 @@ keeler-feature-branch SPEC:
         exit 1
     fi
     # Where main is, is `_main-ref`'s answer and no one else's.
-    main_ref="$(just _main-ref)"
+    main_ref="$(just --justfile "{{justfile()}}" --working-directory . _main-ref)"
     main_branch="${main_ref##*/}"
     here="$(git symbolic-ref --quiet --short HEAD || true)"
     if [ "$here" != "$main_branch" ] && [ "$here" != "$feature" ]; then
@@ -363,7 +433,7 @@ keeler-feature-branch SPEC:
 # edge it declares. A refusal (a cycle, a need naming no task) is the
 # script's: it exits non-zero naming the line, and nothing here is printed.
 #
-# Graph mode: what a spec's Tasks section says is ready, blocked or done — `just keeler-graph specs/01-foo.md`.
+# Graph mode: what a spec's Tasks section says is ready, blocked or done — `keeler keeler-graph specs/01-foo.md`.
 keeler-graph SPEC:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -403,7 +473,7 @@ keeler-graph SPEC:
     fi
     # The parser first, and the ref line only once it has answered: a
     # refusal is the script's, and this recipe prints nothing over it.
-    report=$(bash "$root/scripts/keeler-graph.sh" "$graph_copy/$(basename "$spec_abs")")
+    report=$(bash "{{justfile_directory()}}/scripts/keeler-graph.sh" "$graph_copy/$(basename "$spec_abs")")
     echo "graph: $rel on $graph_ref"
     printf '%s\n' "$report" | awk '
         NF { row[++n] = $0; if ($2 == "done") done_[$1] = 1 }
@@ -430,10 +500,11 @@ _write-runner SPEC TASK BRANCH WORKTREE RUNNER EXIT_FILE LOG_FILE STREAM_FILE:
     set -euo pipefail
     rel="$SPEC"
     task="$TASK"
-    # Derived here, in the main checkout, and baked into the runner: the
-    # runner executes in the task's worktree, where the parser it needs is
-    # the branch's own copy rather than this one.
-    root="$(git rev-parse --show-toplevel)"
+    # Baked into the runner rather than resolved by it: the runner executes
+    # in the task's worktree, under a tmux session that has none of the
+    # plugin's environment, and Keeler's own files are in neither the
+    # worktree nor the main checkout. This is where they are.
+    plugin_root="{{justfile_directory()}}"
     slug="$(basename "$rel" .md)"
     tid="$(printf '%s' "$task" | tr '[:upper:]' '[:lower:]')"
     branch="$BRANCH"
@@ -442,13 +513,17 @@ _write-runner SPEC TASK BRANCH WORKTREE RUNNER EXIT_FILE LOG_FILE STREAM_FILE:
     exit_file="$EXIT_FILE"
     log_file="$LOG_FILE"
     stream_file="$STREAM_FILE"
+    # \${CLAUDE_PLUGIN_ROOT} reaches the agent as text, not as this shell's
+    # idea of it: the plugin's cache path carries its version and only the
+    # session that loaded it knows where it is.
     prompt="Implement task $task of $rel, and nothing else.
 
-    Read $rel in full first, then .claude/keeler.md.
+    Read $rel in full first, then \${CLAUDE_PLUGIN_ROOT}/keeler.md and
+    \${CLAUDE_PLUGIN_ROOT}/graph-mode.md.
 
     Run the whole per-task pipeline for this one task, in order and without
     stopping between stages: /keeler:tdd, then /keeler:qa, then
-    /keeler:review, then /keeler:mutants. The gate is 'just keeler-branch';
+    /keeler:review, then /keeler:mutants. The gate is 'keeler keeler-branch';
     it must be green before the task is done.
 
     You have exactly one turn: when your reply ends, the session is over
@@ -467,8 +542,9 @@ _write-runner SPEC TASK BRANCH WORKTREE RUNNER EXIT_FILE LOG_FILE STREAM_FILE:
     never open a pull request."
     # Enough to edit, test and commit inside the worktree, and no more. Not
     # bypassPermissions: a headless agent with an unrestricted shell is not
-    # a decision a recipe should make by default.
-    tools='Bash(cargo:*),Bash(just:*),Bash(git:*)'
+    # a decision a recipe should make by default. `keeler` is how every
+    # recipe is run now — an agent denied it cannot reach its own gate.
+    tools='Bash(cargo:*),Bash(just:*),Bash(git:*),Bash(keeler:*)'
     # Bash(git:*) grants push. "Nothing is pushed" has to be a permission,
     # not a sentence in a prompt: take it back explicitly. The match is on
     # the command prefix, so this stops the ordinary `git push` and not a
@@ -478,8 +554,13 @@ _write-runner SPEC TASK BRANCH WORKTREE RUNNER EXIT_FILE LOG_FILE STREAM_FILE:
     blocked='Bash(git push:*)'
     cat > "$runner" <<RUNNER
     #!/usr/bin/env bash
-    # Written by 'just keeler-spawn' for $branch. Re-runnable by hand:
+    # Written by 'keeler keeler-spawn' for $branch. Re-runnable by hand:
     #     bash "$runner"
+    # First, before anything: a runner is a bash script tmux starts outside
+    # any agent, so the plugin's bin/ is not on its PATH by itself — and a
+    # 'keeler' that resolves only inside the agent's Bash tool is one this
+    # script cannot use.
+    export PATH="$plugin_root/bin:\$PATH"
     cd "$worktree" || exit 1
     # One compile cache across every worktree: a wave otherwise builds
     # the same workspace from scratch once per task. Decided at run time,
@@ -508,6 +589,7 @@ _write-runner SPEC TASK BRANCH WORKTREE RUNNER EXIT_FILE LOG_FILE STREAM_FILE:
         # and its absence is the death, however calm the exit.
         BASH_DEFAULT_TIMEOUT_MS=1800000 BASH_MAX_TIMEOUT_MS=1800000 \
         claude -p "\$prompt" --verbose --output-format stream-json \
+            --plugin-dir "$plugin_root" \
             --permission-mode acceptEdits --allowedTools '$tools' --disallowedTools '$blocked' \
             | tee "$stream_file"
         if ! grep -q '"type":"result"' "$stream_file" 2>/dev/null; then
@@ -521,9 +603,10 @@ _write-runner SPEC TASK BRANCH WORKTREE RUNNER EXIT_FILE LOG_FILE STREAM_FILE:
             # Everything is asked of the branch, not of the worktree, so
             # the sentence below is literally true and a tree that walked
             # off to another branch cannot answer for this one. The parser
-            # is the main checkout's: a task branch editing that script —
-            # which this project's own tasks do — would otherwise decide
-            # whether its own box is ticked.
+            # is the plugin's: a task branch editing that script — which
+            # this project's own tasks do — would otherwise decide whether
+            # its own box is ticked, and the main checkout's copy is no
+            # safer, since a landing merges those edits into it.
             k_why=""
             [ "\$(git symbolic-ref --quiet --short HEAD 2>/dev/null)" = "$branch" ] \
                 || k_why="the worktree is no longer on $branch"
@@ -533,7 +616,7 @@ _write-runner SPEC TASK BRANCH WORKTREE RUNNER EXIT_FILE LOG_FILE STREAM_FILE:
                 && k_why="reviews/$slug/$tid.md is not committed on the branch"
             if [ -z "\$k_why" ]; then
                 k_state="\$(git show "$branch:$rel" 2>/dev/null > "$stream_file.spec" \
-                    && bash "$root/scripts/keeler-graph.sh" "$stream_file.spec" 2>/dev/null \
+                    && bash "$plugin_root/scripts/keeler-graph.sh" "$stream_file.spec" 2>/dev/null \
                     | awk -v t="$task" 'tolower(\$1) == tolower(t) { print \$2 }')"
                 rm -f "$stream_file.spec"
                 [ "\$k_state" = done ] || k_why="$task is not ticked on the branch"
@@ -553,7 +636,7 @@ _write-runner SPEC TASK BRANCH WORKTREE RUNNER EXIT_FILE LOG_FILE STREAM_FILE:
             echo "keeler: the agent finished its turn with an error — the gate did not run" >&2
             exit 1
         fi
-        just keeler-branch
+        just --justfile "{{justfile()}}" --working-directory . keeler-branch
         echo \$? > "$exit_file"
     } 2>&1 | tee -a "$log_file"
     RUNNER
@@ -650,7 +733,7 @@ _spawn-preflight SPEC:
         echo "keeler-spawn: $rel is not committed on $feature — the worktree is cut from it, so an uncommitted graph is one the agent would never see." >&2
         exit 1
     fi
-    bash "$root/scripts/keeler-graph.sh" "$feature_copy/$(basename "$spec_abs")"
+    bash "{{justfile_directory()}}/scripts/keeler-graph.sh" "$feature_copy/$(basename "$spec_abs")"
 
 # It refuses before creating anything on every ground `_spawn-preflight`
 # refuses — tmux missing, the spec not a file in this repository, differing
@@ -659,20 +742,19 @@ _spawn-preflight SPEC:
 # already has a worktree or a branch. Otherwise it creates a worktree
 # beside the repository on keeler/<spec-slug>/<task-id>, writes a runner
 # script under .keeler/runs/, starts a detached tmux session on it and
-# returns at once. `just keeler-status <spec>` is the board afterwards.
+# returns at once. `keeler keeler-status <spec>` is the board afterwards.
 #
-# Graph mode: hand one ready task to a headless agent on its own branch — `just keeler-spawn specs/01-foo.md T3`.
+# Graph mode: hand one ready task to a headless agent on its own branch — `keeler keeler-spawn specs/01-foo.md T3`.
 keeler-spawn SPEC TASK:
     #!/usr/bin/env bash
     set -euo pipefail
     spec="$SPEC"
     task="$TASK"
-    # The just that is running this recipe runs its helper — not whichever
-    # `just` PATH holds, which on a PATH stripped to the shell is none, and
-    # would turn "tmux is required" into "just: command not found". `-q`: a
-    # refusal is the preflight's one line, not that line plus just's report
-    # that a recipe nobody named failed.
-    report="$("{{just_executable()}}" -q _spawn-preflight "$spec")"
+    # This file's own helper, named as such: `--justfile` is what keeps a
+    # project's justfile — or the absence of one, which is every adopter —
+    # from answering instead. `-q`: a refusal is the preflight's one line,
+    # not that line plus just's report that a recipe nobody named failed.
+    report="$(just --justfile "{{justfile()}}" --working-directory . -q _spawn-preflight "$spec")"
     root="$(git rev-parse --show-toplevel)"
     spec_abs="$(cd "$(dirname "$spec")" && pwd -P)/$(basename "$spec")"
     rel="${spec_abs#"$root"/}"
@@ -728,7 +810,8 @@ keeler-spawn SPEC TASK:
     runner="$runs/$tid.sh"
     # A verdict left by an earlier run of this task is not this run's.
     rm -f "$exit_file"
-    just _write-runner "$rel" "$task" "$branch" "$worktree" "$runner" "$exit_file" "$log_file" "$stream_file"
+    just --justfile "{{justfile()}}" --working-directory . _write-runner \
+        "$rel" "$task" "$branch" "$worktree" "$runner" "$exit_file" "$log_file" "$stream_file"
     printf -v run_cmd 'bash %q' "$runner"
     # If the session will not start, the branch and worktree must not
     # survive it: every retry would then refuse with "already spawned" for
@@ -744,8 +827,8 @@ keeler-spawn SPEC TASK:
     echo "  worktree: $worktree"
     echo "  session:  tmux attach -t $session   (a view, not a seat: claude -p is not interactive)"
     echo "  log:      $log_file"
-    echo "  verdict:  $exit_file   (the exit code of just keeler-branch, once the run ends)"
-    echo "  board:    just keeler-status $rel"
+    echo "  verdict:  $exit_file   (the exit code of keeler keeler-branch, once the run ends)"
+    echo "  board:    keeler keeler-status $rel"
 
 # "Running" is tmux's answer, never the absence of a file; a task with no
 # verdict at all died before its gate ever ran, which is a different thing
@@ -789,7 +872,7 @@ keeler-status SPEC:
         echo "keeler-status: $rel is not committed on $graph_ref — there is no graph to report against." >&2
         exit 1
     fi
-    report="$(bash "$root/scripts/keeler-graph.sh" "$graph_copy/$(basename "$spec_abs")")"
+    report="$(bash "{{justfile_directory()}}/scripts/keeler-graph.sh" "$graph_copy/$(basename "$spec_abs")")"
     while read -r id graph_state _rest; do
         [ -n "$id" ] || continue
         tid="$(printf '%s' "$id" | tr '[:upper:]' '[:lower:]')"
@@ -818,7 +901,7 @@ keeler-status SPEC:
             ticked=no
             branch_copy="$(mktemp -d)"
             if git show "$branch:$rel" > "$branch_copy/$(basename "$spec_abs")" 2>/dev/null; then
-                branch_state="$(bash "$root/scripts/keeler-graph.sh" "$branch_copy/$(basename "$spec_abs")" 2>/dev/null | awk -v id="$id" '$1 == id { print $2 }')"
+                branch_state="$(bash "{{justfile_directory()}}/scripts/keeler-graph.sh" "$branch_copy/$(basename "$spec_abs")" 2>/dev/null | awk -v id="$id" '$1 == id { print $2 }')"
                 [ "$branch_state" = done ] && ticked=yes
             fi
             rm -rf "$branch_copy"
@@ -868,7 +951,7 @@ keeler-status SPEC:
         # project's first six spawns ended that way — so the board offers
         # the way back rather than leaving it to be remembered.
         if [ "$state" = died ]; then
-            printf '       resume with: just keeler-resume %s %s\n' "$rel" "$id"
+            printf '       resume with: keeler keeler-resume %s %s\n' "$rel" "$id"
         fi
         case "$state" in
             failed*)
@@ -890,7 +973,7 @@ keeler-status SPEC:
 # Nothing new is created: the task picks up in the tree it already has,
 # and the commits already on the branch are how far it got.
 #
-# Graph mode: re-run a task whose session died — `just keeler-resume specs/01-foo.md T3`.
+# Graph mode: re-run a task whose session died — `keeler keeler-resume specs/01-foo.md T3`.
 keeler-resume SPEC TASK:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -916,7 +999,7 @@ keeler-resume SPEC TASK:
     branch="keeler/$slug/$tid"
     worktree="$(dirname "$root")/$(basename "$root")-$slug-$tid"
     if [ ! -f "$runner" ]; then
-        echo "keeler-resume: $task was never spawned — there is no run to resume; use just keeler-spawn $spec $task" >&2
+        echo "keeler-resume: $task was never spawned — there is no run to resume; use keeler keeler-spawn $spec $task" >&2
         exit 1
     fi
     if tmux has-session -t "=$session" 2>/dev/null; then
@@ -930,7 +1013,7 @@ keeler-resume SPEC TASK:
     # The graph decides what is done, here as everywhere: a task that
     # landed is not resumable, and keeler-land leaves the runner behind
     # whenever its cleanup was skipped.
-    state="$(bash "$root/scripts/keeler-graph.sh" "$spec_abs" | awk -v id="$task" '$1 == id { print $2 }')"
+    state="$(bash "{{justfile_directory()}}/scripts/keeler-graph.sh" "$spec_abs" | awk -v id="$task" '$1 == id { print $2 }')"
     if [ "$state" = done ]; then
         echo "keeler-resume: $task is done — there is nothing to resume; its work landed already" >&2
         exit 1
@@ -947,7 +1030,8 @@ keeler-resume SPEC TASK:
     # earlier recipe carries every defect that recipe had. The worktree,
     # the branch and the log are what a resume keeps.
     rel="${spec_abs#"$root/"}"
-    just _write-runner "$rel" "$task" "$branch" "$worktree" "$runner" \
+    just --justfile "{{justfile()}}" --working-directory . _write-runner \
+        "$rel" "$task" "$branch" "$worktree" "$runner" \
         "$root/.keeler/runs/$slug/$tid.exit" \
         "$root/.keeler/runs/$slug/$tid.log" \
         "$root/.keeler/runs/$slug/$tid.stream"
@@ -955,7 +1039,7 @@ keeler-resume SPEC TASK:
     tmux new-session -d -s "$session" -c "$worktree" "$run_cmd"
     echo "  worktree: $worktree"
     echo "  session:  tmux attach -t '=$session'"
-    echo "  board:    just keeler-status $spec"
+    echo "  board:    keeler keeler-status $spec"
 # The wave is what is ready and not yet spawned: `keeler-graph`'s ready
 # tasks minus the ones `keeler-status` already knows — running, died,
 # passed or failed but not landed — and this recipe computes neither. It
@@ -994,26 +1078,28 @@ keeler-resume SPEC TASK:
 # `tmux attach` on one still works, closing the view kills nothing — so a
 # view that cannot be built is reported and leaves the exit code alone.
 #
-# Graph mode: name every ready, unspawned task and ask for the one yes that spawns the wave — `just keeler-fan-out specs/01-foo.md`.
+# Graph mode: name every ready, unspawned task and ask for the one yes that spawns the wave — `keeler keeler-fan-out specs/01-foo.md`.
 keeler-fan-out SPEC:
     #!/usr/bin/env bash
     set -euo pipefail
     spec="$SPEC"
     # The same guards keeler-spawn fires, before a wave is printed — run
-    # by the just that is running this recipe, as keeler-spawn runs them.
+    # against this file, as keeler-spawn runs them. A function and not a
+    # variable holding the words: `just` has to be the first token of a
+    # command for the stubs the tests put on PATH to see the call at all.
     # The preflight's report is discarded: once it passes, the working
     # tree's spec is the feature branch's, and `keeler-graph` reads that
     # same graph in the words this recipe prints — a blocked task with what
     # it waits on.
-    just="{{just_executable()}}"
-    "$just" -q _spawn-preflight "$spec" >/dev/null
+    keeler_recipe() { just --justfile "{{justfile()}}" --working-directory . "$@"; }
+    keeler_recipe -q _spawn-preflight "$spec" >/dev/null
     # One name for the wave's own things, derived the way every other name
     # in graph mode is: the spec's file name, which the preflight has just
     # established is a file inside this repository.
     root="$(git rev-parse --show-toplevel)"
     slug="$(basename "$spec" .md)"
-    graph="$("$just" keeler-graph "$spec")"
-    board="$("$just" keeler-status "$spec")"
+    graph="$(keeler_recipe keeler-graph "$spec")"
+    board="$(keeler_recipe keeler-status "$spec")"
     echo "keeler-fan-out: $spec on $(git symbolic-ref --quiet --short HEAD)"
     wave=""
     while read -r id state rest; do
@@ -1059,7 +1145,7 @@ keeler-fan-out SPEC:
         # nobody to ask.
         if ! IFS= read -r -t 5 answer; then
             echo
-            echo "keeler-fan-out: nobody to ask — stdin is not a terminal and KEELER_FAN_OUT_YES is unset. Ask from a terminal, or answer in advance: KEELER_FAN_OUT_YES=1 just keeler-fan-out $spec" >&2
+            echo "keeler-fan-out: nobody to ask — stdin is not a terminal and KEELER_FAN_OUT_YES is unset. Ask from a terminal, or answer in advance: KEELER_FAN_OUT_YES=1 keeler keeler-fan-out $spec" >&2
             exit 1
         fi
         echo "$answer"
@@ -1089,7 +1175,7 @@ keeler-fan-out SPEC:
         # still standing — and the tasks after it are unaffected. So the
         # loop records the outcome and goes on, and the exit code at the end
         # is what says a spawn refused.
-        if "$just" keeler-spawn "$spec" "$id"; then
+        if keeler_recipe keeler-spawn "$spec" "$id"; then
             spawned="$spawned${spawned:+ }$id"
         else
             refused="$refused${refused:+ }$id"
@@ -1115,7 +1201,7 @@ keeler-fan-out SPEC:
             mkdir -p "$runs" || return 1
             cat > "$pane_runner" <<'WAVE' || return 1
     #!/usr/bin/env bash
-    # Written by 'just keeler-fan-out' — one pane of the wave view:
+    # Written by 'keeler keeler-fan-out' — one pane of the wave view:
     #     bash wave.sh keeler-<spec-slug>-<task>
     # The target is exact: tmux matches a bare name as a prefix, and
     # keeler-<spec-slug> is a prefix of every task's session. TMUX= because
@@ -1183,7 +1269,7 @@ keeler-fan-out SPEC:
             echo "  wave:     tmux attach -t '=$view'   (one pane per run; closing it kills nothing)"
         fi
     fi
-    echo "  board:    just keeler-status $spec"
+    echo "  board:    keeler keeler-status $spec"
     if [ -n "$refused" ]; then
         # What went out is the line above, and it says `nothing` when the
         # whole wave refused: this one names what did not, and claims
@@ -1192,14 +1278,10 @@ keeler-fan-out SPEC:
         exit 1
     fi
 
-# Upgrade Keeler itself (KEELER_REF=v0.4.0 just keeler-upgrade to pin a tag)
-keeler-upgrade:
-    curl -fsSL https://raw.githubusercontent.com/minikin/keeler/main/install.sh | bash -s .
-
 # Landing happens twice, and the branch says which one this is. On the
-# feature branch feat/<spec-slug>: `just dev`, then each landed task's
+# feature branch feat/<spec-slug>: `keeler dev`, then each landed task's
 # clean worktree and branch are removed — that is where tasks fan out
-# from and where their leftovers belong. On main: `just dev`, then the
+# from and where their leftovers belong. On main: `keeler dev`, then the
 # baseline is regenerated and staged, and a spec whose every box is
 # ticked — as committed, never as the working tree happens to read — gets
 # `Status: Implemented` staged beside it for the same human commit. The
@@ -1239,7 +1321,7 @@ keeler-land:
         echo "keeler-land: graph mode needs a git repository — its branches, worktrees and refs all live in one." >&2
         exit 1
     fi
-    main_ref="$(just _main-ref)"
+    main_ref="$(just --justfile "{{justfile()}}" --working-directory . _main-ref)"
     main_branch="${main_ref##*/}"
     current="$(git symbolic-ref --quiet --short HEAD || echo 'a detached HEAD')"
     # Landing happens twice, and the branch says which one this is. A task
@@ -1257,12 +1339,12 @@ keeler-land:
             exit 1
             ;;
     esac
-    if ! just dev; then
+    if ! just --justfile "{{justfile()}}" --working-directory . dev; then
         echo "keeler-land: $current is red after fan-in — branches that were green alone are wrong together. Nothing is staged and nothing is removed; fix or revert, then land again." >&2
         exit 1
     fi
     if [ "$level" = main ]; then
-        just crap-baseline
+        just --justfile "{{justfile()}}" --working-directory . crap-baseline
         # Staged, never committed: the rules say no commit without the
         # human's word, and a moved baseline is a decision worth a diff
         # someone reads.
@@ -1277,7 +1359,7 @@ keeler-land:
     # Fan-in, part two: a spec whose every box is ticked is finished, and a
     # landed task's worktree is litter. Readiness is the graph script's
     # answer here as it is everywhere else — one parser reads the format,
-    # so this recipe and `just keeler-graph` cannot disagree about which
+    # so this recipe and `keeler keeler-graph` cannot disagree about which
     # tasks are done.
     # git's own reason, relayed: a checkout owned by another user
     # fails here too, and its message is the one carrying the fix.
@@ -1301,7 +1383,7 @@ keeler-land:
         fi
         # A spec the parser refuses is one nothing here may act on: not
         # marked, not cleaned up after. Say so and leave it alone.
-        if ! report="$(bash "$root/scripts/keeler-graph.sh" "$spec" 2>&1)"; then
+        if ! report="$(bash "{{justfile_directory()}}/scripts/keeler-graph.sh" "$spec" 2>&1)"; then
             echo "keeler-land: $rel does not parse as a graph, so it is left exactly as it is:" >&2
             printf '%s\n' "$report" >&2
             continue

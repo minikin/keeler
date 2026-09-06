@@ -53,8 +53,7 @@ fn task_branch(name: &str) -> (Repo, String, String) {
 fn review_leaves_evidence() {
     // Given a task branch ready for fan-in
     // When the review stage's command is read
-    let review =
-        std::fs::read_to_string(repo_root().join(".claude/commands/keeler/review.md")).unwrap();
+    let review = std::fs::read_to_string(repo_root().join("commands/review.md")).unwrap();
 
     // Then it instructs writing reviews/<spec-slug>/<task-id>.md ...
     assert!(

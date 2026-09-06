@@ -129,11 +129,15 @@ mod wave {
     exit 0
     "#;
 
-    /// Stands in for the two gates a fixture cannot run — `just
-    /// keeler-branch`, which a spawned run ends with, and `just dev`, which
-    /// `keeler-land` opens with. Everything else is the real `just`.
+    /// Stands in for the two gates a fixture cannot run — `keeler-branch`,
+    /// which a spawned run ends with, and `dev`, which `keeler-land` opens
+    /// with. Everything else is the real `just`. The recipe is the *last*
+    /// argument: every call names the plugin's Justfile first, so a stub
+    /// keyed on `$1` would see a flag and run the real gate.
     const JUST_STUB: &str = r#"#!/usr/bin/env bash
-    case "${1:-}" in
+    recipe=""
+    for a in "$@"; do recipe="$a"; done
+    case "$recipe" in
     keeler-branch)
         echo "keeler-branch stub: the gate ran"
         exit "${KEELER_STUB_BRANCH_EXIT:-0}"
@@ -1557,9 +1561,9 @@ mod wave {
 
     #[test]
     fn no_command_file_sets_the_yes_in_advance() {
-        // Given every command file under .claude/commands/
+        // Given every command file the plugin ships
         let mut files = Vec::new();
-        collect_files(&repo_root().join(".claude/commands"), &mut files);
+        collect_files(&repo_root().join("commands"), &mut files);
         assert!(!files.is_empty(), "no command files found");
 
         // Then none of them sets KEELER_FAN_OUT_YES: the zero-yes path is the
@@ -1819,9 +1823,7 @@ mod fork {
 
     /// A shipped command file, read as the agent reads it.
     fn command(name: &str) -> String {
-        let path = repo_root()
-            .join(".claude/commands/keeler")
-            .join(format!("{name}.md"));
+        let path = repo_root().join("commands").join(format!("{name}.md"));
         std::fs::read_to_string(&path)
             .unwrap_or_else(|why| panic!("cannot read {}: {why}", path.display()))
     }
@@ -1939,17 +1941,18 @@ mod fork {
 
         // And the command file instructs running that recipe on "graph", then
         // /keeler:tasks, then the next steps in order: commit the graph, then
-        // `just keeler-fan-out <spec>`
+        // `keeler keeler-fan-out <spec>` — spelled through the wrapper since
+        // spec 09, because the project the human runs it in has no justfile
         // The order is the instruction: each step is looked for in what
         // follows the one before it, so a hand-off that names the wave before
         // the graph is committed fails here rather than reads as present.
         let spec_command = unwrapped(&command("spec"));
         let mut at = 0;
         for said in [
-            "just keeler-feature-branch",
+            "keeler keeler-feature-branch",
             "/keeler:tasks",
             "commit the graph",
-            "just keeler-fan-out",
+            "keeler keeler-fan-out",
         ] {
             let found = spec_command[at..].find(said).unwrap_or_else(|| {
                 panic!("spec.md's graph answer does not say `{said}` where it belongs, in order")
@@ -2169,8 +2172,8 @@ mod fork {
 
     #[test]
     fn the_rules_describe_the_fork_and_the_wave() {
-        // Given the shipped rules and KEELER.md
-        for name in [".claude/keeler.md", "KEELER.md"] {
+        // Given the graph-mode chapter the rules point at, and the guide
+        for name in ["graph-mode.md", "docs/KEELER.md"] {
             let text = std::fs::read_to_string(repo_root().join(name)).unwrap();
 
             // Then the graph-mode day names both commands in the steps a human
@@ -2243,7 +2246,7 @@ mod fork {
             .find("graph")
             .expect("/keeler:feature never mentions the graph answer");
         let after = &unwrapped[fork..];
-        for said in ["/keeler:tasks", "commit the graph", "just keeler-fan-out"] {
+        for said in ["/keeler:tasks", "commit the graph", "keeler keeler-fan-out"] {
             assert!(
                 after.contains(said),
                 "/keeler:feature's graph answer never says `{said}`:\n{after}",

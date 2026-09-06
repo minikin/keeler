@@ -2,21 +2,24 @@
 
 This file provides guidance to Claude Code when working with code in this repository.
 
-The Keeler workflow rules live in their own file so they can be updated
-without touching your project's instructions:
+The Keeler workflow rules live in their own file — the plugin's, at the
+root of this repository, which is the plugin. In an adopting project the
+`SessionStart` hook prints it; here the import below does the same job:
 
-@.claude/keeler.md
+@keeler.md
 
-Those rules are the law. [KEELER.md](KEELER.md) says why they are shaped
-that way, and [README.md](README.md) is the front door — install, first day,
-and what Keeler is not. What follows here is this repository only.
+Those rules are the law, and two chapters sit beside them in the plugin
+root: [graph-mode.md](graph-mode.md) and [gates.md](gates.md).
+[docs/KEELER.md](docs/KEELER.md) says why they are shaped that way, and
+[README.md](README.md) is the front door — install, first day, and what
+Keeler is not. What follows here is this repository only.
 
 <!-- Add project-specific instructions below this line. -->
 
 ## How this repository diverges from the rules it ships
 
-`.claude/keeler.md` is the deliverable: it is written for the projects
-Keeler installs into, and says nothing about Keeler itself. The places
+`keeler.md` is the deliverable: it is written for the projects Keeler is
+installed into, and says nothing about Keeler itself. The places
 where this repository cannot follow its own rules literally are recorded
 here instead — project-specific instructions, in the file meant for them.
 

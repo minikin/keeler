@@ -151,11 +151,7 @@ pub fn disagreements(
     if tag != format!("v{version}") {
         found.push(format!("tag {tag} disagrees with VERSION {version}"));
     }
-    if marker != version {
-        found.push(format!(
-            "rules-file marker '{marker}' disagrees with VERSION {version}"
-        ));
-    }
+    found.extend(crate::plugin::marker_disagreement(marker, version));
     if !has_section(changelog, version) {
         found.push(format!("CHANGELOG.md has no section for {version}"));
     }

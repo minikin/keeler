@@ -71,9 +71,16 @@ fn real_just() -> &'static str {
 /// every call so the order they ran in — or did not run in — is
 /// assertable. Everything else is the real `just`, so the recipe's own
 /// helpers still work.
+///
+/// The recipe is the *last* argument, and the one recorded: the Justfile
+/// ships in the plugin and every self-call names it first — `just
+/// --justfile <plugin> --working-directory . dev` — so a stub keyed on
+/// `$1` would see a flag and hand the whole gate to the real `just`.
 const JUST_STUB: &str = r#"#!/usr/bin/env bash
-printf '%s\n' "$*" >> "$KEELER_STUB_JUST_LOG"
-case "${1:-}" in
+recipe=""
+for a in "$@"; do recipe="$a"; done
+printf '%s\n' "$recipe" >> "$KEELER_STUB_JUST_LOG"
+case "$recipe" in
 dev)
     echo "dev stub: the full gate ran"
     exit "${KEELER_STUB_DEV_EXIT:-0}"
@@ -1379,10 +1386,14 @@ fn main_is_resolved_in_one_place() {
     }
 }
 
-/// One recipe's lines — from its header to the next unindented line.
+/// One recipe's lines — from its header to the next unindented line. The
+/// name is matched up to whatever follows it, so a recipe that grows a
+/// parameter stays findable rather than reading as one that vanished.
 fn recipe_body(justfile: &str, recipe: &str) -> String {
-    let header = format!("{recipe}:");
-    let mut lines = justfile.lines().skip_while(|line| *line != header);
+    let mut lines = justfile.lines().skip_while(|line| {
+        line.strip_prefix(recipe)
+            .is_none_or(|rest| !(rest.starts_with(':') || rest.starts_with(' ')))
+    });
     let first = lines
         .next()
         .unwrap_or_else(|| panic!("the Justfile has no `{recipe}` recipe"));

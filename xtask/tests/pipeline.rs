@@ -352,9 +352,9 @@ fn release_guard(root: &Path, tag: &str) -> std::process::Output {
 /// The release-relevant corner of a repository at 1.2.3, with every version
 /// it states agreeing — so the only thing left for the guard to refuse is
 /// the pipeline.
-const RELEASABLE: [(&str, &str); 4] = [
+const RELEASABLE: [(&str, &str); 6] = [
     ("VERSION", "1.2.3\n"),
-    (".claude/keeler.md", "<!-- keeler-version: 1.2.3 -->\n"),
+    ("keeler.md", "<!-- keeler-version: 1.2.3 -->\n"),
     (
         "CHANGELOG.md",
         "# Changelog\n\n## [1.2.3] — 2026-01-01\n\n- an entry\n",
@@ -362,6 +362,16 @@ const RELEASABLE: [(&str, &str); 4] = [
     (
         "Cargo.toml",
         "[package]\nname = \"fixture\"\nversion = \"1.2.3\"\n",
+    ),
+    // A repository being released is the plugin, and spec 09 made the guard
+    // check its manifests too.
+    (
+        ".claude-plugin/plugin.json",
+        "{ \"name\": \"keeler\", \"version\": \"1.2.3\" }\n",
+    ),
+    (
+        ".claude-plugin/marketplace.json",
+        "{ \"plugins\": [ { \"name\": \"keeler\", \"version\": \"1.2.3\" } ] }\n",
     ),
 ];
 

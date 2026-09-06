@@ -274,15 +274,112 @@ fn the_verification_story_is_documented_where_adopters_look() {
     );
 }
 
+/// The body of a Markdown section: its heading, then everything down to the
+/// next heading of the same depth or shallower. Reading the whole README
+/// instead would let a mention anywhere in the file satisfy an assertion
+/// about the Install section — which is where a reader who has just landed
+/// stops, and so the one place the plugin has to be named.
+///
+/// Fenced blocks are skipped rather than read as prose: the Install
+/// section's own example opens with a `# pin a release` comment, which taken
+/// for a heading ends the section a few lines into it — and an assertion
+/// about anything below the fence would then fail saying the words are
+/// missing when they are there.
+fn section<'a>(doc: &'a str, heading: &str) -> &'a str {
+    let depth = heading.chars().take_while(|c| *c == '#').count();
+    let mut start = None;
+    let mut fenced = false;
+    let mut offset = 0;
+    for line in doc.lines() {
+        let here = offset;
+        offset += line.len() + 1;
+        if line.starts_with("```") {
+            fenced = !fenced;
+            continue;
+        }
+        if fenced {
+            continue;
+        }
+        match start {
+            // The whole line, not a substring: `## Install` is also the
+            // opening of `## Installing from source`, and matching that
+            // would hand back a section nobody asked about.
+            None => {
+                if line == heading {
+                    start = Some(here);
+                }
+            }
+            Some(start) => {
+                let hashes = line.chars().take_while(|c| *c == '#').count();
+                if hashes > 0 && hashes <= depth && line[hashes..].starts_with(' ') {
+                    return &doc[start..here];
+                }
+            }
+        }
+    }
+    &doc[start.unwrap_or_else(|| panic!("README.md has no `{heading}` section"))..]
+}
+
+#[test]
+fn the_readme_leads_with_the_plugin() {
+    // Given the repository's README.md Install section
+    let readme = std::fs::read_to_string(repo_root().join("README.md")).unwrap();
+    let install = section(&readme, "## Install");
+
+    // Then it names the two lines that install the plugin, and the command
+    // that prepares a project afterwards
+    for named in [
+        "/plugin marketplace add minikin/keeler",
+        "/plugin install keeler@keeler",
+        "/keeler:init",
+    ] {
+        assert!(
+            install.contains(named),
+            "README's Install section does not name `{named}`:\n{install}",
+        );
+    }
+
+    // And it still shows the installer one-liner `/keeler:init` runs, for
+    // the reader who has no Claude Code in front of them
+    assert!(
+        install.contains("curl -fsSL"),
+        "README's Install section no longer shows what /keeler:init runs:\n{install}",
+    );
+
+    // And it lists `keeler --list` as where the recipes are — they are in
+    // the plugin now, so `just` in the project answers nothing
+    assert!(
+        readme.contains("keeler --list"),
+        "README never says where the recipes are listed",
+    );
+
+    // And its ratcheting section moves the bars through the variables the
+    // recipes read, not by editing a recipe no longer in the project
+    let ratchet = section(&readme, "### Adopting it in an existing codebase");
+    for bar in ["KEELER_COV_MIN", "KEELER_CRAP_MAX"] {
+        assert!(
+            ratchet.contains(bar),
+            "README's ratcheting section does not name `{bar}`:\n{ratchet}",
+        );
+    }
+
+    // And nothing still sends a reader to the upgrade recipe spec 09
+    // deleted: `/plugin update` is the upgrade
+    assert!(
+        !readme.contains("keeler-upgrade"),
+        "README still points at the recipe that was removed",
+    );
+}
+
 /// A directory shaped like the repo's release-relevant corner: VERSION,
 /// the rules-file marker, and a CHANGELOG with the version's section.
 fn release_fixture(name: &str, version: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("keeler-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(dir.join(".claude")).unwrap();
+    std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("VERSION"), format!("{version}\n")).unwrap();
     std::fs::write(
-        dir.join(".claude/keeler.md"),
+        dir.join("keeler.md"),
         format!("<!-- keeler-version: {version} -->\n# rules\n"),
     )
     .unwrap();
@@ -296,6 +393,20 @@ fn release_fixture(name: &str, version: &str) -> PathBuf {
     std::fs::write(
         dir.join("Cargo.toml"),
         format!("[package]\nname = \"fixture\"\nversion = \"{version}\"\n"),
+    )
+    .unwrap();
+    // And it is a plugin, whose two manifests spec 09 made the guard read:
+    // `/plugin update` compares plugin.json's version, so a release that
+    // left it behind installs nothing and says so nowhere.
+    std::fs::create_dir_all(dir.join(".claude-plugin")).unwrap();
+    std::fs::write(
+        dir.join(".claude-plugin/plugin.json"),
+        format!("{{ \"name\": \"keeler\", \"version\": \"{version}\" }}\n"),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join(".claude-plugin/marketplace.json"),
+        format!("{{ \"plugins\": [ {{ \"name\": \"keeler\", \"version\": \"{version}\" }} ] }}\n"),
     )
     .unwrap();
     // And it has specs, which spec 08 made the guard read: a release goes

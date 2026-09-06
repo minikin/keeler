@@ -8,6 +8,7 @@ pub mod changelog;
 pub mod checksum;
 pub mod guard;
 pub mod pipeline;
+pub mod plugin;
 
 /// What `cargo xtask` prints when asked what it can do.
 #[must_use]
@@ -16,7 +17,8 @@ pub fn usage() -> String {
      release-notes <version> <changelog>   print one version's notes\n  \
      checksum <file>                       print its sha256 checksum line\n  \
      release-guard <tag>                   refuse a tag that lies\n  \
-     pipeline-check                        refuse a tick no review accounts for\n"
+     pipeline-check                        refuse a tick no review accounts for\n  \
+     plugin-check                          refuse a plugin that lies about its version\n"
         .to_string()
 }
 
@@ -40,13 +42,14 @@ type Command = fn(&std::path::Path, &[String]) -> Result<String, Failure>;
 /// command charges that growth to whichever change adds the next one, and
 /// the CRAP ratchet measures per function — a gate that gets harder to pass
 /// the more commands exist is a gate that punishes the wrong thing.
-const COMMANDS: [(&str, Command); 6] = [
+const COMMANDS: [(&str, Command); 7] = [
     ("--help", |_, _| Ok(usage())),
     ("-h", |_, _| Ok(usage())),
     ("release-notes", |_, args| release_notes_command(args)),
     ("checksum", |_, args| checksum_command(args)),
     ("release-guard", release_guard_command),
     ("pipeline-check", pipeline_check_command),
+    ("plugin-check", plugin_check_command),
 ];
 
 /// Runs one command and returns what it should print.
@@ -143,21 +146,87 @@ fn release_guard_command(root: &std::path::Path, args: &[String]) -> Result<Stri
     };
     let at = |name: &str| root.join(name).display().to_string();
     let version = read(&at("VERSION"))?.trim().to_string();
-    let rules = read(&at(".claude/keeler.md"))?;
+    let rules = read(&at(plugin::RULES))?;
     let marker = guard::marker(&rules).unwrap_or_default().to_string();
     let changelog = read(&at("CHANGELOG.md"))?;
 
     let manifests = declared_versions(root)?;
     let mut found = guard::disagreements(tag, &version, &marker, &changelog, &manifests);
     found.extend(skipped_pipeline(root));
+    found.extend(unbumped_plugin(root, &version));
     if found.is_empty() {
         return Ok(format!(
-            "v{version} is consistent — tag, VERSION, marker, CHANGELOG \
+            "v{version} is consistent — tag, VERSION, marker, CHANGELOG, the plugin \
              and {} manifest(s) agree, and every ticked task is accounted for",
             manifests.len(),
         ));
     }
     Err(format!("refusing to release:\n  {}", found.join("\n  ")).into())
+}
+
+/// What the plugin check refuses this repository for, phrased for someone
+/// who came here to cut a release.
+///
+/// Folded into the guard's list for the reason `skipped_pipeline` is: the
+/// release stops either way, and one trip round the loop should fix
+/// everything wrong with it. The rules marker is not among these — the
+/// guard reports that itself, one line above, and a reader told twice goes
+/// looking for a second file that does not exist.
+fn unbumped_plugin(root: &std::path::Path, version: &str) -> Vec<String> {
+    match plugin_files(root) {
+        Ok((manifest, marketplace, rules)) => {
+            plugin::disagreements(version, &manifest, &marketplace, &rules)
+        }
+        Err(why) => vec![format!("the plugin check could not run: {why}")],
+    }
+}
+
+/// The three files the plugin check reads: the manifest, the marketplace,
+/// and the rules the `SessionStart` hook has to carry.
+fn plugin_files(root: &std::path::Path) -> Result<(String, String, String), Failure> {
+    let at = |name: &str| root.join(name).display().to_string();
+    Ok((
+        read(&at(plugin::MANIFEST))?,
+        read(&at(plugin::MARKETPLACE))?,
+        read(&at(plugin::RULES))?,
+    ))
+}
+
+/// `plugin-check`, against the plugin rooted at `root`.
+///
+/// Everything a release would ship silently wrong: a manifest `/plugin
+/// update` compares and finds unchanged, and rules the `SessionStart` hook
+/// would file away and replace with a preview.
+fn plugin_check_command(root: &std::path::Path, args: &[String]) -> Result<String, Failure> {
+    if !args.is_empty() {
+        return Err("usage: plugin-check".into());
+    }
+    let version = read(&root.join("VERSION").display().to_string())?
+        .trim()
+        .to_string();
+    let (manifest, marketplace, rules) = plugin_files(root)?;
+
+    let marker = guard::marker(&rules).unwrap_or_default();
+    let mut found: Vec<String> = plugin::marker_disagreement(marker, &version)
+        .into_iter()
+        .collect();
+    found.extend(plugin::disagreements(
+        &version,
+        &manifest,
+        &marketplace,
+        &rules,
+    ));
+    if found.is_empty() {
+        return Ok(format!(
+            "plugin-check: {}, {} and {} all say {version}, and the rules are {} bytes of {}",
+            plugin::MANIFEST,
+            plugin::MARKETPLACE,
+            plugin::RULES,
+            rules.len(),
+            plugin::CEILING,
+        ));
+    }
+    Err(format!("refusing this plugin:\n  {}", found.join("\n  ")).into())
 }
 
 /// What the pipeline gate refuses this repository for, phrased for someone
@@ -272,7 +341,9 @@ fn checksum_command(args: &[String]) -> Result<String, Failure> {
 
 #[cfg(test)]
 mod tests {
-    use super::{pipeline_check_command, release_guard_command, run, usage};
+    use super::{
+        pipeline_check_command, plugin, plugin_check_command, release_guard_command, run, usage,
+    };
 
     fn fixture(name: &str, content: &str) -> std::path::PathBuf {
         let path = std::env::temp_dir().join(format!("xtask-{name}-{}", std::process::id()));
@@ -371,10 +442,10 @@ mod tests {
     ) -> std::path::PathBuf {
         let root = std::env::temp_dir().join(format!("xtask-guard-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(root.join(".claude")).unwrap();
+        std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("VERSION"), format!("{version}\n")).unwrap();
         std::fs::write(
-            root.join(".claude/keeler.md"),
+            root.join("keeler.md"),
             format!("<!-- keeler-version: {marker} -->\n"),
         )
         .unwrap();
@@ -393,9 +464,23 @@ mod tests {
             format!("[package]\nname = \"member\"\nversion = \"{version}\"\n"),
         )
         .unwrap();
-        // A repository being released has specs, and the guard runs the
-        // pipeline gate over them — a fixture without any is not a
-        // repository, the same reason it carries a manifest above.
+        // A repository being released is the plugin, and the guard runs the
+        // plugin check over its manifests — a fixture without them is not
+        // one, the same reason it carries a Cargo.toml above.
+        std::fs::create_dir_all(root.join(".claude-plugin")).unwrap();
+        std::fs::write(
+            root.join(plugin::MANIFEST),
+            format!("{{ \"name\": \"keeler\", \"version\": \"{version}\" }}\n"),
+        )
+        .unwrap();
+        std::fs::write(
+            root.join(plugin::MARKETPLACE),
+            format!(
+                "{{ \"plugins\": [ {{ \"name\": \"keeler\", \"version\": \"{version}\" }} ] }}\n"
+            ),
+        )
+        .unwrap();
+        // And it has specs, and the guard runs the pipeline gate over them.
         std::fs::create_dir_all(root.join("specs")).unwrap();
         std::fs::write(
             root.join("specs/01-fixture.md"),
@@ -893,6 +978,142 @@ mod tests {
             "a command nobody is told about: {}",
             usage(),
         );
+    }
+
+    #[test]
+    fn the_usage_lists_the_plugin_check() {
+        assert!(
+            usage().contains("plugin-check"),
+            "a command nobody is told about: {}",
+            usage(),
+        );
+    }
+
+    #[test]
+    fn plugin_check_says_what_it_compared() {
+        // A gate whose message does not name what it read is one nobody
+        // knows they are relying on — and one nobody notices has stopped.
+        let root = repo_fixture("plugin-ok", "1.2.3", "1.2.3", "## [1.2.3]\n\n- shipped\n");
+        let out = plugin_check_command(&root, &[]).unwrap();
+        for expected in [
+            plugin::MANIFEST,
+            plugin::MARKETPLACE,
+            plugin::RULES,
+            "1.2.3",
+        ] {
+            assert!(out.contains(expected), "`{expected}` missing from: {out}");
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn plugin_check_lists_every_disagreement_at_once() {
+        // Three things wrong, one trip round the loop to fix them: the
+        // marker, both manifests — the same rule the release guard follows.
+        let root = repo_fixture("plugin-bad", "0.5.0", "0.4.1", "## [0.5.0]\n\n- shipped\n");
+        std::fs::write(
+            root.join(plugin::MANIFEST),
+            "{ \"name\": \"keeler\", \"version\": \"0.4.1\" }\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join(plugin::MARKETPLACE),
+            "{ \"plugins\": [ { \"name\": \"keeler\", \"version\": \"0.4.1\" } ] }\n",
+        )
+        .unwrap();
+
+        let error = plugin_check_command(&root, &[]).unwrap_err().to_string();
+        for expected in [
+            plugin::MANIFEST,
+            plugin::MARKETPLACE,
+            plugin::RULES,
+            "0.4.1",
+        ] {
+            assert!(
+                error.contains(expected),
+                "`{expected}` missing from: {error}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn plugin_check_takes_no_arguments() {
+        let error = plugin_check_command(std::path::Path::new("."), &["keeler.md".into()])
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("plugin-check"), "no usage in: {error}");
+    }
+
+    #[test]
+    fn plugin_check_names_a_file_it_cannot_read() {
+        // Including one that is simply not there: a repository with no
+        // plugin manifest is not a plugin, and the check must say which
+        // file it went looking for rather than passing for lack of input.
+        let root = repo_fixture("plugin-gone", "1.2.3", "1.2.3", "## [1.2.3]\n\n- shipped\n");
+        std::fs::remove_file(root.join(plugin::MANIFEST)).unwrap();
+
+        let error = plugin_check_command(&root, &[]).unwrap_err().to_string();
+        assert!(
+            error.contains(plugin::MANIFEST),
+            "the failure does not name the file: {error}",
+        );
+
+        // And the release guard refuses over the same absence rather than
+        // releasing a plugin it could not check
+        let error = release_guard_command(&root, &["v1.2.3".into()])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("plugin check could not run") && error.contains(plugin::MANIFEST),
+            "the guard released over a check that never ran: {error}",
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_release_over_an_unbumped_plugin_is_refused() {
+        // Everything else agrees; the manifest `/plugin update` compares
+        // was left behind. Nobody who asks for the update gets one, and
+        // nothing but this says so.
+        let root = repo_fixture(
+            "plugin-stale",
+            "1.2.3",
+            "1.2.3",
+            "## [1.2.3]\n\n- shipped\n",
+        );
+        std::fs::write(
+            root.join(plugin::MANIFEST),
+            "{ \"name\": \"keeler\", \"version\": \"0.0.1\" }\n",
+        )
+        .unwrap();
+
+        let error = release_guard_command(&root, &["v1.2.3".into()])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains(plugin::MANIFEST) && error.contains("0.0.1"),
+            "the refusal does not name the manifest and its version: {error}",
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn the_release_guard_reports_the_rules_marker_once() {
+        // The one fact both gates read. Reported twice, it sends the reader
+        // looking for a second file to fix; there is one.
+        let root = repo_fixture(
+            "plugin-marker",
+            "1.2.3",
+            "0.0.1",
+            "## [1.2.3]\n\n- shipped\n",
+        );
+        let error = release_guard_command(&root, &["v1.2.3".into()])
+            .unwrap_err()
+            .to_string();
+        let named = error.lines().filter(|line| line.contains("marker")).count();
+        assert_eq!(named, 1, "the marker is reported {named} times: {error}");
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

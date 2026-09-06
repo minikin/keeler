@@ -16,7 +16,8 @@ use std::process::{Command, Output};
 use std::sync::OnceLock;
 
 use common::{
-    Repo, checks_out_full_history, job_block, repo_root, run_script, said, shipped_workflow,
+    Repo, checks_out_full_history, indent_of, job_block, job_names, repo_root, run_script, said,
+    shipped_workflow, step_block,
 };
 
 /// The task branch every fixture here runs on — the shape `keeler-spawn`
@@ -44,11 +45,18 @@ fn real_just() -> &'static str {
 
 /// Stands in for the three gates `keeler-branch` composes, recording the
 /// order it was asked for them in. Everything else is the real `just`.
+///
+/// The recipe is the *last* argument, not the first: the Justfile ships in
+/// the plugin and every self-call names it — `just --justfile <plugin>
+/// --working-directory . dev` — so a stub keyed on `$1` would see a flag,
+/// hand the whole gate to the real `just` and run it for real.
 const JUST_STUB: &str = r#"#!/usr/bin/env bash
-case "${1:-}" in
+recipe=""
+for a in "$@"; do recipe="$a"; done
+case "$recipe" in
 dev|crap-delta|mutants-diff)
-    printf '%s\n' "$1" >> "$KEELER_STUB_JUST_LOG"
-    if [ "$1" = "${KEELER_STUB_JUST_FAIL:-}" ]; then exit 3; fi
+    printf '%s\n' "$recipe" >> "$KEELER_STUB_JUST_LOG"
+    if [ "$recipe" = "${KEELER_STUB_JUST_FAIL:-}" ]; then exit 3; fi
     exit 0
     ;;
 esac
@@ -337,21 +345,23 @@ fn the_branch_gate_stops_at_the_first_gate_that_fails() {
 /// the workflow gives it.
 const BASELINE_JOB: &str = "branch-baseline";
 
-/// A `Justfile` whose `cov` recipe is the shipped one, plus a marker the
-/// tests can move without touching it.
-fn justfile(cov_bar: &str, extra: &str) -> String {
+/// A justfile of the project's own, holding recipes of the shape the
+/// coverage bar used to live in. Nothing Keeler ships reads it any more:
+/// the recipes are the plugin's, and the bars are the workflow's two
+/// environment variables.
+fn their_own_justfile(bar: &str) -> String {
     format!(
-        "# a fixture Justfile\ncov:\n    cargo llvm-cov --fail-under-lines {cov_bar}\n\n\
-         crap:\n    cargo crap --threshold 15\n{extra}"
+        "# a fixture justfile, the project's own\ncov:\n    cargo llvm-cov --fail-under-lines {bar}\n\n\
+         crap:\n    cargo crap --threshold 15\n"
     )
 }
 
-/// A fixture with `main` at one commit carrying a baseline and a Justfile,
-/// and a task branch checked out on top of it.
+/// A fixture with `main` at one commit carrying a baseline, and a task
+/// branch checked out on top of it — with no justfile of any spelling,
+/// which is the shape of every project once the recipes left it.
 fn task_branch(name: &str) -> Repo {
     let repo = Repo::new("branch-baseline", name);
     repo.commit("crap-baseline.json", BASELINE, "baseline");
-    repo.commit("Justfile", &justfile("90", ""), "justfile");
     repo.git(&["checkout", "-qb", BRANCH]);
     repo
 }
@@ -380,47 +390,6 @@ fn a_jobs_block_stops_before_the_next_jobs_documentation() {
             "the `{job}` block reaches into what follows it: {strays:?}"
         );
     }
-}
-
-#[test]
-fn a_check_that_finds_no_cov_recipe_refuses_rather_than_passes() {
-    // Given a branch that renamed the cov recipe and lowered the bar with
-    // it — the awk finds nothing at either ref, and "" != "" is false
-    let workflow = shipped_workflow();
-    let script = run_script(&job_block(&workflow, BASELINE_JOB));
-    // The base already calls it something else — an adopter's Justfile,
-    // not ours — so neither ref yields a block, and the branch then
-    // lowers the bar from 90 to 10 in that recipe
-    let repo = Repo::new("branch-baseline", "renamed-cov");
-    repo.commit("crap-baseline.json", BASELINE, "baseline");
-    repo.commit(
-        "Justfile",
-        "coverage:\n    cargo llvm-cov --fail-under-lines 90\n",
-        "justfile whose recipe is not spelled cov",
-    );
-    repo.git(&["checkout", "-qb", BRANCH]);
-    repo.commit(
-        "Justfile",
-        "coverage:\n    cargo llvm-cov --fail-under-lines 10\n",
-        "lower the bar where the check cannot see",
-    );
-
-    // When the check runs
-    let out = check(&repo, &script);
-
-    // Then it refuses. A comparison of two empty strings is not a check
-    // that passed — it is a check that never looked, and a gate that
-    // announces success having looked at nothing is worse than no gate.
-    assert!(
-        !out.status.success(),
-        "the check passed a branch whose cov recipe it could not find:\n{}",
-        said(&out)
-    );
-    assert!(
-        said(&out).contains("cov"),
-        "the refusal does not say what it could not find:\n{}",
-        said(&out)
-    );
 }
 
 #[test]
@@ -458,25 +427,8 @@ fn a_branch_that_moved_the_baseline_is_refused_by_ci() {
         said(&out)
     );
 
-    // And so does one that touches the Justfile's cov recipe
-    let repo = task_branch("moved-cov");
-    repo.commit("Justfile", &justfile("80", ""), "lower the bar");
-    let out = check(&repo, &script);
-    assert!(!out.status.success(), "a moved cov recipe passed");
-    assert!(
-        said(&out).contains("cov recipe") && said(&out).contains("main"),
-        "the refusal names neither the recipe nor where baselines move:\n{}",
-        said(&out)
-    );
-
-    // And a branch that added its own recipe to the Justfile — the
-    // additive edit the same-region rule allows — passes
+    // And a branch that changed only its own sources passes
     let repo = task_branch("additive");
-    repo.commit(
-        "Justfile",
-        &justfile("90", "\nkeeler-branch:\n    just dev\n"),
-        "add a recipe",
-    );
     repo.commit("src/lib.rs", "pub fn t4() {}\n", "feat: t4");
     let out = check(&repo, &script);
     assert!(
@@ -500,78 +452,6 @@ fn a_branch_that_moved_the_baseline_is_refused_by_ci() {
     assert!(
         out.status.success(),
         "a branch was blamed for main's own baseline commit:\n{}",
-        said(&out)
-    );
-}
-
-#[test]
-fn the_branch_check_reads_the_projects_justfile_whatever_it_is_spelled() {
-    // Given a project whose justfile is tracked as `justfile` — just's own
-    // primary name, and the name the installer leaves on a project that
-    // already had one
-    let workflow = shipped_workflow();
-    let script = run_script(&job_block(&workflow, BASELINE_JOB));
-    let lowercase = |name: &str| {
-        let repo = Repo::new("branch-baseline", name);
-        repo.commit("crap-baseline.json", BASELINE, "baseline");
-        repo.commit("justfile", &justfile("90", ""), "justfile");
-        repo.git(&["checkout", "-qb", BRANCH]);
-        repo
-    };
-
-    // When a branch that moved neither the baseline nor the bar is checked
-    let repo = lowercase("lowercase-additive");
-    repo.commit("src/lib.rs", "pub fn t4() {}\n", "feat: t4");
-    let out = check(&repo, &script);
-
-    // Then it passes. Reading a name the project does not use found
-    // nothing, and that is what the guard refuses on — so every keeler/*
-    // pull request in such a project failed this gate permanently.
-    assert!(
-        out.status.success(),
-        "a branch that moved nothing was refused over the justfile's spelling:\n{}",
-        said(&out)
-    );
-
-    // And a branch that did lower the bar in that file is still refused
-    let repo = lowercase("lowercase-moved-cov");
-    repo.commit("justfile", &justfile("80", ""), "lower the bar");
-    let out = check(&repo, &script);
-    assert!(
-        !out.status.success(),
-        "a lowered bar passed because the check read the wrong name:\n{}",
-        said(&out)
-    );
-    assert!(
-        said(&out).contains("cov recipe"),
-        "the refusal does not name the recipe:\n{}",
-        said(&out)
-    );
-}
-
-#[test]
-fn a_check_with_no_justfile_at_all_says_so_rather_than_blaming_the_recipe() {
-    // Given a project with no justfile under any spelling
-    let workflow = shipped_workflow();
-    let script = run_script(&job_block(&workflow, BASELINE_JOB));
-    let repo = Repo::new("branch-baseline", "no-justfile");
-    repo.commit("crap-baseline.json", BASELINE, "baseline");
-    repo.git(&["checkout", "-qb", BRANCH]);
-    repo.commit("src/lib.rs", "pub fn t4() {}\n", "feat: t4");
-
-    // When the check runs
-    let out = check(&repo, &script);
-
-    // Then it still refuses — a gate that looked at nothing has not
-    // passed — but it names the missing file rather than the recipe
-    assert!(
-        !out.status.success(),
-        "the check passed a project it could not read a justfile from:\n{}",
-        said(&out)
-    );
-    assert!(
-        said(&out).contains("no justfile at"),
-        "the refusal blames the recipe rather than the missing file:\n{}",
         said(&out)
     );
 }
@@ -628,8 +508,7 @@ fn a_branch_ticks_its_task_and_nothing_else() {
     // Given a task branch keeler/<spec-slug>/t2 whose pipeline reached
     // /keeler:mutants with zero survivors — which is the stage that ticks,
     // and the stage the branch condition had to reach
-    let mutants =
-        std::fs::read_to_string(repo_root().join(".claude/commands/keeler/mutants.md")).unwrap();
+    let mutants = std::fs::read_to_string(repo_root().join("commands/mutants.md")).unwrap();
     assert!(
         mutants.contains("Tick the task's checkbox"),
         "mutants.md no longer ticks the task's checkbox"
@@ -880,47 +759,6 @@ fn the_graph_reads_a_spec_the_working_tree_does_not_hold() {
     assert_eq!(state_of(&out, "T2"), "ready", "{}", said(&out));
 }
 
-#[test]
-fn a_branch_that_renames_or_duplicates_the_justfile_is_refused() {
-    // Given a keeler/* branch that renamed the justfile, content
-    // untouched — the cov recipe is byte-identical, so only the name moved
-    let workflow = shipped_workflow();
-    let script = run_script(&job_block(&workflow, BASELINE_JOB));
-    let repo = task_branch("renamed-justfile");
-    repo.git(&["mv", "Justfile", "justfile"]);
-    repo.git(&["commit", "-qm", "rename the justfile"]);
-
-    // When the check runs
-    let out = check(&repo, &script);
-
-    // Then it is refused naming both spellings: the file the whole
-    // repository is measured through is as much the shared reference as
-    // the bar inside it
-    assert!(
-        !out.status.success(),
-        "a renamed justfile passed:\n{}",
-        said(&out)
-    );
-    assert!(
-        said(&out).contains("Justfile") && said(&out).contains("justfile"),
-        "the refusal does not name what moved:\n{}",
-        said(&out)
-    );
-
-    // And so does a branch that leaves the base's file alone but adds a
-    // second candidate beside it — the state just refuses to run in.
-    // `.justfile` rather than `justfile`, so the fixture is the same on a
-    // case-insensitive filesystem as on a case-sensitive one.
-    let repo = task_branch("added-justfile");
-    repo.commit(".justfile", &justfile("90", ""), "add a second candidate");
-    let out = check(&repo, &script);
-    assert!(
-        !out.status.success(),
-        "a branch that added a second justfile candidate passed:\n{}",
-        said(&out)
-    );
-}
-
 /// The graph-mode recipes, each with arguments that get it as far as the
 /// repository lookup and no further, and the name its refusal must carry.
 /// Two speak as `keeler-spawn`: `_spawn-preflight`, which is private and
@@ -1081,6 +919,476 @@ fn an_uncommitted_spec_is_refused_naming_the_ref_it_was_sought_on() {
 }
 
 // ---------------------------------------------------------------------------
+// Spec 09 — T12: the workflow runs the gates from a fetched Keeler
+// ---------------------------------------------------------------------------
+
+/// The prefix every recipe invocation in the workflow must carry: the
+/// `Justfile` the fetch step unpacked, against the project as the working
+/// directory. CI cannot see the plugin cache, and the project has no
+/// justfile of its own any more — a bare `just <recipe>` there reads
+/// nothing at all.
+const FETCHED_JUSTFILE: &str = "just --justfile \"$RUNNER_TEMP/keeler/Justfile\" \
+                                --working-directory .";
+
+/// The step every job with a gate runs before it, by the name the workflow
+/// gives it.
+const FETCH_STEP: &str = "Fetch Keeler at the pinned tag";
+
+/// Shell words a command may open with. `then just crap-delta` is a
+/// recipe run, and a finder that did not know so would let the whole CRAP
+/// gate out of the scenario below the day someone wrote it on one line.
+const SHELL_KEYWORDS: [&str; 8] = ["if", "elif", "then", "else", "do", "while", "until", "!"];
+
+/// `command` with any leading shell keywords removed.
+fn command_proper(command: &str) -> &str {
+    let mut rest = command.trim();
+    while let Some((first, tail)) = rest.split_once(char::is_whitespace) {
+        if !SHELL_KEYWORDS.contains(&first) {
+            break;
+        }
+        rest = tail.trim_start();
+    }
+    rest
+}
+
+/// Every command in `text` whose first token is `just`, as `(line number,
+/// command)`. The line is stripped of a step's `- ` and `run: ` prefixes and
+/// split on the shell's separators, so `uses: taiki-e/install-action@just`
+/// and `tool: cargo-nextest,just` are not invocations while a `just` after
+/// `&&`, `;` or `then` is one.
+fn just_invocations(text: &str) -> Vec<(usize, String)> {
+    let mut found = Vec::new();
+    for (index, line) in text.lines().enumerate() {
+        let mut rest = line.trim();
+        if rest.starts_with('#') {
+            continue;
+        }
+        rest = rest.strip_prefix("- ").unwrap_or(rest).trim_start();
+        rest = rest.strip_prefix("run: ").unwrap_or(rest).trim_start();
+        for command in rest.split(['&', '|', ';']) {
+            let command = command_proper(command);
+            if command.split_whitespace().next() == Some("just") {
+                found.push((index + 1, command.to_string()));
+            }
+        }
+    }
+    found
+}
+
+/// The `actions/cache` step of a job: its `id:` and its own lines.
+fn cache_step(job: &str) -> Option<(String, String)> {
+    let lines: Vec<&str> = job.lines().collect();
+    let start = lines
+        .iter()
+        .position(|line| line.trim().starts_with("- uses: actions/cache@"))?;
+    let indent = indent_of(lines[start]);
+    let mut block = vec![lines[start]];
+    for line in &lines[start + 1..] {
+        if !line.trim().is_empty() && indent_of(line) <= indent {
+            break;
+        }
+        block.push(line);
+    }
+    let block = block.join("\n");
+    let id = block
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("id:"))?
+        .trim()
+        .to_string();
+    Some((id, block))
+}
+
+/// The workflow's top-level `env:` block — the keys every job inherits.
+fn top_level_env(workflow: &str) -> String {
+    let mut lines = workflow
+        .lines()
+        .skip_while(|line| line.trim_end() != "env:");
+    lines.next().expect("the workflow has no top-level `env:`");
+    lines
+        .take_while(|line| line.trim().is_empty() || line.starts_with(' '))
+        .collect::<Vec<&str>>()
+        .join("\n")
+}
+
+#[test]
+fn the_workflow_runs_every_gate_from_the_fetched_justfile() {
+    // Given the shipped workflow
+    let workflow = shipped_workflow();
+
+    // When every command it hands to `just` is read
+    let invocations = just_invocations(&workflow);
+    assert!(
+        !invocations.is_empty(),
+        "the shipped workflow runs no gate through a recipe at all"
+    );
+
+    // ... by a reader that finds one wherever a command may begin. A finder
+    // that only looked at the head of a line would let a one-line rewrite
+    // of the CRAP gate drop out of this scenario without a word.
+    let hidden =
+        "        run: if [ -f crap-baseline.json ]; then just crap-delta; else just crap; fi";
+    assert_eq!(
+        just_invocations(hidden)
+            .iter()
+            .map(|(_, command)| command.as_str())
+            .collect::<Vec<&str>>(),
+        ["just crap-delta", "just crap"],
+        "the finder misses a recipe run after a shell keyword: {:?}",
+        just_invocations(hidden)
+    );
+
+    // Then each one names the fetched Justfile and the project as the
+    // working directory. A gate that ran a recipe from anywhere else would
+    // be measuring with a ruler nobody pinned.
+    for (line, command) in &invocations {
+        assert!(
+            command.starts_with(FETCHED_JUSTFILE),
+            "line {line} runs a recipe from somewhere else: {command}"
+        );
+    }
+}
+
+#[test]
+fn the_mutants_job_goes_through_the_recipe() {
+    // Given the shipped workflow's mutation job
+    let job = job_block(&shipped_workflow(), "mutants");
+
+    // Then the gate is the recipe, handed the base CI diffs against — the
+    // flags `.cargo-mutants.toml` used to carry live in the recipe now, and
+    // a bare `cargo mutants` here would run without a single one of them
+    let step = step_block(&job, "Mutation tests (changed lines only)");
+    assert!(
+        step.contains("mutants-diff \"origin/${BASE_REF}\""),
+        "the mutation gate does not go through the recipe with CI's base:\n{step}"
+    );
+    // Comments are read past: the rationale beside the step is free to say
+    // what a bare `cargo mutants` would have cost, and an assertion that
+    // tripped over its own explanation would push the rationale out.
+    let direct: Vec<&str> = job
+        .lines()
+        .filter(|line| !line.trim_start().starts_with('#'))
+        .filter(|line| line.contains("cargo mutants"))
+        .collect();
+    assert!(
+        direct.is_empty(),
+        "the mutation job still calls the tool directly: {direct:?}"
+    );
+
+    // And it is still a pull-request gate: a full run on an existing
+    // codebase takes hours and reports debt the push did not write
+    assert!(
+        step.contains("if: github.event_name == 'pull_request'"),
+        "the mutation gate no longer keys on pull requests:\n{step}"
+    );
+}
+
+#[test]
+fn the_workflow_fetches_the_pinned_tag_once_per_ref() {
+    // Given the shipped workflow
+    let workflow = shipped_workflow();
+
+    // When each job that runs a gate is read
+    let mut gate_jobs = Vec::new();
+    for name in job_names(&workflow) {
+        let job = job_block(&workflow, &name);
+        if just_invocations(&job).is_empty() {
+            continue;
+        }
+        gate_jobs.push(name.clone());
+
+        // Then it caches the unpacked checkout under a key that moves with
+        // the pin — six jobs and every push would otherwise each hit
+        // codeload for the same bytes
+        let (id, cache) = cache_step(&job)
+            .unwrap_or_else(|| panic!("`{name}` runs a gate with no cache step:\n{job}"));
+        assert!(
+            cache.contains("path: ${{ runner.temp }}/keeler"),
+            "`{name}` caches something other than the fetched Keeler:\n{cache}"
+        );
+        let key = cache
+            .lines()
+            .find(|line| line.trim().starts_with("key:"))
+            .unwrap_or_else(|| panic!("`{name}`'s cache step has no key:\n{cache}"));
+        assert!(
+            key.contains("${{ env.KEELER_REF }}"),
+            "`{name}`'s cache key does not move with the pin: {key}"
+        );
+
+        // And the fetch runs only on a miss, from the pinned tag, into the
+        // directory the recipes are then read from
+        let fetch = step_block(&job, FETCH_STEP);
+        assert!(
+            fetch.contains(&format!("if: steps.{id}.outputs.cache-hit != 'true'")),
+            "`{name}` fetches even when the cache answered:\n{fetch}"
+        );
+        assert!(
+            fetch.contains("https://codeload.github.com/minikin/keeler/tar.gz/${KEELER_REF}"),
+            "`{name}` does not fetch the pinned tag:\n{fetch}"
+        );
+        assert!(
+            fetch.contains("$RUNNER_TEMP/keeler"),
+            "`{name}` unpacks somewhere the recipes are not read from:\n{fetch}"
+        );
+    }
+    assert_eq!(
+        gate_jobs,
+        ["lints", "test", "quality", "mutants"],
+        "the jobs that run a gate are not the ones this scenario covers"
+    );
+}
+
+#[test]
+fn the_thresholds_are_one_uncomment_away_in_ci() {
+    // Given the shipped workflow
+    let workflow = shipped_workflow();
+
+    // Then its top-level env carries the pin, and the two bars offered
+    // rather than set — an uncommented default would be a value the
+    // adopter has to recognise as one before they may move it
+    let env = top_level_env(&workflow);
+    assert!(
+        env.lines()
+            .any(|line| line.trim().starts_with("KEELER_REF:")),
+        "the workflow's env no longer pins the Keeler it fetches:\n{env}"
+    );
+    for bar in ["KEELER_COV_MIN", "KEELER_CRAP_MAX"] {
+        let line = env
+            .lines()
+            .find(|line| line.contains(bar))
+            .unwrap_or_else(|| panic!("the workflow's env does not offer {bar}:\n{env}"));
+        assert!(
+            line.trim().starts_with('#'),
+            "{bar} is set rather than offered: {line}"
+        );
+    }
+
+    // And the header says so where a reader meets the file, rather than
+    // sending them to a README section about recipe lines they no longer
+    // have
+    let header: Vec<&str> = workflow
+        .lines()
+        .take_while(|line| line.starts_with('#') || line.trim().is_empty())
+        .collect();
+    let header = header.join("\n");
+    for bar in ["KEELER_COV_MIN", "KEELER_CRAP_MAX"] {
+        assert!(
+            header.contains(bar),
+            "the header does not name {bar} as the bar to move:\n{header}"
+        );
+    }
+    assert!(
+        !header.contains("README"),
+        "the header still sends the reader to a README section on ratcheting recipes:\n{header}"
+    );
+}
+
+#[test]
+fn a_ref_that_does_not_resolve_is_named() {
+    // Given the fetch step's shell, and a curl that exits 22 as it does on
+    // an HTTP 404 — the shape of an init run from an unreleased checkout,
+    // whose pin names a tag that was never cut
+    let job = job_block(&shipped_workflow(), "lints");
+    let script = run_script(&step_block(&job, FETCH_STEP));
+    let repo = Repo::new("keeler-fetch", "unresolved-ref");
+    std::fs::create_dir_all(repo.path().join("bin")).unwrap();
+    let stub = repo.path().join("bin/curl");
+    std::fs::write(&stub, "#!/usr/bin/env bash\nexit 22\n").unwrap();
+    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = format!(
+        "{}:{}",
+        repo.path().join("bin").display(),
+        std::env::var("PATH").unwrap()
+    );
+
+    // When the step runs against a tag that does not resolve
+    let out = repo.run(
+        &script,
+        &[
+            ("KEELER_REF", "v9.9.9"),
+            ("RUNNER_TEMP", repo.path().to_str().unwrap()),
+            ("PATH", &path),
+        ],
+    );
+
+    // Then it fails naming the ref and the line that carries it. Without
+    // pipefail the step's status would be tar's, and CI would go on to run
+    // every gate against an empty directory.
+    assert!(
+        !out.status.success(),
+        "the step reported success having fetched nothing:\n{}",
+        said(&out)
+    );
+    assert!(
+        said(&out).contains("v9.9.9") && said(&out).contains("KEELER_REF"),
+        "the failure names neither the ref nor the line to fix:\n{}",
+        said(&out)
+    );
+}
+
+#[test]
+fn the_branch_baseline_job_no_longer_reads_the_projects_justfile() {
+    // Given the shipped workflow's branch-baseline job
+    let job = job_block(&shipped_workflow(), BASELINE_JOB);
+
+    // Then it still guards the one piece of whole-repo state left in the
+    // adopter's repository
+    assert!(
+        job.contains("crap-baseline.json"),
+        "the branch-baseline job no longer names the baseline it guards:\n{job}"
+    );
+
+    // And it reads no justfile. The check failed outright where none
+    // existed, which after this change is every adopter — so it would have
+    // refused every keeler/* pull request there is.
+    let lowered = job.to_lowercase();
+    for marker in ["justfile", "cov:", "cov recipe", "cov_recipe"] {
+        assert!(
+            !lowered.contains(marker),
+            "the branch-baseline job still reads `{marker}`:\n{job}"
+        );
+    }
+
+    // And the chapters that state the rule say what the job now does. A
+    // rule promising a check CI does not run is the worst kind of stale
+    // documentation: it is the one an agent reads before acting.
+    for chapter in ["graph-mode.md", "docs/KEELER.md"] {
+        let text = std::fs::read_to_string(repo_root().join(chapter)).unwrap();
+        assert!(
+            text.contains("crap-baseline.json"),
+            "{chapter} no longer states the shared-reference rule"
+        );
+        let stale: Vec<&str> = text
+            .lines()
+            .filter(|line| line.contains("coverage bar"))
+            .collect();
+        assert!(
+            stale.is_empty(),
+            "{chapter} still names a bar CI guards nowhere: {stale:?}"
+        );
+    }
+}
+
+#[test]
+fn a_task_branch_that_moves_crap_baseline_json_is_still_refused() {
+    // Given a keeler/* branch whose diff against main rewrites the baseline
+    let script = run_script(&job_block(&shipped_workflow(), BASELINE_JOB));
+    let repo = task_branch("still-refused");
+    repo.commit(
+        "crap-baseline.json",
+        "{\"functions\":[{\"crap\":9}]}\n",
+        "move it",
+    );
+
+    // When the job's shell runs against it
+    let out = check(&repo, &script);
+
+    // Then it is refused, naming the file and where baselines move — the
+    // half of the check that survived losing the other half
+    assert!(
+        !out.status.success(),
+        "a moved baseline passed the trimmed check:\n{}",
+        said(&out)
+    );
+    assert!(
+        said(&out).contains("crap-baseline.json") && said(&out).contains("keeler keeler-land"),
+        "the refusal names neither the file nor where baselines move:\n{}",
+        said(&out)
+    );
+}
+
+#[test]
+fn a_task_branch_that_leaves_the_baseline_alone_passes_without_a_justfile() {
+    // Given a project with no justfile of any spelling — the shape of
+    // every adopter now — on a keeler/* branch that changed only its own
+    // sources
+    let script = run_script(&job_block(&shipped_workflow(), BASELINE_JOB));
+    let repo = task_branch("passes-without-a-justfile");
+    repo.commit("src/lib.rs", "pub fn t4() {}\n", "feat: t4");
+
+    // When the job's shell runs against it
+    let out = check(&repo, &script);
+
+    // Then it passes. The old check read the project's justfile to tell
+    // whether the coverage bar had moved, and refused when it found none.
+    assert!(
+        out.status.success(),
+        "a branch that moved nothing was refused for having no justfile:\n{}",
+        said(&out)
+    );
+
+    // And a project that keeps a justfile of its own may edit it freely:
+    // it is theirs, Keeler reads nothing in it, and the bars it used to
+    // hold are the workflow's two environment variables now
+    let repo = Repo::new("branch-baseline", "their-own-justfile");
+    repo.commit("crap-baseline.json", BASELINE, "baseline");
+    repo.commit("justfile", &their_own_justfile("90"), "their own recipes");
+    repo.git(&["checkout", "-qb", BRANCH]);
+    repo.commit("justfile", &their_own_justfile("10"), "their own business");
+    let out = check(&repo, &script);
+    assert!(
+        out.status.success(),
+        "a branch was refused over a recipe file that is the project's own:\n{}",
+        said(&out)
+    );
+}
+
+#[test]
+fn the_review_record_job_stays() {
+    // Given a keeler/* branch whose record names a commit the branch did
+    // not make — the case tests/review_record.rs pins, re-run here because
+    // the job beside it was rewritten and this one must not follow
+    let script = run_script(&job_block(&shipped_workflow(), "review-record"));
+    let repo = Repo::new("branch-review-record", "stays");
+    let on_main = repo.commit("README.md", "hello\n", "init");
+    repo.git(&["checkout", "-qb", BRANCH]);
+    repo.commit("src/lib.rs", "pub fn t4() {}\n", "feat: t4");
+    repo.write(
+        "reviews/99-fixture/t4.md",
+        &format!("Spec: 99-fixture\nTask: t4\nCommit: {on_main}\nVerdict: pass\n\nnone\n"),
+    );
+
+    // When the job's shell runs against it
+    let out = repo.run(&script, &[("HEAD_REF", BRANCH), ("BASE_REF", "main")]);
+
+    // Then it is refused: a record naming a commit already on the base
+    // covers none of the branch's work
+    assert!(
+        !out.status.success(),
+        "the review-record job passed a record naming no work of the branch:\n{}",
+        said(&out)
+    );
+    assert!(
+        said(&out).contains("names no work of this branch"),
+        "the refusal does not say what is wrong with the record:\n{}",
+        said(&out)
+    );
+}
+
+#[test]
+fn workflow_messages_name_the_wrapper_too() {
+    // Given the shipped workflow
+    let workflow = shipped_workflow();
+
+    // Then the one message that tells a human what to run next names the
+    // wrapper, which is the spelling that works from their project
+    assert!(
+        workflow.contains("run keeler keeler-land there"),
+        "the branch-baseline refusal does not send the reader to the wrapper"
+    );
+
+    // And no message anywhere in it tells them to type `just keeler-…`,
+    // which in a project without a justfile finds no such recipe
+    let strays: Vec<&str> = workflow
+        .lines()
+        .filter(|line| line.contains("just keeler-"))
+        .collect();
+    assert!(
+        strays.is_empty(),
+        "these lines send the reader to a recipe their project does not have: {strays:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 
 proptest::proptest! {
     #![proptest_config(proptest::prelude::ProptestConfig {
@@ -1091,17 +1399,16 @@ proptest::proptest! {
         ..proptest::prelude::ProptestConfig::default()
     })]
 
-    /// Whatever else a task branch changes — its own recipes, its own
-    /// sources, however many commits — CI passes it exactly when its diff
-    /// against the base leaves both pieces of whole-repo state alone.
-    /// Neither half alone is the gate: a branch that moved only the cov
-    /// bar has moved the ratchet just as surely as one that rewrote the
-    /// baseline file.
+    /// Whatever else a task branch changes — its own sources, its own
+    /// justfile if it keeps one, however many commits — CI passes it
+    /// exactly when its diff against the base leaves `crap-baseline.json`
+    /// alone. That is now the whole of the whole-repo state a branch can
+    /// reach: the bars left the project with the recipes, and live in the
+    /// workflow's environment where no branch edit can lower them unseen.
     #[test]
     fn ci_passes_a_branch_exactly_when_it_left_the_whole_repo_state_alone(
         moved_baseline in proptest::bool::ANY,
-        moved_cov in proptest::bool::ANY,
-        added_recipe in proptest::bool::ANY,
+        moved_their_justfile in proptest::bool::ANY,
         main_moved_after in proptest::bool::ANY,
         commits in 1usize..3,
     ) {
@@ -1113,10 +1420,8 @@ proptest::proptest! {
         if moved_baseline {
             repo.commit("crap-baseline.json", "{\"functions\":[{\"crap\":9}]}\n", "move");
         }
-        let extra = if added_recipe { "\nkeeler-branch:\n    just dev\n" } else { "" };
-        if moved_cov || added_recipe {
-            let bar = if moved_cov { "70" } else { "90" };
-            repo.commit("Justfile", &justfile(bar, extra), "justfile");
+        if moved_their_justfile {
+            repo.commit("justfile", &their_own_justfile("70"), "their own recipes");
         }
         if main_moved_after {
             repo.git(&["checkout", "-q", "main"]);
@@ -1126,9 +1431,9 @@ proptest::proptest! {
         let out = check(&repo, &script);
         proptest::prop_assert_eq!(
             out.status.success(),
-            !(moved_baseline || moved_cov),
-            "baseline {} cov {} recipe {} main {} — the check said:\n{}",
-            moved_baseline, moved_cov, added_recipe, main_moved_after, said(&out)
+            !moved_baseline,
+            "baseline {} justfile {} main {} — the check said:\n{}",
+            moved_baseline, moved_their_justfile, main_moved_after, said(&out)
         );
     }
 }

@@ -536,16 +536,17 @@ fn this_spec_is_its_own_fixture() {
 
 #[test]
 fn no_shipped_file_still_teaches_that_readiness_comes_from_main() {
-    // Every one of these is installed into an adopter's project, and each
-    // is read by an agent as instruction. A sentence left behind by an
+    // Every one of these reaches an adopter's session from the plugin, and
+    // each is read by an agent as instruction. A sentence left behind by an
     // amendment does not merely go stale — it teaches the model the model
     // the tools no longer implement, and the first thing the adopter hits
     // is a refusal their own rules told them could not happen.
     let shipped = [
-        ".claude/keeler.md",
-        ".claude/commands/keeler/graph.md",
-        ".claude/commands/keeler/mutants.md",
-        "KEELER.md",
+        "keeler.md",
+        "graph-mode.md",
+        "commands/graph.md",
+        "commands/mutants.md",
+        "docs/KEELER.md",
     ];
     let mut stale = Vec::new();
     for name in shipped {
@@ -568,26 +569,26 @@ fn no_shipped_file_still_teaches_that_readiness_comes_from_main() {
         stale.join("\n")
     );
 
-    // And the rules must name the refusal an adopter meets first
-    let rules = std::fs::read_to_string(repo_root().join(".claude/keeler.md")).unwrap();
+    // And the graph-mode chapter must name the refusal an adopter meets
+    // first — it is where the rules' graph chapter went
+    let chapter = std::fs::read_to_string(repo_root().join("graph-mode.md")).unwrap();
     assert!(
-        rules.contains("feat/<spec-slug>"),
-        ".claude/keeler.md does not say which branch the graph is read from"
+        chapter.contains("feat/<spec-slug>"),
+        "graph-mode.md does not say which branch the graph is read from"
     );
 }
 
 #[test]
 fn the_template_and_the_tasks_command_carry_the_format() {
     // Given what /keeler:tasks reads to learn the format
-    let template = std::fs::read_to_string(repo_root().join("specs/TEMPLATE.md")).unwrap();
-    let command =
-        std::fs::read_to_string(repo_root().join(".claude/commands/keeler/tasks.md")).unwrap();
+    let template = std::fs::read_to_string(repo_root().join("templates/spec.md")).unwrap();
+    let command = std::fs::read_to_string(repo_root().join("commands/tasks.md")).unwrap();
 
     // Then both show a task line with Needs:, and the command carries the
     // rule that two tasks editing one region are not independent
     assert!(
         template.contains("Needs:"),
-        "TEMPLATE.md does not show the Needs: annotation"
+        "templates/spec.md does not show the Needs: annotation"
     );
     assert!(
         command.contains("Needs:"),
@@ -766,14 +767,14 @@ fn a_cycle_is_refused_loudly() {
 #[test]
 fn the_graph_command_runs_the_recipe_rather_than_reading_the_spec() {
     // Given the shipped /keeler:graph command
-    let command = std::fs::read_to_string(repo_root().join(".claude/commands/keeler/graph.md"))
-        .expect("cannot read .claude/commands/keeler/graph.md");
+    let command = std::fs::read_to_string(repo_root().join("commands/graph.md"))
+        .expect("cannot read commands/graph.md");
 
     // Then it instructs running the recipe — so a cycle is refused by a
     // program and not judged by an agent — and reports the three states
     assert!(
-        command.contains("just keeler-graph"),
-        "graph.md does not instruct running `just keeler-graph`"
+        command.contains("keeler keeler-graph"),
+        "graph.md does not instruct running `keeler keeler-graph`"
     );
     for state in ["ready", "blocked", "done"] {
         assert!(
