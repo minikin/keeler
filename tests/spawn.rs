@@ -485,7 +485,7 @@ fn spawning_a_task_creates_an_isolated_agent() {
 
     // And what the session was asked to run is a Claude Code session whose
     // prompt names the spec, the task and the whole per-task pipeline, with
-    // `just keeler-branch` as its gate
+    // `keeler keeler-branch` as its gate
     let ran = session_script(&project, call);
     for token in [
         "claude -p",
@@ -495,7 +495,7 @@ fn spawning_a_task_creates_an_isolated_agent() {
         "/keeler:qa",
         "/keeler:review",
         "/keeler:mutants",
-        "just keeler-branch",
+        "keeler keeler-branch",
         "--permission-mode acceptEdits",
         "--allowedTools",
         "Bash(cargo:",
@@ -2107,6 +2107,257 @@ fn readiness_is_read_from_the_committed_spec_not_the_task_branch() {
 
     // And nothing was created
     assert!(!project.worktree(SLUG, "T3").exists());
+}
+
+// ---------------------------------------------------------------------------
+// Spec 09 — graph mode's runtime: a spawned agent gets the plugin
+//
+// A runner is written in the main checkout and runs in the worktree, and
+// neither of those is where Keeler lives any more: the recipes, the rules and
+// the graph parser are all in the directory Claude Code cached the plugin
+// into. So these tests drive the recipes from *this repository's* Justfile —
+// the plugin's — against a fixture project somewhere else entirely. That is
+// the only arrangement in which "the plugin's copy" and "the checkout's copy"
+// are different paths, and an assertion about which one the runner names can
+// fail.
+// ---------------------------------------------------------------------------
+
+/// The plugin root: this repository, whose `Justfile`, `bin/` and
+/// `scripts/keeler-graph.sh` are the ones a runner must name.
+fn plugin() -> PathBuf {
+    repo_root()
+}
+
+impl Project {
+    /// Runs a recipe the way `bin/keeler` does: the plugin's `Justfile`,
+    /// this project as the working directory, nothing of the project's own
+    /// on the command line.
+    fn keeler(&self, args: &[&str]) -> Output {
+        let justfile = plugin().join("Justfile").display().to_string();
+        let dir = self.dir.display().to_string();
+        let mut all = vec![
+            "--justfile",
+            justfile.as_str(),
+            "--working-directory",
+            dir.as_str(),
+        ];
+        all.extend_from_slice(args);
+        self.just(&all)
+    }
+
+    /// Spawns T3 from the plugin's Justfile and returns the runner it wrote.
+    fn spawn_from_plugin(&self) -> String {
+        let output = self.keeler(&["keeler-spawn", &spec_path(SLUG), "T3"]);
+        assert!(output.status.success(), "{}", both(&output));
+        std::fs::read_to_string(self.runs(SLUG).join("t3.sh")).unwrap()
+    }
+}
+
+/// The runner's commands in order — everything that is not the shebang, a
+/// comment or a blank line. "First" is what the PATH export has to be.
+fn commands(runner: &str) -> Vec<&str> {
+    runner
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .collect()
+}
+
+/// The quoted list the runner hands `--allowedTools`.
+fn allowed_tools(runner: &str) -> &str {
+    let at = runner
+        .find("--allowedTools")
+        .expect("the runner grants the agent no tools at all");
+    runner[at..]
+        .split('\'')
+        .nth(1)
+        .expect("--allowedTools is not followed by a quoted list")
+}
+
+/// The prompt the runner hands the agent — the body of its quoted here-doc,
+/// where `${CLAUDE_PLUGIN_ROOT}` survives as text rather than being expanded
+/// by the shell that wrote the file.
+fn prompt_of(runner: &str) -> &str {
+    let start = runner
+        .find("<<'KEELER_PROMPT'")
+        .expect("the runner carries no prompt");
+    let body = runner[start..]
+        .split_once('\n')
+        .expect("the prompt here-doc has no body")
+        .1;
+    let end = body
+        .find("\nKEELER_PROMPT")
+        .expect("the prompt here-doc is unterminated");
+    &body[..end]
+}
+
+#[test]
+fn a_spawned_agent_is_given_the_plugin() {
+    // Given a feature branch with an Approved spec whose T3 is ready, and
+    // stub tmux and claude on PATH
+    let project = Project::new("plugin-dir");
+
+    // When `keeler-spawn <spec> T3` runs from the plugin's Justfile
+    let runner = project.spawn_from_plugin();
+    let plugin = plugin().display().to_string();
+
+    // Then the runner starts claude with `--plugin-dir <plugin>`. A headless
+    // session inherits no `/plugin install`: without the flag the agent has
+    // no /keeler:tdd to run, no rules in its context and no `keeler` at all.
+    assert!(
+        runner.contains(&format!(r#"--plugin-dir "{plugin}""#)),
+        "the runner starts an agent that has never heard of Keeler:\n{runner}"
+    );
+
+    // And its `--allowedTools` includes `Bash(keeler:*)` — the wrapper is
+    // how every recipe is run now, so an agent denied it cannot reach its
+    // own gate
+    let tools = allowed_tools(&runner);
+    assert!(
+        tools.contains("Bash(keeler:*)"),
+        "the agent may not run the wrapper: {tools}"
+    );
+
+    // And the plugin's bin/ is on PATH before anything runs. The runner is
+    // a bash script tmux starts outside any agent, so the plugin's PATH
+    // entry is not there by itself — and a `keeler` that resolves only
+    // inside the agent's Bash tool is one the runner cannot use.
+    let first = commands(&runner).first().copied().unwrap_or_default();
+    assert_eq!(
+        first,
+        format!(r#"export PATH="{plugin}/bin:$PATH""#),
+        "the runner's first command is not the plugin's PATH:\n{runner}"
+    );
+}
+
+#[test]
+fn a_spawned_agent_is_told_where_the_rules_are() {
+    // Given the runner `keeler-spawn` wrote for T3
+    let project = Project::new("plugin-rules");
+    let runner = project.spawn_from_plugin();
+
+    // Then its prompt names the rules and the graph-mode chapter where the
+    // plugin keeps them. `${CLAUDE_PLUGIN_ROOT}` reaches the agent as text:
+    // the path is the cache directory of whatever version is enabled, and
+    // only the session itself knows it.
+    let prompt = prompt_of(&runner);
+    for named in [
+        "${CLAUDE_PLUGIN_ROOT}/keeler.md",
+        "${CLAUDE_PLUGIN_ROOT}/graph-mode.md",
+    ] {
+        assert!(
+            prompt.contains(named),
+            "the prompt never names `{named}`:\n{prompt}"
+        );
+    }
+
+    // And the gate it names is the wrapper's: the agent's project has no
+    // justfile, so `just keeler-branch` there is a command that cannot run
+    assert!(
+        prompt.contains("keeler keeler-branch"),
+        "the prompt names a gate the agent cannot run:\n{prompt}"
+    );
+
+    // And nothing in the runner points at the file the installer used to
+    // leave in the project — it is not written any more, so an agent sent
+    // to read it reads nothing and works ruleless
+    assert!(
+        !runner.contains(".claude/keeler.md"),
+        "the runner still names the rules file Keeler no longer installs:\n{runner}"
+    );
+}
+
+#[test]
+fn the_runner_reads_the_graph_with_the_plugins_parser() {
+    // Given the runner `keeler-spawn` wrote for T3
+    let project = Project::new("plugin-parser");
+    let runner = project.spawn_from_plugin();
+
+    // Then every `keeler-graph.sh` it invokes is the plugin's. The
+    // death-check asks the parser whether the task is ticked on its own
+    // branch — so a task branch editing the parser would otherwise decide
+    // whether its own box counts, and the main checkout's copy is no
+    // safer than the worktree's for that.
+    let want = format!("{}/scripts/keeler-graph.sh", plugin().display());
+    let mut found = 0;
+    for line in runner
+        .lines()
+        .filter(|line| line.contains("keeler-graph.sh"))
+    {
+        for token in line
+            .split_whitespace()
+            .filter(|token| token.contains("keeler-graph.sh"))
+        {
+            found += 1;
+            assert_eq!(
+                token.trim_matches(['"', '\'']),
+                want,
+                "the runner reads the graph with a parser that is not the plugin's:\n{line}"
+            );
+        }
+    }
+    assert!(
+        found > 0,
+        "the runner never reads the graph, so the scan proves nothing:\n{runner}"
+    );
+
+    // And none is under the worktree or the main checkout
+    for elsewhere in [project.worktree(SLUG, "T3"), project.path().to_path_buf()] {
+        let path = format!("{}/scripts", elsewhere.display());
+        assert!(
+            !runner.contains(&path),
+            "the runner reaches for a script under {path}:\n{runner}"
+        );
+    }
+}
+
+#[test]
+fn a_resume_rewrites_a_runner_that_names_a_plugin_that_moved() {
+    // Given a run of T3 that died before its gate, whose runner names a
+    // plugin directory that has since moved — which every runner's does the
+    // moment `/plugin update` lands, since the cache path carries the version
+    let mut project = Project::new("moved-plugin");
+    project.run_sessions = true;
+    project.claude_silent_death = true;
+    project.spawn_from_plugin();
+    let runner = project.runs(SLUG).join("t3.sh");
+    std::fs::write(
+        &runner,
+        "#!/usr/bin/env bash\n\
+         export PATH=\"/old/cache/keeler/bin:$PATH\"\n\
+         claude -p \"\" --plugin-dir \"/old/cache/keeler\"\n\
+         bash \"/old/cache/keeler/scripts/keeler-graph.sh\" specs/42-fixture.md\n",
+    )
+    .unwrap();
+    assert!(
+        !project.runs(SLUG).join("t3.exit").exists(),
+        "the run left a verdict, so there is nothing to resume"
+    );
+    // The regenerated runner is the artifact under test, not a second run
+    // of it.
+    project.run_sessions = false;
+
+    // When `keeler-resume <spec> T3` runs from the plugin's Justfile
+    let output = project.keeler(&["keeler-resume", &spec_path(SLUG), "T3"]);
+    assert!(output.status.success(), "{}", both(&output));
+
+    // Then the rewritten runner names this plugin in both places
+    let now = std::fs::read_to_string(&runner).unwrap();
+    let plugin = plugin().display().to_string();
+    assert!(
+        now.contains(&format!(r#"--plugin-dir "{plugin}""#)),
+        "the resumed agent is given the plugin that moved away:\n{now}"
+    );
+    assert!(
+        now.contains(&format!("{plugin}/scripts/keeler-graph.sh")),
+        "the resumed runner reads the graph with a parser from the old cache:\n{now}"
+    );
+
+    // And the directory that moved nowhere at all
+    assert!(
+        !now.contains("/old/cache/keeler"),
+        "the old plugin path survived the rewrite:\n{now}"
+    );
 }
 
 proptest::proptest! {
