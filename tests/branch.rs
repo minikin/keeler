@@ -44,11 +44,18 @@ fn real_just() -> &'static str {
 
 /// Stands in for the three gates `keeler-branch` composes, recording the
 /// order it was asked for them in. Everything else is the real `just`.
+///
+/// The recipe is the *last* argument, not the first: the Justfile ships in
+/// the plugin and every self-call names it — `just --justfile <plugin>
+/// --working-directory . dev` — so a stub keyed on `$1` would see a flag,
+/// hand the whole gate to the real `just` and run it for real.
 const JUST_STUB: &str = r#"#!/usr/bin/env bash
-case "${1:-}" in
+recipe=""
+for a in "$@"; do recipe="$a"; done
+case "$recipe" in
 dev|crap-delta|mutants-diff)
-    printf '%s\n' "$1" >> "$KEELER_STUB_JUST_LOG"
-    if [ "$1" = "${KEELER_STUB_JUST_FAIL:-}" ]; then exit 3; fi
+    printf '%s\n' "$recipe" >> "$KEELER_STUB_JUST_LOG"
+    if [ "$recipe" = "${KEELER_STUB_JUST_FAIL:-}" ]; then exit 3; fi
     exit 0
     ;;
 esac

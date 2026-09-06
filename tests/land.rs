@@ -71,9 +71,16 @@ fn real_just() -> &'static str {
 /// every call so the order they ran in — or did not run in — is
 /// assertable. Everything else is the real `just`, so the recipe's own
 /// helpers still work.
+///
+/// The recipe is the *last* argument, and the one recorded: the Justfile
+/// ships in the plugin and every self-call names it first — `just
+/// --justfile <plugin> --working-directory . dev` — so a stub keyed on
+/// `$1` would see a flag and hand the whole gate to the real `just`.
 const JUST_STUB: &str = r#"#!/usr/bin/env bash
-printf '%s\n' "$*" >> "$KEELER_STUB_JUST_LOG"
-case "${1:-}" in
+recipe=""
+for a in "$@"; do recipe="$a"; done
+printf '%s\n' "$recipe" >> "$KEELER_STUB_JUST_LOG"
+case "$recipe" in
 dev)
     echo "dev stub: the full gate ran"
     exit "${KEELER_STUB_DEV_EXIT:-0}"

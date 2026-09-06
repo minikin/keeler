@@ -129,11 +129,15 @@ mod wave {
     exit 0
     "#;
 
-    /// Stands in for the two gates a fixture cannot run — `just
-    /// keeler-branch`, which a spawned run ends with, and `just dev`, which
-    /// `keeler-land` opens with. Everything else is the real `just`.
+    /// Stands in for the two gates a fixture cannot run — `keeler-branch`,
+    /// which a spawned run ends with, and `dev`, which `keeler-land` opens
+    /// with. Everything else is the real `just`. The recipe is the *last*
+    /// argument: every call names the plugin's Justfile first, so a stub
+    /// keyed on `$1` would see a flag and run the real gate.
     const JUST_STUB: &str = r#"#!/usr/bin/env bash
-    case "${1:-}" in
+    recipe=""
+    for a in "$@"; do recipe="$a"; done
+    case "$recipe" in
     keeler-branch)
         echo "keeler-branch stub: the gate ran"
         exit "${KEELER_STUB_BRANCH_EXIT:-0}"

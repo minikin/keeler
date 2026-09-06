@@ -154,8 +154,15 @@ exit 0
 
 /// Stands in for T4's `just keeler-branch`; everything else is the real
 /// `just`, so a session that runs `just` for any other reason still works.
+///
+/// The recipe is the *last* argument, not the first: the Justfile ships in
+/// the plugin and every call names it — `just --justfile <plugin>
+/// --working-directory . keeler-branch` — so a stub keyed on `$1` would
+/// see a flag and run the real gate.
 const JUST_STUB: &str = r#"#!/usr/bin/env bash
-if [ "${1:-}" = keeler-branch ]; then
+recipe=""
+for a in "$@"; do recipe="$a"; done
+if [ "$recipe" = keeler-branch ]; then
     echo "keeler-branch stub: the gate ran"
     exit "${KEELER_STUB_BRANCH_EXIT:-0}"
 fi
@@ -1501,11 +1508,15 @@ fn a_dead_session_is_resumable_and_says_so() {
 #[test]
 fn spawning_without_tmux_is_refused_and_says_how_to_get_it() {
     // Given a machine without tmux — a PATH that holds nothing but the
-    // shell the recipe runs in
+    // shell the recipe runs in and the `just` its own helper goes through.
+    // `just` is not optional the way tmux is: the recipes ship in the
+    // plugin and reach each other through `just --justfile`, and the
+    // wrapper on the human's PATH does the same.
     let project = Project::new("no-tmux");
     let bare = project.path().join("nobin");
     std::fs::create_dir_all(&bare).unwrap();
     std::os::unix::fs::symlink("/bin/bash", bare.join("bash")).unwrap();
+    std::os::unix::fs::symlink(real_just(), bare.join("just")).unwrap();
 
     // When `just keeler-spawn <spec> T3` runs
     let output = project.just_with_path(
