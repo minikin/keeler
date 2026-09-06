@@ -42,9 +42,9 @@ fmt:
     cargo fmt --all
 
 # Check formatting and lints (mirrors CI): your formatting, your clippy.
-# The shellcheck branch below is inert in your project — it is keyed on a
-# marker file only Keeler's own repository has. Your shell scripts are
-# yours to gate, not Keeler's.
+# The branch below is inert in your project — it is keyed on a marker file
+# only Keeler's own repository has. Your shell scripts are yours to gate,
+# not Keeler's, and Keeler's plugin is Keeler's to hold to its version.
 #
 # Check formatting and lints, the way CI does.
 lint:
@@ -58,6 +58,12 @@ lint:
         # glob stops matching, shellcheck fails on the literal pattern
         # rather than the gate vanishing in silence.
         shellcheck install.sh scripts/*.sh
+        # The plugin's manifests and the rules the SessionStart hook prints,
+        # held to VERSION. Both failures they catch are silent ones — an
+        # unbumped plugin.json makes `/plugin update` install nothing, and
+        # rules over the hook's cap reach the agent as a preview — so they
+        # are caught in the gate that runs on every change, not at the tag.
+        cargo xtask plugin-check
     fi
 
 # Fast compile check without building test binaries

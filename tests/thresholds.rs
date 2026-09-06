@@ -13,24 +13,8 @@ mod common;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
 use std::process::{Command, Output};
-use std::sync::OnceLock;
 
-use common::{Repo, repo_root, said};
-
-/// The absolute path of the real `just`, resolved once against the
-/// harness's own PATH — the fixture's PATH carries a stub `cargo`, and
-/// `just` itself must still be the real one.
-fn real_just() -> &'static str {
-    static JUST: OnceLock<String> = OnceLock::new();
-    JUST.get_or_init(|| {
-        let out = Command::new("sh")
-            .args(["-c", "command -v just"])
-            .output()
-            .expect("failed to look for just");
-        assert!(out.status.success(), "just is not on PATH");
-        String::from_utf8_lossy(&out.stdout).trim().to_string()
-    })
-}
+use common::{Repo, real_just, repo_root, said};
 
 /// Stands in for every tool the gate recipes reach for. `metadata` is
 /// answered rather than recorded: it is the probe `cov` and `crap` use to
