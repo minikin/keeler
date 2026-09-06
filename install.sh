@@ -189,8 +189,13 @@ install_file() {
             # An existing copy that already holds our version is the record
             # of this same conflict, from an earlier run. Leaving it is what
             # makes a second install change nothing; only a copy holding
-            # something else needs a name of its own.
-            if "$same" "$from" "$to.keeler"; then
+            # something else needs a name of its own. Byte for byte even
+            # where the destination is compared more loosely: an upgrade
+            # changes the workflow's pin and nothing else, so a copy that
+            # matches but for that line is the version being upgraded away
+            # from — the one thing the copy must not tell the project to
+            # merge.
+            if identical "$from" "$to.keeler"; then
                 kept="$to.keeler"
             else
                 kept="$(free_name "$to.keeler")"
@@ -231,6 +236,9 @@ if [ "$WITH_CI" = 1 ]; then
     pinned="$(mktemp)"
     sed "s|^\([[:space:]]*KEELER_REF:\).*|\1 v$KEELER_VERSION|" \
         "$SRC/$WORKFLOW_TEMPLATE" > "$pinned"
+    # `cp` carries the source's mode over, and mktemp's is private to us —
+    # the project would receive a workflow only its installer can read.
+    chmod 644 "$pinned"
     install_file "$pinned" .github/workflows/keeler.yml same_but_for_the_pin
     rm -f "$pinned"
 fi

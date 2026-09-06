@@ -2348,6 +2348,78 @@ fn a_workflow_that_differs_beyond_its_pin_gets_the_new_one_alongside() {
 }
 
 #[test]
+fn the_copy_left_to_merge_pins_the_version_that_wrote_it() {
+    // Given a project whose edited workflow already has a copy beside it,
+    // left unmerged by an install of 0.4.1
+    let project = TempProject::new("stale-copy", MANIFEST_WITH_PROPTEST);
+    let older = KeelerSource::new("stale-copy-older", "0.4.1");
+    let theirs = format!(
+        "{}\n  mine:\n    name: Mine\n    runs-on: ubuntu-latest\n    steps:\n      - run: true\n",
+        pinned(&older.template(), "0.4.1"),
+    );
+    std::fs::create_dir_all(project.path().join(".github/workflows")).unwrap();
+    std::fs::write(project.path().join(".github/workflows/keeler.yml"), &theirs).unwrap();
+    older.install_into(&project, &[]);
+
+    // When a Keeler of 0.5.0 installs over it
+    let newer = KeelerSource::new("stale-copy-newer", "0.5.0");
+    let report = newer.install_into(&project, &[]);
+
+    // Then a copy pinning 0.5.0 is there to merge. The pin is the whole of
+    // what an upgrade changes when nothing else in the workflow moved, so a
+    // run that points at the older copy tells the project to merge the
+    // version it is upgrading away from.
+    let copies: Vec<String> = files_under(&project.path().join(".github/workflows"))
+        .iter()
+        .filter(|path| path.to_string_lossy().contains("keeler.yml.keeler"))
+        .map(|path| std::fs::read_to_string(path).unwrap())
+        .collect();
+    assert!(
+        copies
+            .iter()
+            .any(|copy| copy.lines().any(|line| line == pin_line("0.5.0"))),
+        "no copy left to merge pins the version that just installed:\n{report}\n{copies:?}",
+    );
+    // And the earlier one is still there: an unmerged copy holds text nobody
+    // has read yet, and overwriting it loses exactly what it was saved for.
+    assert!(
+        copies
+            .iter()
+            .any(|copy| copy.lines().any(|line| line == pin_line("0.4.1"))),
+        "the upgrade overwrote a copy the project had not merged yet:\n{copies:?}",
+    );
+}
+
+#[test]
+fn the_installed_workflow_is_as_readable_as_the_files_beside_it() {
+    // Given a fresh crate where Keeler has installed
+    let source = KeelerSource::new("workflow-mode", "0.5.0");
+    let project = TempProject::new("workflow-mode", MANIFEST_WITH_PROPTEST);
+    source.install_into(&project, &[]);
+
+    // Then the workflow's permissions are the other installed files' — it
+    // goes through a temporary copy to have its pin resolved, and mktemp's
+    // private mode is the installer's business, not something to hand to
+    // the project along with the file.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |file: &str| {
+            std::fs::metadata(project.path().join(file))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777
+        };
+        assert_eq!(
+            mode(".github/workflows/keeler.yml"),
+            mode("clippy.toml"),
+            "the workflow landed with permissions of its own",
+        );
+    }
+}
+
+#[test]
 fn the_pin_comes_from_the_installing_keeler_not_the_fetch_variable() {
     // Given a Keeler whose VERSION reads 0.5.0, reached the way a pinned run
     // reaches one — KEELER_REF forces the fetch, so the scenario's answer
