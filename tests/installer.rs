@@ -776,7 +776,7 @@ fn an_adopting_project_still_receives_every_gate() {
         "crap-baseline",
         "crap-delta",
         "mutants FILE",
-        "mutants-diff",
+        "mutants-diff BASE=\"HEAD\"",
     ] {
         assert!(
             justfile.lines().any(|line| line == format!("{recipe}:")),

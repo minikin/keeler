@@ -66,20 +66,29 @@ ci: lint test
 _no_src_msg := "no Rust sources to measure — skipping (no library or binary targets)"
 _has_rust_targets := "cargo metadata --no-deps --format-version 1 2>/dev/null | grep -qE '\"kind\":\\[\"(bin|proc-macro|lib|rlib|dylib|cdylib|staticlib)'"
 
-# Line coverage summary; fails mechanically below 90% lines
+# The two bars reach the recipes through the environment, because the
+# recipes are no longer a file in your repository: with the Justfile in the
+# plugin, `--fail-under-lines 90` and `--threshold 15` stopped being lines
+# an adopter could edit. Set them in your shell for `keeler dev`, and in
+# the workflow's `env:` for CI. They move the bar, never the ruler — what
+# the gates measure is not an adopter's to change.
+_cov_min := env("KEELER_COV_MIN", "90")
+_crap_max := env("KEELER_CRAP_MAX", "15")
+
+# Line coverage summary; fails below KEELER_COV_MIN (default 90) lines
 cov:
     #!/usr/bin/env bash
     set -euo pipefail
     {{_has_rust_targets}} || { echo "{{_no_src_msg}}"; exit 0; }
-    cargo llvm-cov nextest --workspace --all-targets --no-tests=pass --summary-only --fail-under-lines 90
+    cargo llvm-cov nextest --workspace --all-targets --no-tests=pass --summary-only --fail-under-lines {{_cov_min}}
 
-# Coverage + CRAP score gate: fails if any function scores above the threshold
+# Coverage + CRAP score gate: fails above KEELER_CRAP_MAX (default 15)
 crap:
     #!/usr/bin/env bash
     set -euo pipefail
     {{_has_rust_targets}} || { echo "{{_no_src_msg}}"; exit 0; }
     cargo llvm-cov nextest --workspace --all-targets --no-tests=pass --lcov --output-path lcov.info
-    cargo crap --lcov lcov.info --workspace --threshold 15 --fail-above
+    cargo crap --lcov lcov.info --workspace --threshold {{_crap_max}} --fail-above
 
 # Record a CRAP baseline (run before starting a feature)
 crap-baseline:
@@ -96,7 +105,7 @@ crap-delta:
     set -euo pipefail
     {{_has_rust_targets}} || { echo "{{_no_src_msg}}"; exit 0; }
     cargo llvm-cov nextest --workspace --all-targets --no-tests=pass --lcov --output-path lcov.info
-    cargo crap --lcov lcov.info --workspace --threshold 15 --fail-above \
+    cargo crap --lcov lcov.info --workspace --threshold {{_crap_max}} --fail-above \
         --baseline crap-baseline.json --fail-regression
 
 # The body below is inert in your project — like the shellcheck branch in
@@ -118,17 +127,27 @@ dev: fmt lint test crap
         cargo xtask pipeline-check
     fi
 
-# Mutation tests for a specific file: just mutants src/lib.rs
+# How the tool runs, not where the bar sits — so unlike the two thresholds
+# above, these are flags and not variables. They were `.cargo-mutants.toml`
+# until the Justfile moved into the plugin, and a config file in the
+# plugin's directory is one `cargo mutants` never reads: it looks beside
+# the crate under test, which is the adopter's repository. On the command
+# line they travel with the recipe that needs them.
+_mutants_flags := "--test-tool nextest --jobs 4 --profile mutants --timeout 60 " + \
+    "--cap-lints true --skip-calls-defaults true " + \
+    "--skip-calls eprintln!,write!,writeln! --exclude 'tests/**/*.rs'"
+
+# Mutation tests for a specific file: keeler mutants src/lib.rs
 # --workspace, or a member crate's file yields "Found 0 mutants" and the
 # gate passes having tested nothing.
 #
-# Mutation tests for one file — `just mutants src/lib.rs`.
+# Mutation tests for one file — `keeler mutants src/lib.rs`.
 mutants FILE:
-    cargo mutants --workspace --file $1
+    cargo mutants --workspace {{_mutants_flags}} --file "$FILE"
 
 # Mutation tests on every member (slow)
 mutants-all:
-    cargo mutants --workspace
+    cargo mutants --workspace {{_mutants_flags}}
 
 # "Main" is one thing, decided once: the first of the four names below
 # that exists in this repository. `mutants-diff` diffs against it and
@@ -156,10 +175,12 @@ _main-ref:
     exit 1
 
 # Mutation tests on changed lines only (--in-diff vs HEAD, else the branch
-# base, else the last commit)
+# base, else the last commit). Naming a BASE replaces that search with one
+# answer — what CI does, where the checkout is clean and the base is the
+# pull request's, not whatever this repository happens to call main.
 #
-# Mutation tests on the lines this branch changed.
-mutants-diff:
+# Mutation tests on the lines this branch changed — `keeler mutants-diff [BASE]`.
+mutants-diff BASE="HEAD":
     #!/usr/bin/env bash
     set -euo pipefail
     # Both shapes: sources beside the root manifest, and sources in a
@@ -167,6 +188,30 @@ mutants-diff:
     # and `src/*.rs` does not match a member's — a gate that watches only
     # one of them is blind to half the projects it ships to.
     paths=('src/*.rs' 'src/**/*.rs' '**/src/*.rs' '**/src/**/*.rs')
+    # The merge base with BASE, not BASE itself, and not `BASE...HEAD`:
+    # three-dot is the range wanted but cannot reach the working tree, and
+    # two-dot would blame this branch for whatever the base gained since it
+    # left. Diffing from the merge base to the working tree is that range
+    # plus the uncommitted lines, in one patch cargo-mutants can read —
+    # where two concatenated diffs would name the same file twice.
+    #
+    # A named base that does not resolve is refused rather than fallen back
+    # from. A shallow checkout, a fork's pull request or a typo in the
+    # workflow would otherwise leave the gate green having compared the
+    # change against nothing — the one thing the message at the bottom of
+    # this recipe exists to prevent. The default is not asked: HEAD is its
+    # own merge base, and a repository too young to have one is the empty
+    # diff the recipe has always handled.
+    #
+    # Resolved before the index is touched, so the refusal cannot leave the
+    # intent-to-add entries below behind it.
+    if [ "$BASE" = "HEAD" ]; then
+        from=HEAD
+    elif ! from=$(git merge-base "$BASE" HEAD 2>/dev/null); then
+        echo "keeler: no merge base with '$BASE' — nothing was measured against it." >&2
+        echo "keeler: the base must be a ref this checkout has; in CI that means fetch-depth: 0." >&2
+        exit 1
+    fi
     # New files aren't in `git diff HEAD` — intent-to-add makes their full
     # content show up in the diff; reset afterwards to leave the index as-is.
     # NUL-delimited into an array: paths with spaces stay whole.
@@ -176,32 +221,39 @@ mutants-diff:
     if [ "${#untracked[@]}" -gt 0 ]; then git add -N -- "${untracked[@]}"; fi
     diff_file=$(mktemp)
     trap 'rm -f "$diff_file"' EXIT
-    git diff HEAD -- "${paths[@]}" > "$diff_file" || true
+    git diff "$from" -- "${paths[@]}" > "$diff_file" || true
     if [ "${#untracked[@]}" -gt 0 ]; then git reset -q -- "${untracked[@]}"; fi
-    if [ ! -s "$diff_file" ]; then
-        # A clean tree is not a measured tree: src changes committed earlier
-        # on this branch still need mutating, so diff against the branch base.
-        # Where main is, is `_main-ref`'s answer and no one else's.
-        base=""
-        if main_ref=$(just _main-ref 2>/dev/null); then
-            base=$(git merge-base HEAD "$main_ref" 2>/dev/null || true)
+    # Only when the base is HEAD — the default, or a caller who named it and
+    # so asked for the same comparison. A caller who named anything else
+    # asked for that comparison and no other: falling back to the branch
+    # base or the last commit would answer a question they did not ask, and
+    # in CI it would measure lines the pull request never touched.
+    if [ "$BASE" = "HEAD" ]; then
+        if [ ! -s "$diff_file" ]; then
+            # A clean tree is not a measured tree: src changes committed earlier
+            # on this branch still need mutating, so diff against the branch base.
+            # Where main is, is `_main-ref`'s answer and no one else's.
+            base=""
+            if main_ref=$(just _main-ref 2>/dev/null); then
+                base=$(git merge-base HEAD "$main_ref" 2>/dev/null || true)
+            fi
+            if [ -n "$base" ] && [ "$base" != "$(git rev-parse HEAD)" ]; then
+                git diff "$base" HEAD -- "${paths[@]}" > "$diff_file" || true
+            fi
         fi
-        if [ -n "$base" ] && [ "$base" != "$(git rev-parse HEAD)" ]; then
-            git diff "$base" HEAD -- "${paths[@]}" > "$diff_file" || true
+        if [ ! -s "$diff_file" ]; then
+            git diff HEAD~1 HEAD -- "${paths[@]}" > "$diff_file" 2>/dev/null || true
         fi
-    fi
-    if [ ! -s "$diff_file" ]; then
-        git diff HEAD~1 HEAD -- "${paths[@]}" > "$diff_file" 2>/dev/null || true
     fi
     if [ ! -s "$diff_file" ]; then
         # An honest gate says what it did not measure — it never reports the
         # absence of survivors as evidence about a change it cannot see.
-        # For everything mutants can measure, use `just mutants-all`.
+        # For everything mutants can measure, use `keeler mutants-all`.
         echo "No src/ changes — outside the mutation gate's reach; nothing was measured"
         exit 0
     fi
     echo "Running mutants on changed lines (--in-diff)"
-    cargo mutants --workspace --in-diff "$diff_file"
+    cargo mutants --workspace {{_mutants_flags}} --in-diff "$diff_file"
 
 # Full validation including mutation tests (slow)
 dev-full: dev mutants-all
