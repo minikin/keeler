@@ -161,7 +161,7 @@ fn entries<'a>(json: &'a str, key: &str) -> Vec<&'a str> {
 #[cfg(test)]
 mod tests {
     use super::{
-        CEILING, MANIFEST, MARKETPLACE, NAME, RULES, disagreements, marker_disagreement,
+        CEILING, MANIFEST, MARKETPLACE, NAME, RULES, disagreements, entries, marker_disagreement,
         marketplace_version, plugin_version,
     };
 
@@ -217,6 +217,35 @@ mod tests {
         let json = "{ \"plugins\": [ { \"name\": \"keeler\", \"source\": \"./\" } ] }";
         assert_eq!(marketplace_version(json, NAME), None);
         assert_eq!(marketplace_version("{ \"name\": \"keeler\" }", NAME), None);
+    }
+
+    #[test]
+    fn the_list_ends_where_it_ends_and_not_at_the_first_bracket() {
+        // An entry may hold an array of its own — a keyword list — and its
+        // `]` is not the end of the plugins list; what follows the list is
+        // another field's object and not a plugin. Taken either way, the
+        // gate compares a version against the wrong entry, or against
+        // none.
+        let json = "{ \"plugins\": [ { \"name\": \"keeler\", \"keywords\": [\"rust\"], \
+                    \"version\": \"1.2.3\" } ], \"owner\": { \"name\": \"minikin\", \
+                    \"version\": \"0.0.1\" } }";
+        assert_eq!(
+            entries(json, "plugins").len(),
+            1,
+            "the scan read {:?} as the plugin list",
+            entries(json, "plugins"),
+        );
+        assert_eq!(marketplace_version(json, NAME), Some("1.2.3"));
+    }
+
+    #[test]
+    fn a_plugins_field_that_is_not_a_list_of_entries_answers_nothing() {
+        // A hand-edited marketplace leaves the scan looking at the closing
+        // brace of the object the field lives in, with no entry open. That
+        // is a file listing no keeler, reported as one — not a gate that
+        // dies inside the check that was meant to report it.
+        assert_eq!(marketplace_version("{ \"plugins\": {} }", NAME), None);
+        assert_eq!(marketplace_version("{ \"plugins\": \"none\" }", NAME), None);
     }
 
     #[test]
