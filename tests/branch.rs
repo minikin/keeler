@@ -1215,6 +1215,25 @@ fn the_branch_baseline_job_no_longer_reads_the_projects_justfile() {
             "the branch-baseline job still reads `{marker}`:\n{job}"
         );
     }
+
+    // And the chapters that state the rule say what the job now does. A
+    // rule promising a check CI does not run is the worst kind of stale
+    // documentation: it is the one an agent reads before acting.
+    for chapter in ["graph-mode.md", "docs/KEELER.md"] {
+        let text = std::fs::read_to_string(repo_root().join(chapter)).unwrap();
+        assert!(
+            text.contains("crap-baseline.json"),
+            "{chapter} no longer states the shared-reference rule"
+        );
+        let stale: Vec<&str> = text
+            .lines()
+            .filter(|line| line.contains("coverage bar"))
+            .collect();
+        assert!(
+            stale.is_empty(),
+            "{chapter} still names a bar CI guards nowhere: {stale:?}"
+        );
+    }
 }
 
 #[test]
