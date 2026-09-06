@@ -1025,7 +1025,8 @@ fn the_workflow_runs_every_gate_from_the_fetched_justfile() {
     // ... by a reader that finds one wherever a command may begin. A finder
     // that only looked at the head of a line would let a one-line rewrite
     // of the CRAP gate drop out of this scenario without a word.
-    let hidden = "        run: if [ -f crap-baseline.json ]; then just crap-delta; else just crap; fi";
+    let hidden =
+        "        run: if [ -f crap-baseline.json ]; then just crap-delta; else just crap; fi";
     assert_eq!(
         just_invocations(hidden)
             .iter()
