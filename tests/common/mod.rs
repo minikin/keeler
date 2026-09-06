@@ -28,6 +28,31 @@ pub fn indent_of(line: &str) -> usize {
     line.len() - line.trim_start().len()
 }
 
+/// The names of the top-level jobs, in the order `jobs:` lists them.
+pub fn job_names(workflow: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut in_jobs = false;
+    for line in workflow.lines() {
+        if !line.trim().is_empty() && !line.starts_with(char::is_whitespace) {
+            in_jobs = line.trim_end() == "jobs:";
+            continue;
+        }
+        if !in_jobs {
+            continue;
+        }
+        let Some(entry) = line.strip_prefix("  ") else {
+            continue;
+        };
+        if entry.starts_with(' ') || entry.starts_with('#') {
+            continue;
+        }
+        if let Some(name) = entry.trim_end().strip_suffix(':') {
+            names.push(name.to_string());
+        }
+    }
+    names
+}
+
 /// The lines of one top-level job under `jobs:` — from its key to the next
 /// job's key. Enough YAML for a file we also own.
 pub fn job_block(workflow: &str, job: &str) -> String {
@@ -55,6 +80,26 @@ pub fn job_block(workflow: &str, job: &str) -> String {
             break;
         }
         block.append(&mut pending);
+        block.push(line);
+    }
+    block.join("\n")
+}
+
+/// The lines of one step of a job, found by its `name:`. A job may hold
+/// several `run:` steps, and `run_script` takes the first — so a test about
+/// one of them names it rather than counting on its position.
+pub fn step_block(job: &str, name: &str) -> String {
+    let head = format!("- name: {name}");
+    let mut lines = job.lines().skip_while(|line| line.trim() != head);
+    let Some(first) = lines.next() else {
+        panic!("the job has no `{name}` step");
+    };
+    let indent = indent_of(first);
+    let mut block = vec![first];
+    for line in lines {
+        if !line.trim().is_empty() && indent_of(line) <= indent {
+            break;
+        }
         block.push(line);
     }
     block.join("\n")

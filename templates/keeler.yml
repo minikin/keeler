@@ -1,12 +1,15 @@
 # The Keeler gates, installed as .github/workflows/keeler.yml.
 #
-# Every step goes through a `just` recipe, so CI runs exactly what `just dev`
-# runs on your machine — a gate that passes locally and fails here (or the
-# reverse) would make both untrustworthy.
+# Every step goes through a Keeler recipe, fetched here at the tag KEELER_REF
+# names below — CI has no plugin, so it reads the recipes from a checkout of
+# its own. What runs is therefore exactly what `keeler dev` runs on your
+# machine: a gate that passes locally and fails here (or the reverse) would
+# make both untrustworthy.
 #
-# Expect red on an existing codebase: that is the point. See "Adopting it in
-# an existing codebase" in Keeler's README for how to ratchet the thresholds
-# instead of repaying the debt up front.
+# Expect red on an existing codebase: that is the point. KEELER_COV_MIN and
+# KEELER_CRAP_MAX are the two bars, commented out below at their defaults —
+# set them to where this project stands today and tighten them as the debt
+# is repaid.
 name: Keeler gates
 
 on:
@@ -20,6 +23,10 @@ env:
   # file here. Change it to move this project to another version — nothing
   # else here needs editing, and nothing rewrites it for you.
   KEELER_REF: v@VERSION@
+  # The two bars, at their defaults. Uncommenting one moves it for every job
+  # below; exporting the same name in your shell moves it for `keeler dev`.
+  # KEELER_COV_MIN: 90
+  # KEELER_CRAP_MAX: 15
 
 jobs:
   lints:
@@ -32,7 +39,22 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@just
-      - run: just lint
+      - uses: actions/cache@v4
+        id: keeler
+        with:
+          path: ${{ runner.temp }}/keeler
+          key: keeler-${{ env.KEELER_REF }}
+      - name: Fetch Keeler at the pinned tag
+        if: steps.keeler.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/keeler"
+          if ! curl -fsSL "https://codeload.github.com/minikin/keeler/tar.gz/${KEELER_REF}" \
+               | tar -xz -C "$RUNNER_TEMP/keeler" --strip-components=1; then
+            echo "cannot fetch Keeler at ${KEELER_REF} — check the KEELER_REF line in .github/workflows/keeler.yml" >&2
+            exit 1
+          fi
+      - run: just --justfile "$RUNNER_TEMP/keeler/Justfile" --working-directory . lint
 
   test:
     name: Test
@@ -44,7 +66,22 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest,just
-      - run: just test
+      - uses: actions/cache@v4
+        id: keeler
+        with:
+          path: ${{ runner.temp }}/keeler
+          key: keeler-${{ env.KEELER_REF }}
+      - name: Fetch Keeler at the pinned tag
+        if: steps.keeler.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/keeler"
+          if ! curl -fsSL "https://codeload.github.com/minikin/keeler/tar.gz/${KEELER_REF}" \
+               | tar -xz -C "$RUNNER_TEMP/keeler" --strip-components=1; then
+            echo "cannot fetch Keeler at ${KEELER_REF} — check the KEELER_REF line in .github/workflows/keeler.yml" >&2
+            exit 1
+          fi
+      - run: just --justfile "$RUNNER_TEMP/keeler/Justfile" --working-directory . test
 
   quality:
     name: Coverage + CRAP gate
@@ -58,19 +95,34 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-llvm-cov,cargo-nextest,cargo-crap,just
+      - uses: actions/cache@v4
+        id: keeler
+        with:
+          path: ${{ runner.temp }}/keeler
+          key: keeler-${{ env.KEELER_REF }}
+      - name: Fetch Keeler at the pinned tag
+        if: steps.keeler.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/keeler"
+          if ! curl -fsSL "https://codeload.github.com/minikin/keeler/tar.gz/${KEELER_REF}" \
+               | tar -xz -C "$RUNNER_TEMP/keeler" --strip-components=1; then
+            echo "cannot fetch Keeler at ${KEELER_REF} — check the KEELER_REF line in .github/workflows/keeler.yml" >&2
+            exit 1
+          fi
       - name: Coverage gate
-        run: just cov
+        run: just --justfile "$RUNNER_TEMP/keeler/Justfile" --working-directory . cov
       # The committed baseline is the shared reference: a change may not
       # regress any function's score, whatever the absolute threshold says.
-      # Without one, only the threshold applies — run `just crap-baseline`
+      # Without one, only the threshold applies — run `keeler crap-baseline`
       # and commit the result to turn the ratchet on.
       - name: CRAP gate
         run: |
           if [ -f crap-baseline.json ]; then
-            just crap-delta
+            just --justfile "$RUNNER_TEMP/keeler/Justfile" --working-directory . crap-delta
           else
             echo "no crap-baseline.json committed — threshold only, no delta gate"
-            just crap
+            just --justfile "$RUNNER_TEMP/keeler/Justfile" --working-directory . crap
           fi
 
   mutants:
@@ -84,20 +136,31 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-mutants,cargo-nextest
+          tool: cargo-mutants,cargo-nextest,just
+      - uses: actions/cache@v4
+        id: keeler
+        with:
+          path: ${{ runner.temp }}/keeler
+          key: keeler-${{ env.KEELER_REF }}
+      - name: Fetch Keeler at the pinned tag
+        if: steps.keeler.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/keeler"
+          if ! curl -fsSL "https://codeload.github.com/minikin/keeler/tar.gz/${KEELER_REF}" \
+               | tar -xz -C "$RUNNER_TEMP/keeler" --strip-components=1; then
+            echo "cannot fetch Keeler at ${KEELER_REF} — check the KEELER_REF line in .github/workflows/keeler.yml" >&2
+            exit 1
+          fi
       # Changed lines only on a pull request: full mutation testing on an
-      # existing codebase takes hours and reports debt you did not just write.
+      # existing codebase takes hours and reports debt you did not just
+      # write. The recipe carries the settings the run needs — a bare
+      # `cargo mutants` here would carry none of them.
       - name: Mutation tests (changed lines only)
         if: github.event_name == 'pull_request'
         env:
           BASE_REF: ${{ github.base_ref }}
-        run: |
-          git diff "origin/${BASE_REF}...HEAD" -- 'src/*.rs' 'src/**/*.rs' > pr.diff
-          if [ ! -s pr.diff ]; then
-            echo "No changed src lines — skipping mutants."
-            exit 0
-          fi
-          cargo mutants --in-diff pr.diff
+        run: just --justfile "$RUNNER_TEMP/keeler/Justfile" --working-directory . mutants-diff "origin/${BASE_REF}"
       - name: Upload mutants output
         if: always() && github.event_name == 'pull_request'
         uses: actions/upload-artifact@v5
@@ -106,12 +169,13 @@ jobs:
           path: mutants.out/
 
   # A task branch measures against the whole-repo state; it never moves it.
-  # `crap-baseline.json` and the coverage bar in the `cov` recipe are the
-  # references every branch is judged by, and they settle at fan-in, on
-  # main — `just keeler-land` regenerates the baseline there and stages it
-  # for a human to commit. A branch that moved either would record its own
-  # tree as the new normal, and every branch after it would measure
-  # against that instead of against main.
+  # `crap-baseline.json` is the reference every branch is judged by, and it
+  # settles at fan-in, on main — `keeler keeler-land` regenerates it there
+  # and stages it for a human to commit. A branch that moved it would record
+  # its own tree as the new normal, and every branch after it would measure
+  # against that instead of against main. The bars themselves are no longer
+  # a file a branch can reach: they are the two variables at the top of this
+  # workflow, which only a change to this file can move.
   branch-baseline:
     name: Branch leaves the baseline alone
     if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'keeler/')
@@ -121,13 +185,13 @@ jobs:
         with:
           # The check diffs against the merge base; a shallow clone has none.
           fetch-depth: 0
-      - name: The branch moved neither the baseline nor the coverage bar
+      - name: The branch left the baseline alone
         env:
           BASE_REF: ${{ github.base_ref }}
         run: |
           set -euo pipefail
           fail() { echo "branch baseline: $*" >&2; exit 1; }
-          moved="baselines move only at land time, on main — run just keeler-land there"
+          moved="baselines move only at land time, on main — run keeler keeler-land there"
           # A checkout on a pull request holds the branches as origin/ refs
           # and a detached HEAD; a local run holds them by name.
           resolve() {
@@ -142,57 +206,7 @@ jobs:
           if ! git diff --quiet "$merge_base" HEAD -- crap-baseline.json; then
             fail "crap-baseline.json changed on this branch — $moved"
           fi
-          # The justfile by the name the project tracks it under: `just`
-          # accepts any ASCII-case spelling of `justfile` and `.justfile`,
-          # so a hard-coded `Justfile` reads nothing in a project that has
-          # its own, and this check would then refuse every branch over a
-          # recipe that is present. No early `exit` in the awk — it would
-          # close the pipe under `pipefail` and fail the read.
-          justfiles_at() {
-            git ls-tree --name-only "$1" | awk '
-              tolower($0) == "justfile" || tolower($0) == ".justfile" { print }
-            '
-          }
-          # The cov recipe, not the whole justfile: every task branch adds
-          # its own recipe and git merges those cleanly. What may not move
-          # is the coverage bar the whole repository is measured against.
-          cov_recipe() {
-            # `[^ \t]` rather than `[^[:space:]]`: Ubuntu's default awk is
-            # mawk, which only learned POSIX character classes in 1.3.4.
-            git show "$1:$2" 2>/dev/null | awk '
-              /^cov:/ { inside = 1 }
-              inside && NF && /^[^ \t]/ && $0 !~ /^cov:/ { inside = 0 }
-              inside { print }
-            '
-          }
-          base_justfiles=$(justfiles_at "$merge_base") || fail "cannot read the tree at $base_ref"
-          # Blaming the recipe for a file that is not there sends the
-          # reader looking in the wrong place.
-          [ -n "$base_justfiles" ] || fail "no justfile at $base_ref — this check reads the project's justfile to tell whether the coverage bar moved"
-          head_justfiles=$(justfiles_at HEAD) || fail "cannot read the tree at HEAD"
-          [ -n "$head_justfiles" ] || fail "the justfile is gone on this branch — $moved"
-          # The file the repository is measured through is as much the
-          # shared reference as the bar inside it: renaming it, or adding
-          # a second candidate beside it, moves the bar without touching a
-          # byte of the recipe — and a second candidate is the state just
-          # refuses to run in at all.
-          if [ "$base_justfiles" != "$head_justfiles" ]; then
-            fail "the justfile changed on this branch ($(echo $base_justfiles) → $(echo $head_justfiles)) — $moved"
-          fi
-          # The list is equal at both refs by now, so its first line is
-          # the name at either. awk rather than `head`, which would close
-          # the pipe under `pipefail`.
-          base_justfile=$(printf '%s' "$base_justfiles" | awk 'NR == 1')
-          base_cov=$(cov_recipe "$merge_base" "$base_justfile") || fail "cannot read $base_justfile at $base_ref"
-          # Finding nothing is not the same as finding no change. If the
-          # recipe is absent or spelled otherwise at the base, this check
-          # cannot tell whether the coverage bar moved — and a gate that
-          # reports success having looked at nothing is worse than no gate.
-          [ -n "$base_cov" ] || fail "no \`cov:\` recipe in $base_justfile at $base_ref — this check cannot tell whether the coverage bar moved"
-          if [ "$base_cov" != "$(cov_recipe HEAD "$base_justfile")" ]; then
-            fail "the justfile's cov recipe changed on this branch — $moved"
-          fi
-          echo "crap-baseline.json and the cov recipe are as $base_ref left them"
+          echo "crap-baseline.json is as $base_ref left it"
 
   # A task branch — keeler/<spec-slug>/<task-id> — must carry the record
   # /keeler:review writes, and the record must name a commit this branch

@@ -6,12 +6,15 @@
 //! loudly), so they stay fast and can never touch the network. The
 //! end-to-end installer jobs in CI cover the rest.
 
+mod common;
+
 use std::path::{Path, PathBuf};
+
+use common::{indent_of, job_names};
 
 /// Jobs a project that adopts Keeler can actually run: they need nothing but
 /// the project's own sources and the tools the installer set up. The last
-/// two read only git history, a file the review stage writes, and the
-/// project's own `crap-baseline.json` and `Justfile`.
+/// two read only git history, and a file the review stage writes.
 const USER_FACING_JOBS: [&str; 6] = [
     "lints",
     "test",
@@ -66,32 +69,6 @@ fn shipped_workflow_path() -> PathBuf {
         .find_map(|line| line.strip_prefix("WORKFLOW_TEMPLATE="))
         .expect("install.sh no longer names the workflow template it ships");
     repo_root().join(template)
-}
-
-/// Names of the top-level entries under `jobs:` — enough YAML for a file we
-/// also own.
-fn job_names(workflow: &str) -> Vec<String> {
-    let mut names = Vec::new();
-    let mut in_jobs = false;
-    for line in workflow.lines() {
-        if !line.trim().is_empty() && !line.starts_with(char::is_whitespace) {
-            in_jobs = line.trim_end() == "jobs:";
-            continue;
-        }
-        if !in_jobs {
-            continue;
-        }
-        let Some(entry) = line.strip_prefix("  ") else {
-            continue;
-        };
-        if entry.starts_with(' ') || entry.starts_with('#') {
-            continue;
-        }
-        if let Some(name) = entry.trim_end().strip_suffix(':') {
-            names.push(name.to_string());
-        }
-    }
-    names
 }
 
 /// A throwaway project for one test run, removed on drop. Its `bin/` holds
@@ -2704,4 +2681,382 @@ proptest::proptest! {
             .collect();
         proptest::prop_assert!(touched.is_empty(), "the install touched {:?}", touched);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Spec 09 — T12: the installed workflow is valid YAML
+// ---------------------------------------------------------------------------
+
+/// A YAML value, in the subset a workflow is written in: block mappings,
+/// block sequences, block scalars and flow sequences of scalars.
+///
+/// Hand-rolled rather than pulled in, the way `xtask`'s JSON field readers
+/// are: the harness has one third-party crate, and this is a file the
+/// project owns and writes by hand. It is stricter than YAML in one place
+/// — a key repeated in the same block is refused here, where a parser would
+/// silently keep the last — and every other rejection it makes is one a
+/// real parser makes too, which `a_workflow_yaml_cannot_read_fails_the_gate`
+/// pins case by case.
+#[derive(Debug, PartialEq)]
+enum Yaml {
+    Scalar(String),
+    List(Vec<Yaml>),
+    Map(Vec<(String, Yaml)>),
+}
+
+impl Yaml {
+    /// The value at `key`, if this is a mapping that has one.
+    fn get(&self, key: &str) -> Option<&Yaml> {
+        match self {
+            Yaml::Map(entries) => entries
+                .iter()
+                .find(|(name, _)| name == key)
+                .map(|(_, value)| value),
+            _ => None,
+        }
+    }
+
+    /// A mapping's keys, in the order it lists them; empty for anything else.
+    fn keys(&self) -> Vec<&str> {
+        match self {
+            Yaml::Map(entries) => entries.iter().map(|(name, _)| name.as_str()).collect(),
+            _ => Vec::new(),
+        }
+    }
+}
+
+/// Reads `text`, or says which line defeated it.
+fn parse_yaml(text: &str) -> Result<Yaml, String> {
+    let mut cursor = Cursor {
+        lines: text.lines().map(str::to_string).collect(),
+        at: 0,
+    };
+    let document = cursor.node(0)?;
+    cursor.skip();
+    if cursor.at < cursor.lines.len() {
+        return Err(format!(
+            "line {}: content outside the document's top-level block",
+            cursor.at + 1
+        ));
+    }
+    Ok(document)
+}
+
+struct Cursor {
+    lines: Vec<String>,
+    at: usize,
+}
+
+impl Cursor {
+    /// Advances past blank and comment lines. Never called while reading a
+    /// block scalar, whose body is content whatever it looks like.
+    fn skip(&mut self) {
+        while let Some(line) = self.lines.get(self.at) {
+            let trimmed = line.trim_start();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                self.at += 1;
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn peek(&mut self) -> Option<(usize, String)> {
+        self.skip();
+        self.lines
+            .get(self.at)
+            .map(|line| (indent_of(line), line.clone()))
+    }
+
+    /// A mapping, a list, a lone scalar — or the empty scalar a key with
+    /// nothing under it carries.
+    fn node(&mut self, min_indent: usize) -> Result<Yaml, String> {
+        let Some((indent, line)) = self.peek() else {
+            return Ok(Yaml::Scalar(String::new()));
+        };
+        if indent < min_indent {
+            return Ok(Yaml::Scalar(String::new()));
+        }
+        if line[..indent].contains('\t') {
+            return Err(format!("line {}: a tab in the indentation", self.at + 1));
+        }
+        let trimmed = line.trim_start().to_string();
+        if trimmed == "-" || trimmed.starts_with("- ") {
+            self.list(indent)
+        } else if split_key(&trimmed).is_some() {
+            self.map(indent)
+        } else {
+            self.at += 1;
+            value_of(&trimmed, self.at)
+        }
+    }
+
+    fn list(&mut self, indent: usize) -> Result<Yaml, String> {
+        let mut items = Vec::new();
+        while let Some((found, line)) = self.peek() {
+            if found < indent {
+                break;
+            }
+            if found > indent {
+                return Err(format!(
+                    "line {}: unexpected indentation in a list",
+                    self.at + 1
+                ));
+            }
+            let trimmed = line.trim_start();
+            if !(trimmed == "-" || trimmed.starts_with("- ")) {
+                break;
+            }
+            // The dash becomes a space, so `- name: x` reads as the mapping
+            // `name: x` two columns in and the keys under it fall into place
+            // without a second code path for an item's first line.
+            let mut rewritten = line.clone();
+            rewritten.replace_range(indent..=indent, " ");
+            self.lines[self.at] = rewritten;
+            items.push(self.node(indent + 1)?);
+        }
+        Ok(Yaml::List(items))
+    }
+
+    fn map(&mut self, indent: usize) -> Result<Yaml, String> {
+        let mut entries: Vec<(String, Yaml)> = Vec::new();
+        while let Some((found, line)) = self.peek() {
+            if found < indent {
+                break;
+            }
+            if found > indent {
+                return Err(format!("line {}: unexpected indentation", self.at + 1));
+            }
+            if line[..found].contains('\t') {
+                return Err(format!("line {}: a tab in the indentation", self.at + 1));
+            }
+            let trimmed = line.trim_start().to_string();
+            if trimmed == "-" || trimmed.starts_with("- ") {
+                break;
+            }
+            let Some((key, rest)) = split_key(&trimmed) else {
+                break;
+            };
+            let at = self.at + 1;
+            if entries.iter().any(|(seen, _)| *seen == key) {
+                return Err(format!("line {at}: `{key}` is set twice in one block"));
+            }
+            self.at += 1;
+            let value = if rest.is_empty() {
+                self.node(indent + 1)?
+            } else if rest.starts_with('|') || rest.starts_with('>') {
+                self.block_scalar(indent, &rest, at)?
+            } else {
+                value_of(&rest, at)?
+            };
+            entries.push((key, value));
+        }
+        Ok(Yaml::Map(entries))
+    }
+
+    /// The body of a `|` or `>` block: every line indented past the key's
+    /// own, kept verbatim — a `#` in there is content, not a comment.
+    fn block_scalar(&mut self, indent: usize, header: &str, at: usize) -> Result<Yaml, String> {
+        if !matches!(&header[1..], "" | "-" | "+") {
+            return Err(format!(
+                "line {at}: `{header}` is not a block scalar header"
+            ));
+        }
+        let mut body: Vec<String> = Vec::new();
+        while let Some(line) = self.lines.get(self.at) {
+            if !line.trim().is_empty() && indent_of(line) <= indent {
+                break;
+            }
+            body.push(line.clone());
+            self.at += 1;
+        }
+        while body.last().is_some_and(|line| line.trim().is_empty()) {
+            body.pop();
+        }
+        if body.is_empty() {
+            return Err(format!("line {at}: the block scalar has no body"));
+        }
+        Ok(Yaml::Scalar(body.join("\n")))
+    }
+}
+
+/// The first byte of `text` outside quotes for which `wanted` holds, and
+/// whether a quote was left open. One scanner for the two readers below,
+/// which have to agree on what "outside quotes" means.
+fn outside_quotes(text: &str, wanted: impl Fn(usize, &[u8]) -> bool) -> (Option<usize>, bool) {
+    let bytes = text.as_bytes();
+    let mut quote: Option<u8> = None;
+    for (index, &byte) in bytes.iter().enumerate() {
+        if let Some(open) = quote {
+            if byte == open {
+                quote = None;
+            }
+        } else if byte == b'\'' || byte == b'"' {
+            quote = Some(byte);
+        } else if wanted(index, bytes) {
+            return (Some(index), false);
+        }
+    }
+    (None, quote.is_some())
+}
+
+/// A line's `key: value` split, or `None` when it is not a mapping entry.
+/// The separator is the first `:` outside quotes that ends the line or is
+/// followed by a space — YAML's own rule for a plain key.
+fn split_key(line: &str) -> Option<(String, String)> {
+    let index = outside_quotes(line, |index, bytes| {
+        bytes[index] == b':' && bytes.get(index + 1).is_none_or(|next| *next == b' ')
+    })
+    .0?;
+    let key = line[..index].trim();
+    (!key.is_empty()).then(|| (key.to_string(), line[index + 1..].trim().to_string()))
+}
+
+/// One plain, quoted or flow-sequence value, with any trailing comment
+/// removed — and an error for the shapes a real parser refuses.
+fn value_of(text: &str, at: usize) -> Result<Yaml, String> {
+    let text = strip_comment(text, at)?;
+    let text = text.trim();
+    if let Some(inner) = text.strip_prefix('[') {
+        let inner = inner
+            .strip_suffix(']')
+            .ok_or_else(|| format!("line {at}: the flow sequence `{text}` is never closed"))?;
+        return Ok(Yaml::List(
+            inner
+                .split(',')
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .map(|item| Yaml::Scalar(unquote(item)))
+                .collect(),
+        ));
+    }
+    if text.starts_with('{') {
+        return Err(format!(
+            "line {at}: `{text}` opens a flow mapping — quote it"
+        ));
+    }
+    if is_quoted(text) {
+        return Ok(Yaml::Scalar(unquote(text)));
+    }
+    if text.contains(": ") || text.ends_with(':') {
+        return Err(format!(
+            "line {at}: the plain scalar `{text}` holds a `:` — quote it"
+        ));
+    }
+    Ok(Yaml::Scalar(text.to_string()))
+}
+
+/// `text` up to a `#` that opens a comment: one outside quotes, at the
+/// start of the value or after a space. An unclosed quote is an error, not
+/// a value.
+fn strip_comment(text: &str, at: usize) -> Result<String, String> {
+    let (found, unclosed) = outside_quotes(text, |index, bytes| {
+        bytes[index] == b'#' && (index == 0 || bytes[index - 1] == b' ')
+    });
+    if let Some(index) = found {
+        return Ok(text[..index].to_string());
+    }
+    if unclosed {
+        return Err(format!("line {at}: the value `{text}` is never closed"));
+    }
+    Ok(text.to_string())
+}
+
+fn is_quoted(text: &str) -> bool {
+    text.len() >= 2
+        && ((text.starts_with('"') && text.ends_with('"'))
+            || (text.starts_with('\'') && text.ends_with('\'')))
+}
+
+fn unquote(text: &str) -> String {
+    if is_quoted(text) {
+        text[1..text.len() - 1].to_string()
+    } else {
+        text.to_string()
+    }
+}
+
+#[test]
+fn the_installed_workflow_is_valid_yaml() {
+    // Given a fresh crate where the installer has run
+    let project = TempProject::new("workflow-yaml", MANIFEST_WITH_PROPTEST);
+    project.install();
+
+    // When the workflow it left is read as YAML
+    let workflow = installed_workflow(&project);
+    let parsed = parse_yaml(&workflow).unwrap_or_else(|err| {
+        panic!("the installed workflow is not valid YAML: {err}\n{workflow}")
+    });
+
+    // Then every gate is there as a job. A workflow GitHub cannot parse
+    // fails whole and quietly — no job runs, and the pull request shows no
+    // red check to say why.
+    assert_eq!(
+        parsed.get("jobs").map(Yaml::keys).unwrap_or_default(),
+        [
+            "lints",
+            "test",
+            "quality",
+            "mutants",
+            "branch-baseline",
+            "review-record",
+        ],
+        "the installed workflow's jobs are not the gates:\n{workflow}",
+    );
+}
+
+#[test]
+fn a_workflow_yaml_cannot_read_fails_the_gate() {
+    // The reader above is only worth a gate if it refuses what a real
+    // parser refuses: one that accepted everything would report success
+    // having looked at nothing.
+    for (fault, text) in [
+        (
+            "a duplicate key",
+            "jobs:\n  test:\n    runs-on: a\n    runs-on: b\n",
+        ),
+        ("a tab in the indentation", "jobs:\n\ttest: a\n"),
+        ("a key that belongs to no block", "name: a\n  stray: b\n"),
+        ("an unclosed quote", "name: \"a\n"),
+        ("a plain scalar holding a colon", "run: echo a: b\n"),
+        ("an empty block scalar", "run: |\nname: a\n"),
+        ("an unclosed flow sequence", "on:\n  branches: [main\n"),
+        ("a value that opens a flow mapping", "env:\n  A: {a: 1\n"),
+    ] {
+        assert!(
+            parse_yaml(text).is_err(),
+            "the reader accepted {fault}:\n{text}",
+        );
+    }
+
+    // And it reads the shapes a workflow is written in
+    let workflow = concat!(
+        "name: a\n\n",
+        "on:\n  push:\n    branches: [main]\n  pull_request:\n\n",
+        "jobs:\n",
+        "  # a comment about the job\n",
+        "  test:\n    runs-on: ubuntu-latest\n    steps:\n",
+        "      - uses: actions/checkout@v7\n        with:\n          fetch-depth: 0\n",
+        "      - name: A step\n        run: |\n          set -eu\n",
+        "          # not a comment, a line of the script\n          echo hi\n",
+    );
+    let parsed = parse_yaml(workflow).expect("the reader cannot read a plain workflow");
+    assert_eq!(parsed.keys(), ["name", "on", "jobs"]);
+    let steps = parsed
+        .get("jobs")
+        .and_then(|jobs| jobs.get("test"))
+        .and_then(|test| test.get("steps"))
+        .expect("the reader lost the steps");
+    let Yaml::List(steps) = steps else {
+        panic!("the steps did not read as a list: {steps:?}");
+    };
+    assert_eq!(steps.len(), 2, "the reader lost a step: {steps:?}");
+    assert_eq!(
+        steps[1].get("run"),
+        Some(&Yaml::Scalar(
+            "          set -eu\n          # not a comment, a line of the script\n          echo hi"
+                .to_string()
+        )),
+        "the block scalar did not survive the read",
+    );
 }
