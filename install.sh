@@ -363,7 +363,10 @@ if [ "${#stale[@]}" -gt 0 ] || [ -n "$claude_import" ]; then
             note "$path"
         done
         printf '\n  These are no longer installed — the plugin carries them. Nothing\n'
-        printf '  here was touched; remove them when you are ready:\n\n'
+        # Named relative to the project, which is not always where the
+        # caller stands: `./install.sh /path/to/project` is documented, and
+        # the line pasted elsewhere stages files nobody meant to stage.
+        printf '  here was touched; in %s, remove them when you are ready:\n\n' "$DEST"
         printf '    git rm -r -- %s\n' "${stale[*]}"
     fi
     if [ -n "$claude_import" ]; then

@@ -2256,6 +2256,19 @@ fn files_an_earlier_install_left_behind_are_named_and_kept() {
         !removal.iter().any(|path| path == "CLAUDE.md"),
         "the removal line offers to delete the project's own CLAUDE.md: {removal:?}",
     );
+    // And it says where those relative paths are rooted, next to the line
+    // itself: the destination is an argument, so the reader is not
+    // necessarily standing in it.
+    let lines: Vec<&str> = report.lines().collect();
+    let at = lines
+        .iter()
+        .position(|line| line.contains("git rm -r --"))
+        .unwrap();
+    let dest = project.path().display().to_string();
+    assert!(
+        lines[..at].iter().rev().take(3).any(|l| l.contains(&dest)),
+        "nothing near the removal line says where its paths are rooted:\n{report}",
+    );
     // And every one of those files is byte-identical afterwards
     let after = project.tree_snapshot();
     for (file, _) in STALE_MARKERS {
@@ -2265,6 +2278,29 @@ fn files_an_earlier_install_left_behind_are_named_and_kept() {
             "{file} was not left as it was found",
         );
     }
+}
+
+#[test]
+fn the_traces_the_scenarios_do_not_name_are_found_too() {
+    // Given a crate holding the two an earlier install could leave that the
+    // scenarios' fixture does not: the second skill, and a justfile under
+    // the dotted spelling `just` accepts alongside the plain one
+    let project = TempProject::new("stale-remainder", MANIFEST_WITH_PROPTEST);
+    let skill = project.path().join(".claude/skills/property-testing");
+    std::fs::create_dir_all(&skill).unwrap();
+    std::fs::write(skill.join("SKILL.md"), "left behind\n").unwrap();
+    std::fs::write(project.path().join(".justfile"), stale_content("Justfile")).unwrap();
+
+    // When the installer runs
+    let report = project.install();
+
+    // Then both are named. Neither is reachable through STALE_MARKERS, so
+    // without this test the two lines that find them could go unnoticed.
+    assert_eq!(
+        stale_bullets(&report),
+        [".claude/skills/property-testing", ".justfile"],
+        "a trace of an earlier install went unreported:\n{report}",
+    );
 }
 
 #[test]
