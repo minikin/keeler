@@ -269,15 +269,6 @@ while IFS= read -r rel; do
             fi
             continue
             ;;
-        # Keeler's to own: replaced wholesale, with the replaced text kept.
-        .claude/keeler.md)
-            if ! same_entry "$before/$rel" "$project/$rel"; then
-                if ! cmp -s "$before/$rel" "$project/$rel.bak"; then
-                    clobbered+=("$rel (replaced without keeping the old text)")
-                fi
-            fi
-            continue
-            ;;
         Cargo.lock)
             if [ "$manifest_edited" -eq 1 ]; then continue; fi
             ;;
@@ -326,7 +317,7 @@ fi
 while IFS= read -r rel; do
     [ -n "$rel" ] || continue
     case "$rel" in
-        CLAUDE.md | .gitignore | Cargo.toml | .claude/keeler.md) continue ;;
+        CLAUDE.md | .gitignore | Cargo.toml) continue ;;
     esac
     if [ -e "$before/$rel" ] || [ -L "$before/$rel" ]; then
         same_entry "$before/$rel" "$reference/$rel" || printf '%s\n' "$rel" >> "$work/expected"
@@ -367,7 +358,6 @@ fi
     cat "$work/tracked"
     sed 's/$/.keeler/' "$work/expected"
     if [ "$manifest_edited" -eq 1 ]; then echo "Cargo.lock"; fi
-    if [ -e "$project/.claude/keeler.md.bak" ]; then echo ".claude/keeler.md.bak"; fi
 } | sort -u > "$work/allowed"
 list_files "$project" > "$work/project-after"
 comm -13 "$work/project-before" "$work/project-after" | sort > "$work/added"

@@ -158,11 +158,17 @@ impl TempProject {
     /// Runs `install.sh <project> --no-tools` with the stub cargo first on
     /// PATH, succeeding or not.
     fn try_install(&self) -> std::process::Output {
+        self.try_install_args(&["--no-tools"])
+    }
+
+    /// `try_install` for the flags a scenario names itself — `--no-ci`, or
+    /// no `--no-tools` at all when the tool path is what is under test.
+    fn try_install_args(&self, args: &[&str]) -> std::process::Output {
         let path_var = std::env::var("PATH").unwrap();
         std::process::Command::new("bash")
             .arg(repo_root().join("install.sh"))
             .arg(&self.dir)
-            .arg("--no-tools")
+            .args(args)
             .env(
                 "PATH",
                 format!("{}:{path_var}", self.dir.join("bin").display()),
@@ -173,7 +179,12 @@ impl TempProject {
 
     /// Runs the installer and panics if it fails.
     fn install(&self) -> String {
-        let output = self.try_install();
+        self.install_args(&["--no-tools"])
+    }
+
+    /// `install` for the flags a scenario names itself.
+    fn install_args(&self, args: &[&str]) -> String {
+        let output = self.try_install_args(args);
         assert!(
             output.status.success(),
             "install.sh failed:\n{}{}",
@@ -181,6 +192,39 @@ impl TempProject {
             String::from_utf8_lossy(&output.stderr),
         );
         String::from_utf8_lossy(&output.stdout).into_owned()
+    }
+
+    /// Puts Keeler's `Justfile` where `run_just` can reach it. The installer
+    /// no longer copies it — the recipes are Keeler's and stay Keeler's —
+    /// but the recipe tests below are about the recipes, not about how they
+    /// arrive, so the harness stands in for the delivery mechanism.
+    fn with_keeler_recipes(&self) {
+        std::fs::copy(repo_root().join("Justfile"), self.dir.join("Justfile")).unwrap();
+    }
+
+    /// The graph parser `keeler-graph` shells out to, beside the recipes.
+    fn with_graph_parser(&self) {
+        std::fs::create_dir_all(self.dir.join("scripts")).unwrap();
+        std::fs::copy(
+            repo_root().join("scripts/keeler-graph.sh"),
+            self.dir.join("scripts/keeler-graph.sh"),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(
+                self.dir.join("scripts/keeler-graph.sh"),
+                std::fs::Permissions::from_mode(0o755),
+            )
+            .unwrap();
+        }
+    }
+
+    /// Every file in the project, without reading any of them — the shape a
+    /// scenario means when it says "the files created".
+    fn names(&self) -> std::collections::BTreeSet<String> {
+        self.tree_snapshot().into_keys().collect()
     }
 
     fn cargo_calls(&self) -> String {
@@ -260,6 +304,7 @@ fn coverage_and_crap_recipes_are_honest_about_a_project_with_no_rust_sources() {
     // Given a project with no src/ directory
     let project = TempProject::new("no-src-recipes", MANIFEST_WITH_PROPTEST);
     project.install();
+    project.with_keeler_recipes();
 
     for recipe in ["cov", "crap"] {
         // When the coverage recipe or the CRAP recipe runs
@@ -286,6 +331,7 @@ fn crap_baseline_and_delta_recipes_are_honest_without_rust_sources() {
     // Given a project with no src/ directory
     let project = TempProject::new("no-src-baseline", MANIFEST_WITH_PROPTEST);
     project.install();
+    project.with_keeler_recipes();
 
     // When the baseline or delta recipe runs, the same honesty applies
     for recipe in ["crap-baseline", "crap-delta"] {
@@ -309,6 +355,7 @@ fn mutation_testing_reports_what_it_did_not_measure() {
     // Given a git project whose only change touches no file under src/
     let project = TempProject::new("mutants-reach", MANIFEST_WITH_PROPTEST);
     project.install();
+    project.with_keeler_recipes();
     project.git(&["init", "-q"]);
     project.git(&["add", "-A"]);
     project.git(&["commit", "-qm", "init"]);
@@ -350,6 +397,7 @@ fn a_statically_detectable_shell_defect_fails_the_gate() {
     // split on whitespace
     let project = TempProject::new("shell-defect", MANIFEST_WITH_PROPTEST);
     project.install();
+    project.with_keeler_recipes();
     std::fs::create_dir_all(project.path().join("templates")).unwrap();
     std::fs::write(project.path().join("templates/keeler.yml"), "").unwrap();
     // The repo shape includes scripts/ — the gate globs it without nullglob.
@@ -392,6 +440,7 @@ fn release_scripts_are_gated_like_the_installer() {
     // scripts/ (and an install.sh that is itself clean)
     let project = TempProject::new("script-defect", MANIFEST_WITH_PROPTEST);
     project.install();
+    project.with_keeler_recipes();
     std::fs::create_dir_all(project.path().join("templates")).unwrap();
     std::fs::write(project.path().join("templates/keeler.yml"), "").unwrap();
     std::fs::copy(
@@ -596,27 +645,6 @@ fn a_shipped_file_that_talks_about_us_fails_the_gate() {
 }
 
 #[test]
-fn a_command_that_needs_a_script_ships_with_it() {
-    // Given the installer's file list
-    let installer =
-        std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("install.sh"))
-            .unwrap();
-
-    // Then a command that shells out to a script does not arrive without
-    // it: /keeler:graph runs `just keeler-graph`, which runs
-    // scripts/keeler-graph.sh, and an adopter who got the first two and
-    // not the third has a slash command that exits 127.
-    assert!(
-        installer.contains(".claude/commands/keeler/graph.md"),
-        "the graph command is not installed"
-    );
-    assert!(
-        installer.contains("scripts/keeler-graph.sh"),
-        "the graph command is installed but the script it runs is not"
-    );
-}
-
-#[test]
 fn no_shipped_file_carries_an_unresolved_merge() {
     // A conflict marker is invisible to every gate this project has: the
     // suite reads these files for content, not for shape, and markdown
@@ -691,6 +719,13 @@ fn what_adopters_receive_describes_their_project_not_ours() {
         for finding in repo_only_prose(&text) {
             leaks.push(format!("{rel}: {finding}"));
         }
+    }
+    // And the recipes, which an adopter reads too — they reach them through
+    // the plugin rather than through the install, so scanning the installed
+    // tree alone would leave the file this gate was written for ungated.
+    let justfile = std::fs::read_to_string(repo_root().join("Justfile")).unwrap();
+    for finding in repo_only_prose(&justfile) {
+        leaks.push(format!("Justfile: {finding}"));
     }
 
     // Then none of them describes the Keeler repository's own internals
@@ -790,7 +825,10 @@ fn listed_description(list: &str, recipe: &str) -> Option<String> {
     })
 }
 
-/// Graph mode's file set, in the project the installer just wrote it to.
+/// Graph mode's file set. The command and the parser are Keeler's and stay
+/// Keeler's — the install no longer copies them — so they are checked where
+/// they live; the workflow and the ignore entry are the adopter's, and
+/// those the install still writes.
 fn assert_graph_mode_landed(project: &TempProject, justfile: &str) {
     for file in [
         ".claude/commands/keeler/graph.md",
@@ -798,8 +836,8 @@ fn assert_graph_mode_landed(project: &TempProject, justfile: &str) {
         "scripts/keeler-graph.sh",
     ] {
         assert!(
-            project.path().join(file).is_file(),
-            "the install left the project without {file}",
+            repo_root().join(file).is_file(),
+            "Keeler no longer carries {file}",
         );
     }
     for (_, signature) in GRAPH_MODE_RECIPES {
@@ -847,31 +885,31 @@ fn assert_graph_mode_is_documented(project: &TempProject) {
             "`just --list` describes {recipe} with a fragment of the prose above it: {description:?}",
         );
     }
-    // /keeler:graph tells the agent to "see .claude/keeler.md" for graph
-    // mode; rules that never mention it send the reader to a section that
-    // is not there.
-    let rules = std::fs::read_to_string(project.path().join(".claude/keeler.md")).unwrap();
+    // /keeler:graph tells the agent to see the rules for graph mode; rules
+    // that never mention it send the reader to a section that is not there.
+    let rules = std::fs::read_to_string(repo_root().join(".claude/keeler.md")).unwrap();
     for (recipe, _) in GRAPH_MODE_RECIPES {
         assert!(
             rules.contains(&format!("just {recipe}")),
-            "the installed rules never mention `just {recipe}` — an agent reading them stays on the linear road",
+            "the rules never mention `just {recipe}` — an agent reading them stays on the linear road",
         );
     }
     assert!(
         rules.contains("/keeler:graph"),
-        "the installed rules never mention the /keeler:graph command",
+        "the rules never mention the /keeler:graph command",
     );
-    // And the guide the installer points humans at when it finishes.
-    let guide = std::fs::read_to_string(project.path().join("KEELER.md")).unwrap();
+    // And the guide the reasoning lives in.
+    let guide = std::fs::read_to_string(repo_root().join("KEELER.md")).unwrap();
     assert!(
         guide.to_lowercase().contains("graph mode") && guide.contains("just keeler-spawn"),
-        "KEELER.md describes the workflow without the parallel road the install just added",
+        "KEELER.md describes the workflow without the parallel road",
     );
 }
 
 /// A spec with no dependency annotation anywhere: every task is a root, so
 /// every task is ready.
 fn assert_an_old_spec_reads_as_a_graph(project: &TempProject) {
+    std::fs::create_dir_all(project.path().join("specs")).unwrap();
     std::fs::write(project.path().join("specs/07-legacy.md"), OLD_FORMAT_SPEC).unwrap();
     // The recipe answers from the spec as committed; with no feature
     // branch here, that is the fallback to HEAD.
@@ -902,13 +940,13 @@ fn assert_an_old_spec_reads_as_a_graph(project: &TempProject) {
 
 /// Behaviour, not bytes: the gate an adopter runs is the recipe it was, and
 /// /keeler:feature routes through the same six stages in the same order.
-fn assert_the_linear_road_is_unchanged(project: &TempProject, justfile: &str) {
+fn assert_the_linear_road_is_unchanged(justfile: &str) {
     assert!(
         justfile.contains("\ndev: fmt lint test crap\n"),
-        "the installed `dev` recipe is no longer `dev: fmt lint test crap`",
+        "the `dev` recipe is no longer `dev: fmt lint test crap`",
     );
     let feature =
-        std::fs::read_to_string(project.path().join(".claude/commands/keeler/feature.md")).unwrap();
+        std::fs::read_to_string(repo_root().join(".claude/commands/keeler/feature.md")).unwrap();
     let mut at = 0;
     for stage in [
         "/keeler:spec",
@@ -964,7 +1002,9 @@ fn adopters_opt_in_not_out() {
 
     // When Keeler is installed into it
     project.install();
-    let justfile = std::fs::read_to_string(project.path().join("Justfile")).unwrap();
+    project.with_keeler_recipes();
+    project.with_graph_parser();
+    let justfile = std::fs::read_to_string(repo_root().join("Justfile")).unwrap();
 
     // Then the graph command, the spawn, status, branch and land recipes,
     // and the review-evidence check land alongside the existing pipeline
@@ -976,34 +1016,30 @@ fn adopters_opt_in_not_out() {
     assert_an_old_spec_reads_as_a_graph(&project);
 
     // And `just dev` is the recipe it was, and /keeler:feature routes as it did
-    assert_the_linear_road_is_unchanged(&project, &justfile);
+    assert_the_linear_road_is_unchanged(&justfile);
 }
 
-/// Files from the install set a generated project may already contain, with
-/// content of its own.
+/// Files a generated project may already contain that the installer has an
+/// opinion about — the install set, the two files it edits, and two of the
+/// names an earlier Keeler left behind, which it must now leave alone.
 const PREEXISTING_CANDIDATES: &[&str] = &[
     "CLAUDE.md",
-    ".claude/keeler.md",
-    "KEELER.md",
-    "Justfile",
-    "specs/TEMPLATE.md",
     ".gitignore",
+    "clippy.toml",
     "rustfmt.toml",
+    ".github/workflows/keeler.yml",
+    "Justfile",
+    "KEELER.md",
 ];
 
 /// Install-set files as `(destination in the project, source in this repo)`
-/// — the pairs the conflict convention applies to.
+/// — the pairs the conflict convention applies to. Three, now that the
+/// workflow files are the plugin's: two tool configs that configure the
+/// project's own toolchain, and the CI workflow, which GitHub reads from
+/// the repository and nowhere else.
 const INSTALL_SET: &[(&str, &str)] = &[
-    ("KEELER.md", "KEELER.md"),
-    ("Justfile", "Justfile"),
-    ("specs/TEMPLATE.md", "specs/TEMPLATE.md"),
     ("clippy.toml", "clippy.toml"),
     ("rustfmt.toml", "rustfmt.toml"),
-    (".cargo-mutants.toml", ".cargo-mutants.toml"),
-    (
-        ".claude/commands/keeler/spec.md",
-        ".claude/commands/keeler/spec.md",
-    ),
     (".github/workflows/keeler.yml", "templates/keeler.yml"),
 ];
 
@@ -1032,24 +1068,15 @@ proptest::proptest! {
     #[test]
     fn a_projects_own_content_is_never_overwritten(
         preexisting in proptest::sample::subsequence(
-            PREEXISTING_CANDIDATES.to_vec(),
-            1..=PREEXISTING_CANDIDATES.len(),
+            INSTALL_SET.iter().map(|(dest, _)| *dest).collect::<Vec<_>>(),
+            1..=INSTALL_SET.len(),
         ),
-        contents in proptest::collection::vec("[ -~]{0,40}", PREEXISTING_CANDIDATES.len()),
+        contents in proptest::collection::vec("[ -~]{0,40}", INSTALL_SET.len()),
     ) {
         // Given a project containing files Keeler installs, with content of
-        // its own (the rules file is the documented exception — T8)
+        // its own
         let project = TempProject::new("never-overwrite", MANIFEST_WITH_PROPTEST);
-        let own: Vec<(&str, &String)> = preexisting
-            .iter()
-            .copied()
-            .zip(&contents)
-            .filter(|(file, _)| {
-                // These are modified by design: the rules file is replaced,
-                // CLAUDE.md gains an import, .gitignore gains entries.
-                !matches!(*file, ".claude/keeler.md" | "CLAUDE.md" | ".gitignore")
-            })
-            .collect();
+        let own: Vec<(&str, &String)> = preexisting.iter().copied().zip(&contents).collect();
         for (file, content) in &own {
             let path = project.path().join(file);
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -1241,6 +1268,7 @@ fn a_workspace_with_rust_targets_is_still_measured() {
     )
     .unwrap();
     project.install();
+    project.with_keeler_recipes();
 
     // When the coverage recipe runs
     let output = project.run_just("cov");
@@ -1282,6 +1310,7 @@ fn an_adopters_install_sh_is_not_keelers_to_gate() {
     // Given an adopting project with a script of its own named install.sh
     let project = TempProject::new("adopter-script", MANIFEST_WITH_PROPTEST);
     project.install();
+    project.with_keeler_recipes();
     std::fs::write(
         project.path().join("install.sh"),
         "#!/usr/bin/env bash\nls $1\n",
@@ -1315,6 +1344,7 @@ fn committed_src_changes_on_a_branch_stay_measured() {
     // commit did not
     let project = TempProject::new("branch-mutants", MANIFEST_WITH_PROPTEST);
     project.install();
+    project.with_keeler_recipes();
     std::fs::create_dir_all(project.path().join("src")).unwrap();
     std::fs::write(
         project.path().join("src/lib.rs"),
@@ -1353,6 +1383,7 @@ fn mutants_diff_survives_untracked_paths_with_spaces() {
     // Given an untracked src file whose name contains a space
     let project = TempProject::new("spaced-untracked", MANIFEST_WITH_PROPTEST);
     project.install();
+    project.with_keeler_recipes();
     std::fs::create_dir_all(project.path().join("src")).unwrap();
     std::fs::write(
         project.path().join("src/lib.rs"),
@@ -1449,37 +1480,6 @@ fn the_installer_refuses_a_directory_that_is_not_a_rust_project() {
     );
 }
 
-#[test]
-fn the_rules_file_is_replaced_and_the_replaced_text_is_kept() {
-    // Given a project whose .claude/keeler.md differs from the shipped rules
-    let project = TempProject::new("rules-file", MANIFEST_WITH_PROPTEST);
-    let rules = project.path().join(".claude/keeler.md");
-    std::fs::create_dir_all(rules.parent().unwrap()).unwrap();
-    std::fs::write(&rules, "my own edits\n").unwrap();
-
-    // When the installer runs
-    project.install();
-
-    // Then .claude/keeler.md matches the shipped rules
-    let shipped = std::fs::read(repo_root().join(".claude/keeler.md")).unwrap();
-    assert_eq!(
-        std::fs::read(&rules).unwrap(),
-        shipped,
-        "the rules file was not replaced with the shipped rules",
-    );
-    // And the text it replaced is available as .claude/keeler.md.bak
-    assert_eq!(
-        std::fs::read_to_string(project.path().join(".claude/keeler.md.bak")).unwrap(),
-        "my own edits\n",
-        "the replaced text was not kept as .bak",
-    );
-    // And no .claude/keeler.md.keeler is left behind
-    assert!(
-        !project.path().join(".claude/keeler.md.keeler").exists(),
-        "the rules file wrongly got the conflict-file treatment",
-    );
-}
-
 /// Pins the counterexample the idempotence property found: a .gitignore
 /// whose final line has no newline glued the first appended entry onto it,
 /// so the already-present check never matched and every run appended again.
@@ -1505,35 +1505,6 @@ fn a_gitignore_missing_its_final_newline_still_converges() {
     assert!(
         gitignore.lines().any(|line| line == "/target"),
         "the entry was not appended cleanly:\n{gitignore}",
-    );
-}
-
-/// Guards the installer's hard-coded file list behaviorally: every file of
-/// every kind under the command and skill trees must actually land in an
-/// installed project — a path merely mentioned in a comment of install.sh
-/// does not count, and a skill's non-Markdown companion assets count too.
-#[test]
-fn every_workflow_file_in_the_repository_is_installed() {
-    let project = TempProject::new("ship-everything", MANIFEST_WITH_PROPTEST);
-    project.install();
-    let installed = project.tree_snapshot();
-
-    let mut missing = Vec::new();
-    for dir in [".claude/commands/keeler", ".claude/skills"] {
-        for path in files_under(&repo_root().join(dir)) {
-            let rel = path
-                .strip_prefix(repo_root())
-                .unwrap()
-                .to_string_lossy()
-                .into_owned();
-            if !installed.contains_key(&rel) {
-                missing.push(rel);
-            }
-        }
-    }
-    assert!(
-        missing.is_empty(),
-        "these files exist in the repository but never land in an installed project: {missing:?}",
     );
 }
 
@@ -1697,9 +1668,9 @@ fn a_symlink_is_the_projects_own_content_not_a_place_to_write() {
     let project = TempProject::new("symlink", MANIFEST_WITH_PROPTEST);
     let outside = project.path().join("outside");
     std::fs::create_dir_all(&outside).unwrap();
-    let target = outside.join("theirs.md");
+    let target = outside.join("theirs.toml");
     #[cfg(unix)]
-    std::os::unix::fs::symlink(&target, project.path().join("KEELER.md")).unwrap();
+    std::os::unix::fs::symlink(&target, project.path().join("clippy.toml")).unwrap();
 
     // When Keeler is installed
     let report = project.install();
@@ -1712,7 +1683,7 @@ fn a_symlink_is_the_projects_own_content_not_a_place_to_write() {
         "the installer wrote outside the project, through a symlink",
     );
     assert!(
-        project.path().join("KEELER.md.keeler").is_file(),
+        project.path().join("clippy.toml.keeler").is_file(),
         "the symlink was not treated as the project's own content:\n{report}",
     );
 }
@@ -1771,11 +1742,15 @@ fn a_failed_dependency_add_is_not_reported_as_success() {
 
 #[test]
 fn a_projects_own_conflict_file_is_not_overwritten() {
-    // Given a project that already has both its own KEELER.md and its own
-    // KEELER.md.keeler — the ordinary state after one upgrade
+    // Given a project that already has both its own clippy.toml and its own
+    // clippy.toml.keeler — the ordinary state after one upgrade
     let project = TempProject::new("keeler-collision", MANIFEST_WITH_PROPTEST);
-    std::fs::write(project.path().join("KEELER.md"), "theirs\n").unwrap();
-    std::fs::write(project.path().join("KEELER.md.keeler"), "from last time\n").unwrap();
+    std::fs::write(project.path().join("clippy.toml"), "theirs\n").unwrap();
+    std::fs::write(
+        project.path().join("clippy.toml.keeler"),
+        "from last time\n",
+    )
+    .unwrap();
 
     // When Keeler is installed
     project.install();
@@ -1783,32 +1758,8 @@ fn a_projects_own_conflict_file_is_not_overwritten() {
     // Then last time's copy survives. Overwriting it loses whatever the
     // project had not merged yet, silently and with no conflict reported.
     assert_eq!(
-        std::fs::read_to_string(project.path().join("KEELER.md.keeler")).unwrap(),
+        std::fs::read_to_string(project.path().join("clippy.toml.keeler")).unwrap(),
         "from last time\n",
-    );
-}
-
-#[test]
-fn an_upgrade_does_not_destroy_the_previous_upgrades_backup() {
-    // Given a project upgraded once already, whose rules were edited again
-    let project = TempProject::new("bak-collision", MANIFEST_WITH_PROPTEST);
-    std::fs::create_dir_all(project.path().join(".claude")).unwrap();
-    std::fs::write(project.path().join(".claude/keeler.md"), "second edit\n").unwrap();
-    std::fs::write(
-        project.path().join(".claude/keeler.md.bak"),
-        "the original\n",
-    )
-    .unwrap();
-
-    // When Keeler is installed
-    project.install();
-
-    // Then the first backup is still there. The whole point of keeping the
-    // replaced text is that it is not lost; a second upgrade overwriting
-    // the first one's .bak loses the original for good.
-    assert_eq!(
-        std::fs::read_to_string(project.path().join(".claude/keeler.md.bak")).unwrap(),
-        "the original\n",
     );
 }
 
@@ -1906,7 +1857,7 @@ fn a_mistyped_flag_is_refused_rather_than_taken_for_a_path() {
     );
     assert!(said.contains("--no-tool"), "{said}");
     assert!(
-        !project.path().join("KEELER.md").exists(),
+        !project.path().join("clippy.toml").exists(),
         "it installed anyway"
     );
 }
@@ -1951,142 +1902,235 @@ fn a_pinned_version_is_fetched_even_from_inside_a_clone() {
     );
 }
 
-/// The names `just` searches for. It compares each directory entry
-/// against them with `eq_ignore_ascii_case` and refuses to run when more
-/// than one matches.
-const JUSTFILE_CANDIDATES: [&str; 2] = ["justfile", ".justfile"];
+// --- Spec 09 — the installer stops copying Keeler's files ------------------
+//
+// What lands in an adopter's repository is what GitHub and the project's own
+// toolchain read from there and nowhere else: the CI workflow and the two
+// tool configs. The commands, the skills, the rules, the Justfile and the
+// graph parser stay Keeler's, reached through the plugin.
 
-/// The entries of `dir` that `just` would take as candidates, spelled as
-/// the filesystem spells them. By listing, not `Path::exists`, which on a
-/// case-insensitive filesystem answers yes for a spelling that is absent.
-fn justfile_names(dir: &Path) -> Vec<String> {
-    let mut names: Vec<String> = std::fs::read_dir(dir)
-        .unwrap()
-        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+/// The three files a fresh install writes, and the two it edits.
+const CREATED_IN_A_FRESH_CRATE: [&str; 3] = [
+    ".github/workflows/keeler.yml",
+    "clippy.toml",
+    "rustfmt.toml",
+];
+
+/// Names that were part of the install set before spec 09 and must not
+/// reappear. `.claude/` and `specs/` are directories, so they are probed as
+/// prefixes; the rest are files.
+const NO_LONGER_INSTALLED: [&str; 6] = [
+    ".claude/",
+    "specs/",
+    "scripts/",
+    "Justfile",
+    "KEELER.md",
+    ".cargo-mutants.toml",
+];
+
+/// The files a run created and the files it changed, as a scenario words it.
+fn created_and_modified(
+    before: &std::collections::BTreeMap<String, Vec<u8>>,
+    after: &std::collections::BTreeMap<String, Vec<u8>>,
+) -> (Vec<String>, Vec<String>) {
+    let created = after
+        .keys()
+        .filter(|name| !before.contains_key(*name))
+        .cloned()
+        .collect();
+    let modified = after
+        .iter()
+        .filter(|(name, bytes)| before.get(*name).is_some_and(|was| was != *bytes))
+        .map(|(name, _)| name.clone())
+        .collect();
+    (created, modified)
+}
+
+/// Nothing of the retired install set is anywhere in the project.
+fn assert_nothing_of_keelers_landed(project: &TempProject) {
+    let present: Vec<String> = project
+        .names()
+        .into_iter()
         .filter(|name| {
-            JUSTFILE_CANDIDATES
+            NO_LONGER_INSTALLED
                 .iter()
-                .any(|candidate| name.eq_ignore_ascii_case(candidate))
+                .any(|retired| name == retired || name.starts_with(retired))
         })
         .collect();
-    names.sort();
-    names
+    assert!(
+        present.is_empty(),
+        "the install put Keeler's own files in the project: {present:?}",
+    );
 }
 
-/// Whether `dir` holds an entry spelled exactly `name` — again by listing,
-/// for the reason above.
-fn holds_exactly(dir: &Path, name: &str) -> bool {
-    std::fs::read_dir(dir)
-        .unwrap()
-        .any(|entry| entry.unwrap().file_name() == name)
+#[test]
+fn init_leaves_the_workflow_and_two_tool_configs_in_a_fresh_crate() {
+    // Given a fresh crate with a .gitignore
+    let project = TempProject::new("fresh-crate", MANIFEST_WITH_PROPTEST);
+    std::fs::write(project.path().join(".gitignore"), "/target\n").unwrap();
+    let before = project.tree_snapshot();
+
+    // When the installer runs
+    project.install();
+
+    // Then the files created are the workflow and the two tool configs ...
+    let (created, modified) = created_and_modified(&before, &project.tree_snapshot());
+    assert_eq!(
+        created, CREATED_IN_A_FRESH_CRATE,
+        "a fresh install created something other than the workflow and the tool configs",
+    );
+    // ... and the only files modified are Cargo.toml and .gitignore
+    assert_eq!(
+        modified,
+        [".gitignore", "Cargo.toml"],
+        "the install edited a file that is not its to edit",
+    );
+    // And none of the files Keeler used to copy is there
+    assert_nothing_of_keelers_landed(&project);
 }
 
-proptest::proptest! {
-    // Every case runs the installer as a subprocess, so the count stays
-    // at the file's convention.
-    #![proptest_config(proptest::prelude::ProptestConfig {
-        cases: 12,
-        failure_persistence: Some(Box::new(
-            proptest::test_runner::FileFailurePersistence::WithSource("proptest-regressions"),
-        )),
-        ..proptest::prelude::ProptestConfig::default()
-    })]
+#[test]
+fn a_crate_without_a_gitignore_gets_one() {
+    // Given a fresh crate with no .gitignore
+    let project = TempProject::new("no-gitignore", MANIFEST_WITH_PROPTEST);
+    let before = project.tree_snapshot();
 
-    #[test]
-    fn the_projects_own_justfile_is_found_whatever_it_is_spelled(
-        base in proptest::sample::select(JUSTFILE_CANDIDATES.to_vec()),
-        upper in proptest::collection::vec(proptest::prelude::any::<bool>(), 9),
-    ) {
-        // Given a project whose justfile is spelled in any case just accepts
-        let spelling: String = base
-            .chars()
-            .zip(&upper)
-            .map(|(c, up)| if *up { c.to_ascii_uppercase() } else { c })
-            .collect();
-        let project = TempProject::new("justfile-spelling", MANIFEST_WITH_PROPTEST);
-        let own = "cov:\n    cargo llvm-cov nextest --fail-under-lines 90\n";
-        std::fs::write(project.path().join(&spelling), own).unwrap();
+    // When the installer runs
+    project.install();
 
-        // When the installer runs
-        let report = project.install();
+    // Then the .gitignore is created alongside the workflow and the configs
+    let (created, _) = created_and_modified(&before, &project.tree_snapshot());
+    assert_eq!(
+        created,
+        [
+            ".github/workflows/keeler.yml",
+            ".gitignore",
+            "clippy.toml",
+            "rustfmt.toml",
+        ],
+    );
+}
 
-        // Then that file is treated as the project's own copy of the
-        // Justfile — its content stands, and Keeler's version is kept
-        // beside it under the name the project uses ...
-        proptest::prop_assert_eq!(
-            std::fs::read_to_string(project.path().join(&spelling)).unwrap(),
-            own,
-            "the project's own {} was overwritten", spelling,
-        );
-        proptest::prop_assert!(
-            holds_exactly(project.path(), &format!("{spelling}.keeler")),
-            "no {spelling}.keeler beside the project's own file:\n{report}",
-        );
+#[test]
+fn init_without_ci_leaves_no_workflow() {
+    // Given a fresh crate with a .gitignore
+    let project = TempProject::new("no-ci", MANIFEST_WITH_PROPTEST);
+    std::fs::write(project.path().join(".gitignore"), "/target\n").unwrap();
+    let before = project.tree_snapshot();
 
-        // ... the project holds exactly one name just would take as a
-        // candidate ...
-        proptest::prop_assert_eq!(
-            justfile_names(project.path()),
-            vec![spelling.clone()],
-            "the installer left just with more than one candidate:\n{}", report,
-        );
+    // When the installer runs with --no-ci
+    project.install_args(&["--no-tools", "--no-ci"]);
 
-        // ... and the conflict is reported under that name, which is
-        // what a human — and `git show <ref>:<name>` — goes looking for
-        proptest::prop_assert!(
-            report.contains(&format!("{spelling} differs")),
-            "the report does not name the project's own justfile:\n{report}",
-        );
+    // Then only the two tool configs are created ...
+    let (created, modified) = created_and_modified(&before, &project.tree_snapshot());
+    assert_eq!(created, ["clippy.toml", "rustfmt.toml"]);
+    // ... no .github/ exists at all ...
+    assert!(
+        !project.path().join(".github").exists(),
+        "--no-ci still left a .github directory behind",
+    );
+    // ... and the only files modified are Cargo.toml and .gitignore
+    assert_eq!(modified, [".gitignore", "Cargo.toml"]);
+}
 
-        // And `just` still runs there: with two candidates it refuses
-        // every recipe in the project.
-        let listed = project.run_just_args(&["--list"]);
-        proptest::prop_assert!(
-            listed.status.success(),
-            "just refuses to run after the install:\n{}",
-            String::from_utf8_lossy(&listed.stderr),
+#[test]
+fn the_tool_configs_still_land() {
+    // Given a fresh crate
+    let project = TempProject::new("tool-configs", MANIFEST_WITH_PROPTEST);
+
+    // When the installer runs
+    project.install();
+
+    // Then both configs are there, byte-identical to the ones Keeler ships
+    for config in ["clippy.toml", "rustfmt.toml"] {
+        assert_eq!(
+            std::fs::read(project.path().join(config)).unwrap(),
+            std::fs::read(repo_root().join(config)).unwrap(),
+            "{config} did not land with Keeler's content",
         );
     }
 }
 
 #[test]
-fn a_project_just_already_refuses_is_refused_not_added_to() {
-    // Given a project that already holds more than one justfile
-    // candidate — two spellings differing by more than case, so the
-    // fixture is the same on either kind of filesystem
-    let project = TempProject::new("two-justfiles", MANIFEST_WITH_PROPTEST);
-    let both = ["justfile", ".justfile"];
-    for name in both {
-        std::fs::write(project.path().join(name), "cov:\n    echo cov\n").unwrap();
-    }
-    let before = project.tree_snapshot();
+fn tools_are_skipped_on_request() {
+    // Given a fresh crate and a PATH where no cargo tool answers
+    let project = TempProject::new("skip-tools", MANIFEST_WITH_PROPTEST);
+    cargo_fails_at(&project, "nextest");
 
-    // When the installer runs against it
-    let output = project.try_install();
-    let said = format!(
-        "{}{}",
+    // When the installer runs with --no-tools
+    let output = project.try_install_args(&["--no-tools"]);
+
+    // Then it exits zero ...
+    assert!(
+        output.status.success(),
+        "--no-tools failed on a machine without the tools:\n{}{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
     );
-
-    // Then it exits with a non-zero status ...
-    assert!(
-        !output.status.success(),
-        "the installer added to a project just already refuses:\n{said}",
-    );
-
-    // ... it names every candidate it found ...
-    for name in both {
+    // ... and nothing was installed to make that true
+    let calls = project.cargo_calls();
+    for reach in ["binstall", "install "] {
         assert!(
-            said.contains(name),
-            "the refusal does not name {name}:\n{said}",
+            !calls.lines().any(|call| call.starts_with(reach)),
+            "--no-tools still reached for the toolchain: {calls}",
         );
     }
+}
 
-    // ... and it creates no files there
+#[test]
+fn the_run_directory_is_ignored() {
+    // Given a fresh crate with an empty .gitignore
+    let project = TempProject::new("ignore-entries", MANIFEST_WITH_PROPTEST);
+    std::fs::write(project.path().join(".gitignore"), "").unwrap();
+
+    // When the installer runs
+    project.install();
+
+    // Then every entry the workflow's artifacts need is there
+    let gitignore = std::fs::read_to_string(project.path().join(".gitignore")).unwrap();
+    for entry in [
+        "/target",
+        "lcov.info",
+        "crap-report.json",
+        "mutants.out*/",
+        ".keeler/",
+    ] {
+        assert!(
+            gitignore.lines().any(|line| line == entry),
+            "the install did not ignore {entry}:\n{gitignore}",
+        );
+    }
+}
+
+#[test]
+fn the_adopters_claude_md_is_not_touched() {
+    // Given a crate whose CLAUDE.md is its own
+    let project = TempProject::new("claude-md-untouched", MANIFEST_WITH_PROPTEST);
+    std::fs::write(project.path().join("CLAUDE.md"), "# Mine\n").unwrap();
+
+    // When the installer runs
+    project.install();
+
+    // Then not a byte of it moved. The rules reach the agent through the
+    // plugin's SessionStart hook, so there is nothing to import and no
+    // reason to write into a file that is not Keeler's.
     assert_eq!(
-        project.tree_snapshot(),
-        before,
-        "the refusal still changed the project",
+        std::fs::read_to_string(project.path().join("CLAUDE.md")).unwrap(),
+        "# Mine\n",
+    );
+}
+
+#[test]
+fn a_crate_without_a_claude_md_does_not_get_one() {
+    // Given a crate with no CLAUDE.md
+    let project = TempProject::new("no-claude-md", MANIFEST_WITH_PROPTEST);
+
+    // When the installer runs
+    project.install();
+
+    // Then none appears
+    assert!(
+        !project.path().join("CLAUDE.md").exists(),
+        "the installer created a CLAUDE.md nobody asked for",
     );
 }

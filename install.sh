@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
-# Keeler installer: sets the workflow up in a Rust project, end to end —
-# tooling, workflow files, Cargo.toml sections, .gitignore entries.
+# Keeler installer: prepares a Rust project for the workflow — tooling,
+# Cargo.toml sections, .gitignore entries, the two tool configs and the CI
+# workflow. Nothing else lands: the commands, the skills, the rules, the
+# recipes and the graph parser are Keeler's and stay in the plugin, which
+# Claude Code reads from its own cache. What is installed here is what
+# something other than the plugin reads from the project — GitHub Actions
+# reads the workflow from the repository and nowhere else, and clippy and
+# rustfmt read their configs from the directory they run in.
 #
 # Safe to re-run: existing files are never overwritten (conflicts are
 # written alongside as <name>.keeler), already-installed tools are skipped,
@@ -10,6 +16,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/minikin/keeler/main/install.sh | bash -s .
 #   ./install.sh /path/to/project        # from a clone
 #   ./install.sh . --no-tools            # skip installing CLI tools
+#   ./install.sh . --no-ci               # skip the GitHub Actions workflow
 #
 # KEELER_REF pins the version to install — a tag or a branch:
 #   KEELER_REF=v0.4.1 curl -fsSL .../install.sh | bash -s .
@@ -19,14 +26,16 @@ set -euo pipefail
 REPO_TARBALL="${KEELER_TARBALL:-https://codeload.github.com/minikin/keeler/tar.gz/${KEELER_REF:-main}}"
 DEST=""
 WITH_TOOLS=1
+WITH_CI=1
 usage() {
     cat <<'USAGE'
-Keeler installer: sets the workflow up in a Rust project, end to end.
+Keeler installer: prepares a Rust project for the workflow.
 
 Usage:
   curl -fsSL https://raw.githubusercontent.com/minikin/keeler/main/install.sh | bash -s .
   ./install.sh /path/to/project        # from a clone
   ./install.sh . --no-tools            # skip installing CLI tools
+  ./install.sh . --no-ci               # skip the GitHub Actions workflow
 
 KEELER_REF pins the version to install — a tag or a branch:
   KEELER_REF=v0.4.1 curl -fsSL .../install.sh | bash -s .
@@ -35,6 +44,7 @@ USAGE
 for arg in "$@"; do
     case "$arg" in
         --no-tools) WITH_TOOLS=0 ;;
+        --no-ci) WITH_CI=0 ;;
         # A here-doc, not `sed` over BASH_SOURCE[0]: piped into bash there
         # is no file to read, and `set -u` aborted on the documented path.
         -h|--help) usage; exit 0 ;;
@@ -62,38 +72,14 @@ note(){ printf '  · %s\n' "$*"; }
 }
 DEST="$(cd "$DEST" && pwd)"
 
-# --- The project's justfile, under the name the project spells it ---------
-# `just` compares every directory entry against `justfile` and `.justfile`
-# with `eq_ignore_ascii_case` and refuses to run when more than one
-# matches. Keeler ships `Justfile`, so copying it in beside a project's own
-# `justfile` would kill every recipe there, Keeler's gates included, while
-# this script reported success.
-justfiles=()
-# nocasematch is the comparison just makes; it is unset again because
-# leaving it on would change every `case` below.
-shopt -s nullglob dotglob nocasematch
-for entry in "$DEST"/*; do
-    base="${entry##*/}"
-    if [[ "$base" == justfile || "$base" == .justfile ]]; then
-        justfiles+=("$base")
-    fi
-done
-shopt -u nullglob dotglob nocasematch
-if [ "${#justfiles[@]}" -gt 1 ]; then
-    echo "error: $DEST already holds more than one justfile: ${justfiles[*]}" >&2
-    echo "just refuses to run with more than one candidate, so every recipe Keeler installs would be dead on arrival. Keep one and re-run." >&2
-    exit 1
-fi
-JUSTFILE_NAME="Justfile"
-[ "${#justfiles[@]}" -eq 1 ] && JUSTFILE_NAME="${justfiles[0]}"
-
 # --- Source: local checkout when present, otherwise fetch a tarball --------
 if ! SRC="$(cd "$(dirname "${BASH_SOURCE[0]:-.}")" 2>/dev/null && pwd)"; then
     SRC="$(pwd)"
 fi
-# The sentinel must be repo-only: Keeler ships specs/TEMPLATE.md into every
-# project, so probing for a shipped file would mistake an already-Keelered
-# project for the source and turn every piped upgrade into a silent no-op.
+# The sentinel must be repo-only: probing for a file the install *lands*
+# would mistake an already-Keelered project for the source and turn every
+# piped upgrade into a silent no-op. `templates/keeler.yml` is the workflow
+# before it is installed — under a name no project receives.
 # An explicit pin means fetch, always. Piped, the script has no file of
 # its own, so SRC becomes the working directory — and a Keeler clone looks
 # exactly like an unpacked tarball. Using it would install whatever is
@@ -151,8 +137,8 @@ if [ "$WITH_TOOLS" = 1 ]; then
     fi
 fi
 
-# --- 2. Workflow files ----------------------------------------------------
-say "Installing workflow files"
+# --- 2. The files the project itself is read for ---------------------------
+say "Installing project files"
 copied=0
 merges=()
 # install_file <source path> [destination path, when it differs from the source]
@@ -197,81 +183,24 @@ install_file() {
     fi
 }
 
-# Commands live under .claude/commands/keeler/ so they are invoked as
-# /keeler:spec, /keeler:fix, … and never collide with a project's own
-# commands of the same name.
-for f in .claude/commands/keeler/spec.md .claude/commands/keeler/tasks.md \
-         .claude/commands/keeler/tdd.md .claude/commands/keeler/qa.md \
-         .claude/commands/keeler/review.md .claude/commands/keeler/mutants.md \
-         .claude/commands/keeler/feature.md .claude/commands/keeler/fix.md \
-         .claude/commands/keeler/graph.md \
-         .claude/skills/property-testing/SKILL.md \
-         .claude/skills/gherkin-specs/SKILL.md \
-         scripts/keeler-graph.sh \
-         specs/TEMPLATE.md KEELER.md \
-         .cargo-mutants.toml clippy.toml rustfmt.toml; do
+# Tool configuration, not workflow: clippy and rustfmt read these from the
+# directory they run in, so the plugin cannot hold them on the project's
+# behalf. (Whether they are Keeler's to install at all is another spec's
+# question; they land as they always have.)
+for f in clippy.toml rustfmt.toml; do
     install_file "$f"
 done
 
-# Under their spelling when they have one, so the conflict is reported and
-# kept against the file that is there.
-install_file Justfile "$JUSTFILE_NAME"
-
-# The rules file is not installed like the others: it is ours to own, so an
-# upgrade replaces it wholesale and the version marker inside always matches
-# what we just installed. The copy being replaced is kept as .bak — the file
-# is Keeler's, but a project that edited it anyway must not lose the text
-# silently. Project-specific instructions belong in CLAUDE.md, never touched.
-rules="$DEST/.claude/keeler.md"
-mkdir -p "$(dirname "$rules")"
-if [ ! -e "$rules" ] && [ ! -L "$rules" ]; then
-    cp "$SRC/.claude/keeler.md" "$rules"
-    copied=$((copied + 1))
-elif ! cmp -s "$SRC/.claude/keeler.md" "$rules"; then
-    cp "$rules" "$(free_name "$rules.bak")"
-    cp "$SRC/.claude/keeler.md" "$rules"
-    note "workflow rules updated to $KEELER_VERSION (previous kept as .claude/keeler.md.bak)"
-fi
-
-# CLAUDE.md is never overwritten or duplicated: the rules live in
-# .claude/keeler.md and CLAUDE.md merely imports them with one @-line, so a
-# project that already has its own CLAUDE.md keeps every word of it.
-claude_md="$DEST/CLAUDE.md"
-if [ ! -e "$claude_md" ]; then
-    cat > "$claude_md" <<'MD'
-# CLAUDE.md
-
-This file provides guidance to Claude Code when working with code in this repository.
-
-The Keeler workflow rules live in their own file so they can be updated
-without touching your project's instructions:
-
-@.claude/keeler.md
-
-<!-- Add project-specific instructions below this line. -->
-MD
-    copied=$((copied + 1))
-    ok "CLAUDE.md created (imports .claude/keeler.md)"
-elif grep -q '^@\.claude/keeler\.md' "$claude_md"; then
-    ok "CLAUDE.md already imports the Keeler rules"
-else
-    cat >> "$claude_md" <<'MD'
-
-## Keeler workflow
-
-This project follows the Keeler spec-first, test-driven workflow:
-
-@.claude/keeler.md
-MD
-    ok "CLAUDE.md left intact — appended a one-line import"
-fi
-
 # CI goes in under its own name so it never clashes with existing workflows.
-# Like every other installed file, a project's own copy is never rewritten:
-# when the gates change, the new workflow lands alongside as .keeler so the
-# project can merge it. Leaving it untouched instead would strand every
-# existing project on the workflow it first installed.
-install_file templates/keeler.yml .github/workflows/keeler.yml
+# GitHub reads workflows from the repository and nowhere else, so this one
+# cannot live in the plugin either. Like every other installed file, a
+# project's own copy is never rewritten: when the gates change, the new
+# workflow lands alongside as .keeler so the project can merge it. Leaving
+# it untouched instead would strand every existing project on the workflow
+# it first installed.
+if [ "$WITH_CI" = 1 ]; then
+    install_file templates/keeler.yml .github/workflows/keeler.yml
+fi
 ok "$copied file(s) installed"
 [ "${#merges[@]}" -gt 0 ] && for m in "${merges[@]}"; do
     note "$m"
@@ -395,13 +324,14 @@ ok "$added entry(ies) added"
 say "Keeler installed in $DEST"
 cat <<'NEXT'
 
-Next:
-  just crap-baseline    # freeze today's scores — gates then guard the delta
-  just dev              # fmt, clippy, tests, coverage, CRAP
+The recipes live in the plugin, not in this project — run them as
+`keeler <recipe>`, with the plugin's bin/ on your PATH:
 
-Expect `just dev` to flag things on an existing codebase — that is the
+  keeler crap-baseline  # freeze today's scores — gates then guard the delta
+  keeler dev            # fmt, clippy, tests, coverage, CRAP
+
+Expect `keeler dev` to flag things on an existing codebase — that is the
 point. Legacy debt is grandfathered by the baseline; new debt is not.
-See the Install section in README.md, and KEELER.md for the full workflow.
 
 Then open the project in Claude Code and run:
   /keeler:feature <what you want to build>
