@@ -16,7 +16,7 @@ You are in the **init stage**, run once per project. Keeler's own files — the 
    bash "${CLAUDE_PLUGIN_ROOT}/install.sh" .
    ```
 
-   Never fetch it over the network: the copy in the plugin is the one whose version pins the CI workflow, and a downloaded one would install a different Keeler than the one you are running.
+   Never fetch it over the network yourself, and do not set `KEELER_REF` or `KEELER_TARBALL` — either of those makes the installer download a release and install that one instead, pinning the workflow to a version other than the plugin you are running. If the user asks for a specific version, that is `/plugin` territory, not this command's.
 
    Forward the flags the user asked for, in this order after the `.`:
 

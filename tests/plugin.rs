@@ -445,13 +445,20 @@ fn a_command_that_runs_a_recipe_runs_it_through_the_wrapper() {
 
     for name in COMMANDS {
         for shown in shown_commands(&command(name)) {
-            let mut words = shown.split_whitespace();
+            // A command can be handed its environment first —
+            // `KEELER_FAN_OUT_YES=1 keeler keeler-fan-out` is a line the
+            // Justfile prints — so the invocation starts at the first word
+            // that is not an assignment.
+            let mut words = shown
+                .split_whitespace()
+                .skip_while(|word| word.split_once('=').is_some_and(|(name, _)| !name.is_empty()));
             let first = words.next().unwrap_or_default();
 
-            // Then no line invokes `just`: the recipes live in the plugin,
-            // and an adopter's project has no justfile to reach them by
-            assert_ne!(
-                first, "just",
+            // Then no line invokes `just`, wherever in the line it sits:
+            // the recipes live in the plugin, and an adopter's project has
+            // no justfile to reach them by
+            assert!(
+                !shown.split_whitespace().any(|word| word == "just"),
                 "commands/{name} invokes `just`, which an adopter has no \
                  justfile for: `{shown}`",
             );
@@ -642,10 +649,14 @@ fn the_init_command_runs_the_installer_from_the_plugin() {
         "commands/init.md does not run the plugin's installer:\n{text}",
     );
 
-    // And it forwards the two flags the installer takes
+    // And it forwards the two flags the installer takes. The body is where
+    // that instruction has to be: `argument-hint:` in the frontmatter is a
+    // hint to the user typing the command, and holds no instruction the
+    // agent running it ever reads.
+    let (_, body) = split_frontmatter("init.md", &text);
     for flag in ["--no-tools", "--no-ci"] {
         assert!(
-            text.contains(flag),
+            body.contains(flag),
             "commands/init.md never forwards `{flag}`",
         );
     }
