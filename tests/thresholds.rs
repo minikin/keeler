@@ -168,7 +168,9 @@ fn the_mutation_recipes_carry_the_settings_the_config_file_held() {
         ("changed-lines", &["mutants-diff"]),
     ] {
         let fixture = Fixture::new(name);
-        fixture.0.commit("src/lib.rs", "pub fn a() -> u32 { 1 }\n", "init");
+        fixture
+            .0
+            .commit("src/lib.rs", "pub fn a() -> u32 { 1 }\n", "init");
         fixture.0.write("src/lib.rs", "pub fn a() -> u32 { 2 }\n");
 
         // When the recipe runs
@@ -178,7 +180,20 @@ fn the_mutation_recipes_carry_the_settings_the_config_file_held() {
         // Then the settings `.cargo-mutants.toml` carried reach the tool on
         // its command line — the file is not installed any more, and a
         // project that never had one must still get the run Keeler means
-        carries_every_setting(args[0], &fixture.call("mutants", &output));
+        let call = fixture.call("mutants", &output);
+        carries_every_setting(args[0], &call);
+
+        // And the flags did not crowd out what the recipe is for: `mutants
+        // FILE` read `$1`, which `just` never sets, so the recipe failed on
+        // an unbound variable for every caller while a flags-only assertion
+        // would have watched it do so and reported nothing.
+        if args.len() > 1 {
+            assert!(
+                call.contains(&format!("--file {}", args[1])),
+                "`{}` did not hand cargo the file it was given: cargo {call}",
+                args[0]
+            );
+        }
     }
 }
 
@@ -187,7 +202,9 @@ fn mutants_diff_accepts_the_base_ci_diffs_against() {
     // Given a branch one commit ahead of main, the commit changing src/lib.rs
     // — and a clean working tree, as a CI checkout has
     let fixture = Fixture::new("explicit-base");
-    fixture.0.commit("src/lib.rs", "pub fn a() -> u32 { 1 }\n", "init");
+    fixture
+        .0
+        .commit("src/lib.rs", "pub fn a() -> u32 { 1 }\n", "init");
     fixture.0.git(&["checkout", "-qb", "feature"]);
     fixture
         .0
@@ -213,11 +230,47 @@ fn mutants_diff_accepts_the_base_ci_diffs_against() {
 }
 
 #[test]
+fn a_base_the_checkout_cannot_reach_is_refused() {
+    // Given a repository that has no `origin/main` — a shallow checkout, a
+    // fork's pull request, or a KEELER_REF-style typo in the workflow
+    let fixture = Fixture::new("unreachable-base");
+    fixture
+        .0
+        .commit("src/lib.rs", "pub fn a() -> u32 { 1 }\n", "init");
+
+    // When the gate is asked to measure against that base
+    let output = fixture.run(&["mutants-diff", "origin/main"], &[]);
+
+    // Then it refuses and names the ref. The recipe's own rule is that an
+    // honest gate never reports the absence of survivors as evidence about
+    // a change it cannot see — and a base it cannot resolve is exactly
+    // that: falling back to the working tree would leave CI green having
+    // compared the pull request against nothing.
+    assert!(
+        !output.status.success(),
+        "the gate passed on a base it could not resolve: {}",
+        said(&output)
+    );
+    assert!(
+        said(&output).contains("origin/main"),
+        "the refusal does not name the base: {}",
+        said(&output)
+    );
+    assert!(
+        fixture.calls().is_empty(),
+        "the gate ran the tool anyway: {:?}",
+        fixture.calls()
+    );
+}
+
+#[test]
 fn mutants_diff_without_a_base_behaves_as_before() {
     // Given an uncommitted change to src/lib.rs — the working tree a
     // developer runs the gate from
     let fixture = Fixture::new("no-base");
-    fixture.0.commit("src/lib.rs", "pub fn a() -> u32 { 1 }\n", "init");
+    fixture
+        .0
+        .commit("src/lib.rs", "pub fn a() -> u32 { 1 }\n", "init");
     fixture.0.write("src/lib.rs", "pub fn a() -> u32 { 2 }\n");
 
     // When the gate runs with no argument
@@ -250,7 +303,9 @@ fn the_coverage_bar_is_the_adopters_to_move() {
 
     // Then that is the bar coverage is measured against
     assert!(
-        fixture.call("llvm-cov", &output).contains("--fail-under-lines 50"),
+        fixture
+            .call("llvm-cov", &output)
+            .contains("--fail-under-lines 50"),
         "KEELER_COV_MIN did not reach the coverage gate: {:?}",
         fixture.calls()
     );
@@ -261,7 +316,9 @@ fn the_coverage_bar_is_the_adopters_to_move() {
     let output = fixture.run(&["cov"], &[]);
     assert!(output.status.success(), "{}", said(&output));
     assert!(
-        fixture.call("llvm-cov", &output).contains("--fail-under-lines 90"),
+        fixture
+            .call("llvm-cov", &output)
+            .contains("--fail-under-lines 90"),
         "the default coverage bar is no longer 90: {:?}",
         fixture.calls()
     );
@@ -287,7 +344,9 @@ fn the_crap_bar_is_the_adopters_to_move() {
     // project that moved the threshold and found `crap-delta` still
     // failing at 15 would have moved nothing at all
     let fixture = Fixture::new("crap-delta-bar");
-    fixture.0.write("crap-baseline.json", "{\"functions\":[]}\n");
+    fixture
+        .0
+        .write("crap-baseline.json", "{\"functions\":[]}\n");
     let output = fixture.run(&["crap-delta"], &[("KEELER_CRAP_MAX", "20")]);
     assert!(output.status.success(), "{}", said(&output));
     assert!(

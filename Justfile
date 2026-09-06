@@ -188,6 +188,30 @@ mutants-diff BASE="HEAD":
     # and `src/*.rs` does not match a member's — a gate that watches only
     # one of them is blind to half the projects it ships to.
     paths=('src/*.rs' 'src/**/*.rs' '**/src/*.rs' '**/src/**/*.rs')
+    # The merge base with BASE, not BASE itself, and not `BASE...HEAD`:
+    # three-dot is the range wanted but cannot reach the working tree, and
+    # two-dot would blame this branch for whatever the base gained since it
+    # left. Diffing from the merge base to the working tree is that range
+    # plus the uncommitted lines, in one patch cargo-mutants can read —
+    # where two concatenated diffs would name the same file twice.
+    #
+    # A named base that does not resolve is refused rather than fallen back
+    # from. A shallow checkout, a fork's pull request or a typo in the
+    # workflow would otherwise leave the gate green having compared the
+    # change against nothing — the one thing the message at the bottom of
+    # this recipe exists to prevent. The default is not asked: HEAD is its
+    # own merge base, and a repository too young to have one is the empty
+    # diff the recipe has always handled.
+    #
+    # Resolved before the index is touched, so the refusal cannot leave the
+    # intent-to-add entries below behind it.
+    if [ "$BASE" = "HEAD" ]; then
+        from=HEAD
+    elif ! from=$(git merge-base "$BASE" HEAD 2>/dev/null); then
+        echo "keeler: no merge base with '$BASE' — nothing was measured against it." >&2
+        echo "keeler: the base must be a ref this checkout has; in CI that means fetch-depth: 0." >&2
+        exit 1
+    fi
     # New files aren't in `git diff HEAD` — intent-to-add makes their full
     # content show up in the diff; reset afterwards to leave the index as-is.
     # NUL-delimited into an array: paths with spaces stay whole.
@@ -197,21 +221,13 @@ mutants-diff BASE="HEAD":
     if [ "${#untracked[@]}" -gt 0 ]; then git add -N -- "${untracked[@]}"; fi
     diff_file=$(mktemp)
     trap 'rm -f "$diff_file"' EXIT
-    # The merge base with BASE, not BASE itself, and not `BASE...HEAD`:
-    # three-dot is the range wanted but cannot reach the working tree, and
-    # two-dot would blame this branch for whatever the base gained since it
-    # left. Diffing from the merge base to the working tree is that range
-    # plus the uncommitted lines, in one patch cargo-mutants can read —
-    # where two concatenated diffs would name the same file twice. With
-    # BASE left at HEAD the merge base is HEAD, so this is exactly the
-    # working-tree diff the recipe has always started from.
-    from=$(git merge-base "$BASE" HEAD 2>/dev/null || echo HEAD)
     git diff "$from" -- "${paths[@]}" > "$diff_file" || true
     if [ "${#untracked[@]}" -gt 0 ]; then git reset -q -- "${untracked[@]}"; fi
-    # Only when no base was named. A caller who named one asked for that
-    # comparison and no other: falling back to the branch base or the last
-    # commit would answer a question they did not ask, and in CI it would
-    # measure lines the pull request never touched.
+    # Only when the base is HEAD — the default, or a caller who named it and
+    # so asked for the same comparison. A caller who named anything else
+    # asked for that comparison and no other: falling back to the branch
+    # base or the last commit would answer a question they did not ask, and
+    # in CI it would measure lines the pull request never touched.
     if [ "$BASE" = "HEAD" ]; then
         if [ ! -s "$diff_file" ]; then
             # A clean tree is not a measured tree: src changes committed earlier
