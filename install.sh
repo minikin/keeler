@@ -27,6 +27,10 @@ REPO_TARBALL="${KEELER_TARBALL:-https://codeload.github.com/minikin/keeler/tar.g
 DEST=""
 WITH_TOOLS=1
 WITH_CI=1
+# The workflow before it is installed, under a name no project receives —
+# which is also what tells a Keeler checkout from a project that has adopted
+# one, below.
+WORKFLOW_TEMPLATE=templates/keeler.yml
 usage() {
     cat <<'USAGE'
 Keeler installer: prepares a Rust project for the workflow.
@@ -78,14 +82,13 @@ if ! SRC="$(cd "$(dirname "${BASH_SOURCE[0]:-.}")" 2>/dev/null && pwd)"; then
 fi
 # The sentinel must be repo-only: probing for a file the install *lands*
 # would mistake an already-Keelered project for the source and turn every
-# piped upgrade into a silent no-op. `templates/keeler.yml` is the workflow
-# before it is installed — under a name no project receives.
+# piped upgrade into a silent no-op.
 # An explicit pin means fetch, always. Piped, the script has no file of
 # its own, so SRC becomes the working directory — and a Keeler clone looks
 # exactly like an unpacked tarball. Using it would install whatever is
 # checked out while the caller believes they pinned a version.
 if [ -n "${KEELER_REF:-}${KEELER_TARBALL:-}" ] \
-    || [ ! -f "$SRC/VERSION" ] || [ ! -f "$SRC/templates/keeler.yml" ]; then
+    || [ ! -f "$SRC/VERSION" ] || [ ! -f "$SRC/$WORKFLOW_TEMPLATE" ]; then
     tmp="$(mktemp -d)"
     trap 'rm -rf "$tmp"' EXIT
     say "Fetching Keeler"
@@ -154,20 +157,40 @@ free_name() {
     printf '%s' "$candidate"
 }
 
+# Byte for byte, which is what "already installed" means for every file the
+# project receives exactly as Keeler ships it.
+identical() { cmp -s "$1" "$2" 2>/dev/null; }
+
+# The workflow is the one installed file that is not the same in every
+# project: `KEELER_REF:` pins the Keeler its CI fetches, and an adopter moves
+# to another version by editing that line. A workflow differing from ours
+# only there was repinned on purpose — answering that with a copy to merge by
+# hand would make a decision the project already took look like a conflict.
+unpinned() { sed 's|^\([[:space:]]*KEELER_REF:\).*|\1|' "$1"; }
+same_but_for_the_pin() {
+    [ -f "$1" ] && [ -f "$2" ] && cmp -s <(unpinned "$1") <(unpinned "$2")
+}
+
+# install_file <source> <destination, when it differs from the source> \
+#              [comparison, default `identical`]
+# A source starting with / is a file prepared for this run rather than one
+# shipped as it stands; anything else is relative to the Keeler being
+# installed.
 install_file() {
-    local from="$SRC/$1" rel="${2:-$1}" to="$DEST/${2:-$1}"
+    local from="$1" rel="${2:-$1}" to="$DEST/${2:-$1}" same="${3:-identical}"
+    case "$from" in /*) ;; *) from="$SRC/$from" ;; esac
     mkdir -p "$(dirname "$to")"
     # -L as well as -e: `-e` is false for a symlink whose target does not
     # exist, and `cp` would then write *through* the link — outside the
     # project, which is the one boundary this script promises to keep. A
     # symlink is the project's own content whatever it points at.
     if [ -e "$to" ] || [ -L "$to" ]; then
-        cmp -s "$from" "$to" 2>/dev/null || {
+        "$same" "$from" "$to" || {
             # An existing copy that already holds our version is the record
             # of this same conflict, from an earlier run. Leaving it is what
             # makes a second install change nothing; only a copy holding
             # something else needs a name of its own.
-            if cmp -s "$from" "$to.keeler" 2>/dev/null; then
+            if "$same" "$from" "$to.keeler"; then
                 kept="$to.keeler"
             else
                 kept="$(free_name "$to.keeler")"
@@ -199,7 +222,17 @@ done
 # it untouched instead would strand every existing project on the workflow
 # it first installed.
 if [ "$WITH_CI" = 1 ]; then
-    install_file templates/keeler.yml .github/workflows/keeler.yml
+    # CI has no plugin to read the recipes from, so it fetches a Keeler at
+    # the tag this line names. That tag is the version doing the installing:
+    # the gates it carries are the ones this workflow was written against.
+    # Not $KEELER_REF — that selects which Keeler to install here and merely
+    # shares the name; a run pinned to one version must not leave CI pointed
+    # at another.
+    pinned="$(mktemp)"
+    sed "s|^\([[:space:]]*KEELER_REF:\).*|\1 v$KEELER_VERSION|" \
+        "$SRC/$WORKFLOW_TEMPLATE" > "$pinned"
+    install_file "$pinned" .github/workflows/keeler.yml same_but_for_the_pin
+    rm -f "$pinned"
 fi
 ok "$copied file(s) installed"
 [ "${#merges[@]}" -gt 0 ] && for m in "${merges[@]}"; do

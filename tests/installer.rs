@@ -55,21 +55,17 @@ fn files_under(dir: &Path) -> Vec<PathBuf> {
 
 /// The workflow `install.sh` copies to `.github/workflows/keeler.yml`, read
 /// out of the installer itself so this test follows the installer instead of
-/// drifting from it.
+/// drifting from it. The installer resolves the `KEELER_REF:` pin into a
+/// temporary copy before installing it, so what it names is the template
+/// that copy is made from.
 fn shipped_workflow_path() -> PathBuf {
     let installer = std::fs::read_to_string(repo_root().join("install.sh")).unwrap();
-    let install = installer
+    let template = installer
         .lines()
         .map(str::trim)
-        .find(|line| {
-            line.starts_with("install_file ") && line.ends_with(".github/workflows/keeler.yml")
-        })
-        .expect("install.sh no longer installs a workflow to keeler.yml");
-    let source = install
-        .split_whitespace()
-        .nth(1)
-        .expect("install_file was given no source path");
-    repo_root().join(source)
+        .find_map(|line| line.strip_prefix("WORKFLOW_TEMPLATE="))
+        .expect("install.sh no longer names the workflow template it ships");
+    repo_root().join(template)
 }
 
 /// Names of the top-level entries under `jobs:` — enough YAML for a file we
@@ -192,6 +188,29 @@ impl TempProject {
             String::from_utf8_lossy(&output.stderr),
         );
         String::from_utf8_lossy(&output.stdout).into_owned()
+    }
+
+    /// Replaces the refusing `curl` stub with one that answers any URL with
+    /// a tarball of `source`, as codeload does — offline, and without the
+    /// harness ever leaving the machine. An explicit pin makes the installer
+    /// fetch rather than use the checkout it was started from, so a scenario
+    /// about what a *fetched* Keeler installs needs the fetch to arrive.
+    fn with_curl_serving(&self, source: &KeelerSource) {
+        let stub = self.dir.join("bin/curl");
+        std::fs::write(
+            &stub,
+            format!(
+                "#!/usr/bin/env bash\nexec tar -cz -C {} {}\n",
+                source.dir.parent().unwrap().display(),
+                source.dir.file_name().unwrap().to_string_lossy(),
+            ),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
     }
 
     /// Puts Keeler's `Justfile` where `run_just` can reach it. The installer
@@ -577,8 +596,12 @@ fn equivalent_gitignore_patterns_are_not_duplicated() {
 fn repo_only_references(workflow: &str) -> Vec<String> {
     let mut findings = Vec::new();
     for (index, line) in workflow.lines().enumerate() {
+        // `@VERSION@` is the placeholder the installer resolves into the
+        // `KEELER_REF:` pin before the workflow reaches a project — a marker
+        // it replaces, not a reference to the VERSION file, which is ours.
+        let scanned = line.replace("@VERSION@", "");
         for path in REPO_ONLY_PATHS {
-            if line.contains(path) {
+            if scanned.contains(path) {
                 findings.push(format!(
                     "line {}: references `{path}` in `{}`",
                     index + 1,
@@ -2132,5 +2155,216 @@ fn a_crate_without_a_claude_md_does_not_get_one() {
     assert!(
         !project.path().join("CLAUDE.md").exists(),
         "the installer created a CLAUDE.md nobody asked for",
+    );
+}
+
+// --- Spec 09 — the workflow pins the version that installed it -------------
+//
+// CI cannot see the plugin cache, so the workflow fetches Keeler itself at a
+// tag. That tag is the version that installed the workflow: the gates in the
+// fetched Justfile are the ones this workflow was written against. It is one
+// `env:` line, so an adopter moves to another Keeler by editing it — and a
+// workflow that differs from ours only there has been repinned on purpose,
+// which is not a conflict to merge by hand.
+
+/// A Keeler source directory the installer accepts as its own: the
+/// installer, the workflow template, the two tool configs and a `VERSION` the
+/// scenario chooses. The version has to be the fixture's rather than this
+/// repository's, or every assertion about the pin would have to be rewritten
+/// the day VERSION is bumped.
+struct KeelerSource {
+    dir: PathBuf,
+}
+
+impl KeelerSource {
+    fn new(name: &str, version: &str) -> Self {
+        let dir = std::env::temp_dir().join(format!("keeler-src-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("templates")).unwrap();
+        for file in [
+            "install.sh",
+            "clippy.toml",
+            "rustfmt.toml",
+            "templates/keeler.yml",
+        ] {
+            std::fs::copy(repo_root().join(file), dir.join(file)).unwrap();
+        }
+        std::fs::write(dir.join("VERSION"), format!("{version}\n")).unwrap();
+        Self { dir }
+    }
+
+    /// The workflow template this source ships, unresolved.
+    fn template(&self) -> String {
+        std::fs::read_to_string(self.dir.join("templates/keeler.yml")).unwrap()
+    }
+
+    /// Runs this Keeler's installer against `project`, with the stubs first
+    /// on PATH and the environment the scenario names, and returns its
+    /// output.
+    fn install_into(&self, project: &TempProject, env: &[(&str, &str)]) -> String {
+        let path_var = std::env::var("PATH").unwrap();
+        let mut command = std::process::Command::new("bash");
+        command
+            .arg(self.dir.join("install.sh"))
+            .arg(project.path())
+            .arg("--no-tools")
+            .env(
+                "PATH",
+                format!("{}:{path_var}", project.path().join("bin").display()),
+            );
+        for (name, value) in env {
+            command.env(name, value);
+        }
+        let output = command.output().expect("failed to run install.sh");
+        assert!(
+            output.status.success(),
+            "install.sh failed:\n{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    }
+}
+
+impl Drop for KeelerSource {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+/// The `env:` line a workflow pins its Keeler with.
+fn pin_line(version: &str) -> String {
+    format!("  KEELER_REF: v{version}")
+}
+
+/// `template` as a Keeler of `version` installs it: the pin resolved, every
+/// other line untouched.
+fn pinned(template: &str, version: &str) -> String {
+    let mut resolved = String::new();
+    for line in template.lines() {
+        if line.trim_start().starts_with("KEELER_REF:") {
+            resolved.push_str(&pin_line(version));
+        } else {
+            resolved.push_str(line);
+        }
+        resolved.push('\n');
+    }
+    resolved
+}
+
+/// The workflow a project holds, as text.
+fn installed_workflow(project: &TempProject) -> String {
+    std::fs::read_to_string(project.path().join(".github/workflows/keeler.yml")).unwrap()
+}
+
+#[test]
+fn the_installed_workflow_pins_the_version_that_installed_it() {
+    // Given a Keeler whose VERSION reads 0.5.0, and a fresh crate
+    let source = KeelerSource::new("pin-fresh", "0.5.0");
+    let project = TempProject::new("pin-fresh", MANIFEST_WITH_PROPTEST);
+
+    // When it installs
+    source.install_into(&project, &[]);
+
+    // Then the workflow pins the Keeler that wrote it ...
+    let workflow = installed_workflow(&project);
+    assert!(
+        workflow.lines().any(|line| line == pin_line("0.5.0")),
+        "the installed workflow does not pin v0.5.0:\n{workflow}",
+    );
+    // ... with nothing left for the adopter to substitute
+    assert!(
+        !workflow.contains("@VERSION@"),
+        "the installed workflow still carries the template's placeholder:\n{workflow}",
+    );
+}
+
+#[test]
+fn a_repinned_workflow_is_left_alone() {
+    // Given a project holding the shipped workflow, repinned to v0.4.1
+    let source = KeelerSource::new("repinned", "0.5.0");
+    let project = TempProject::new("repinned", MANIFEST_WITH_PROPTEST);
+    let repinned = pinned(&source.template(), "0.4.1");
+    std::fs::create_dir_all(project.path().join(".github/workflows")).unwrap();
+    std::fs::write(
+        project.path().join(".github/workflows/keeler.yml"),
+        &repinned,
+    )
+    .unwrap();
+
+    // When a Keeler of 0.5.0 installs
+    let report = source.install_into(&project, &[]);
+
+    // Then the pin the project chose is still the pin ...
+    assert_eq!(
+        installed_workflow(&project),
+        repinned,
+        "the install rewrote a workflow the project had repinned",
+    );
+    // ... and no copy landed beside it to merge: a repin is a decision, not
+    // a conflict
+    assert!(
+        !project
+            .path()
+            .join(".github/workflows/keeler.yml.keeler")
+            .exists(),
+        "a deliberate repin was answered with a .keeler copy:\n{report}",
+    );
+    assert!(
+        !report.contains("keeler.yml differs"),
+        "the install reported a repin as a conflict:\n{report}",
+    );
+}
+
+#[test]
+fn a_workflow_that_differs_beyond_its_pin_gets_the_new_one_alongside() {
+    // Given that same repinned workflow, with a job of the project's own
+    let source = KeelerSource::new("repinned-and-edited", "0.5.0");
+    let project = TempProject::new("repinned-and-edited", MANIFEST_WITH_PROPTEST);
+    let theirs = format!(
+        "{}\n  mine:\n    name: Mine\n    runs-on: ubuntu-latest\n    steps:\n      - run: true\n",
+        pinned(&source.template(), "0.4.1"),
+    );
+    std::fs::create_dir_all(project.path().join(".github/workflows")).unwrap();
+    std::fs::write(project.path().join(".github/workflows/keeler.yml"), &theirs).unwrap();
+
+    // When a Keeler of 0.5.0 installs
+    let report = source.install_into(&project, &[]);
+
+    // Then their workflow is untouched ...
+    assert_eq!(
+        installed_workflow(&project),
+        theirs,
+        "the install overwrote a workflow the project had edited",
+    );
+    // ... and ours lands beside it, pinning the version that wrote it
+    let alongside =
+        std::fs::read_to_string(project.path().join(".github/workflows/keeler.yml.keeler"))
+            .unwrap_or_else(|err| panic!("no copy landed to merge: {err}\n{report}"));
+    assert!(
+        alongside.lines().any(|line| line == pin_line("0.5.0")),
+        "the copy left to merge does not pin v0.5.0:\n{alongside}",
+    );
+}
+
+#[test]
+fn the_pin_comes_from_the_installing_keeler_not_the_fetch_variable() {
+    // Given a Keeler whose VERSION reads 0.5.0, reached the way a pinned run
+    // reaches one — KEELER_REF forces the fetch, so the scenario's answer
+    // has to come over the wire that curl stands in for
+    let source = KeelerSource::new("pin-not-the-fetch-var", "0.5.0");
+    let project = TempProject::new("pin-not-the-fetch-var", MANIFEST_WITH_PROPTEST);
+    project.with_curl_serving(&source);
+
+    // When it installs with KEELER_REF naming a different version
+    source.install_into(&project, &[("KEELER_REF", "v0.4.1")]);
+
+    // Then the pin is the version that did the installing. KEELER_REF says
+    // which Keeler to fetch; what the workflow pins is which Keeler CI runs,
+    // and that is the one whose gates this project just received.
+    let workflow = installed_workflow(&project);
+    assert!(
+        workflow.lines().any(|line| line == pin_line("0.5.0")),
+        "the workflow pinned the fetch variable instead of the installing version:\n{workflow}",
     );
 }
