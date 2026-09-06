@@ -720,6 +720,13 @@ fn what_adopters_receive_describes_their_project_not_ours() {
             leaks.push(format!("{rel}: {finding}"));
         }
     }
+    // And the recipes, which an adopter reads too — they reach them through
+    // the plugin rather than through the install, so scanning the installed
+    // tree alone would leave the file this gate was written for ungated.
+    let justfile = std::fs::read_to_string(repo_root().join("Justfile")).unwrap();
+    for finding in repo_only_prose(&justfile) {
+        leaks.push(format!("Justfile: {finding}"));
+    }
 
     // Then none of them describes the Keeler repository's own internals
     assert!(
@@ -1969,8 +1976,7 @@ fn init_leaves_the_workflow_and_two_tool_configs_in_a_fresh_crate() {
     // Then the files created are the workflow and the two tool configs ...
     let (created, modified) = created_and_modified(&before, &project.tree_snapshot());
     assert_eq!(
-        created,
-        CREATED_IN_A_FRESH_CRATE,
+        created, CREATED_IN_A_FRESH_CRATE,
         "a fresh install created something other than the workflow and the tool configs",
     );
     // ... and the only files modified are Cargo.toml and .gitignore
