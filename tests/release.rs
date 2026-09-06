@@ -298,6 +298,20 @@ fn release_fixture(name: &str, version: &str) -> PathBuf {
         format!("[package]\nname = \"fixture\"\nversion = \"{version}\"\n"),
     )
     .unwrap();
+    // And it is a plugin, whose two manifests spec 09 made the guard read:
+    // `/plugin update` compares plugin.json's version, so a release that
+    // left it behind installs nothing and says so nowhere.
+    std::fs::create_dir_all(dir.join(".claude-plugin")).unwrap();
+    std::fs::write(
+        dir.join(".claude-plugin/plugin.json"),
+        format!("{{ \"name\": \"keeler\", \"version\": \"{version}\" }}\n"),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join(".claude-plugin/marketplace.json"),
+        format!("{{ \"plugins\": [ {{ \"name\": \"keeler\", \"version\": \"{version}\" }} ] }}\n"),
+    )
+    .unwrap();
     // And it has specs, which spec 08 made the guard read: a release goes
     // out over a whole pipeline or not at all. Nothing here is ticked, so
     // the gate passes with nothing to account for and spec 02's scenarios
