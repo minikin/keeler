@@ -35,7 +35,7 @@ matching recipe below; what you may not do is run `keeler-spawn`,
 
 Three rules keep parallel branches from lying to each other:
 
-- **A branch measures the shared reference; it never moves it.** `crap-baseline.json` and the coverage bar in the `cov` recipe settle at fan-in, on main. CI refuses a `keeler/*` pull request whose diff touched either.
+- **A branch measures the shared reference; it never moves it.** `crap-baseline.json` settles at fan-in, on main, and CI refuses a `keeler/*` pull request whose diff touched it. The bars left the project with the recipes: `KEELER_COV_MIN` and `KEELER_CRAP_MAX` live in the workflow now, beside the pin, and CI guards nothing else.
 - **A task branch ticks its own task and leaves `Status:` alone.** `Status:` is the one line no task branch may write; `just keeler-land` sets it on main once every box is ticked.
 - **Review leaves a record.** /keeler:review writes `reviews/<spec-slug>/<task-id>.md`, and CI on a `keeler/*` pull request fails when it is missing or names a commit the branch did not make.
 
