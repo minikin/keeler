@@ -385,8 +385,11 @@ fn in_a_linked_worktree_the_wrapper_stays_in_the_worktree() {
     let stub = Stub::new("worktree");
     let repo = Repo::new("wrapper", "worktree");
     repo.commit("README.md", "# fixture\n", "the root commit");
-    let worktree = repo.path().join("../keeler-wrapper-linked-worktree");
-    let _ = std::fs::remove_dir_all(&worktree);
+    // Outside the repository and inside something that cleans itself up:
+    // an assertion below may never return, and a leaked worktree would
+    // then be a stale entry the next run's `worktree add` refuses.
+    let elsewhere = Scratch::new("worktree-holder");
+    let worktree = elsewhere.path().join("linked");
     repo.git(&[
         "worktree",
         "add",
@@ -399,10 +402,6 @@ fn in_a_linked_worktree_the_wrapper_stays_in_the_worktree() {
 
     // When the wrapper runs from a subdirectory of the worktree
     let out = stub.run(&wrapper(), &worktree.join("src"), &["--list"]);
-    let recorded = stub.recorded();
-    let mut expected = prefix(&canonical(&worktree));
-    expected.push("--list".to_string());
-    repo.git(&["worktree", "remove", "--force", worktree.to_str().unwrap()]);
     assert!(
         out.status.success(),
         "the wrapper failed in a linked worktree:\n{}",
@@ -411,8 +410,11 @@ fn in_a_linked_worktree_the_wrapper_stays_in_the_worktree() {
 
     // Then the working directory is the worktree root and not the main
     // checkout — the task's branch is what the recipe must measure
+    let mut expected = prefix(&canonical(&worktree));
+    expected.push("--list".to_string());
     assert_eq!(
-        recorded, expected,
+        stub.recorded(),
+        expected,
         "the wrapper left the worktree for the main checkout"
     );
 }
