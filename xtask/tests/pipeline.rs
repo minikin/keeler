@@ -354,7 +354,7 @@ fn release_guard(root: &Path, tag: &str) -> std::process::Output {
 /// the pipeline.
 const RELEASABLE: [(&str, &str); 4] = [
     ("VERSION", "1.2.3\n"),
-    (".claude/keeler.md", "<!-- keeler-version: 1.2.3 -->\n"),
+    ("keeler.md", "<!-- keeler-version: 1.2.3 -->\n"),
     (
         "CHANGELOG.md",
         "# Changelog\n\n## [1.2.3] — 2026-01-01\n\n- an entry\n",

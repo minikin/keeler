@@ -9,8 +9,8 @@ Please report vulnerabilities privately via
 ## Supported versions
 
 The latest release (and `main`) receive fixes. Installations pin what they
-run via `KEELER_REF`; the version installed is recorded at the top of
-`.claude/keeler.md`.
+run via `KEELER_REF`; the version installed is recorded at the top of the
+plugin's `keeler.md`.
 
 ## Scope worth knowing
 

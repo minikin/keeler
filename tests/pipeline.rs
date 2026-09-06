@@ -18,16 +18,24 @@ use common::{Repo, job_block, repo_root, said, shipped_workflow};
 
 fn command(name: &str) -> String {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join(".claude/commands/keeler")
+        .join("commands")
         .join(format!("{name}.md"));
     std::fs::read_to_string(&path)
         .unwrap_or_else(|why| panic!("cannot read {}: {why}", path.display()))
 }
 
-/// The shipped workflow rules — the file `install.sh` copies into every
-/// adopting project, so a claim made here is made in their repository too.
+/// The workflow rules the plugin ships — printed into every adopting
+/// project's session by the `SessionStart` hook, so a claim made here is
+/// made in their repository too.
 fn rules() -> String {
-    std::fs::read_to_string(repo_root().join(".claude/keeler.md")).unwrap()
+    std::fs::read_to_string(repo_root().join("keeler.md")).unwrap()
+}
+
+/// The gate table and the review-enforcement paragraph, which left the
+/// rules for a chapter of their own so the rules fit the hook. What the
+/// tests below say about them is unchanged by the move.
+fn gates() -> String {
+    std::fs::read_to_string(repo_root().join("gates.md")).unwrap()
 }
 
 /// One `## ` section of a Markdown document, from its heading to the next.
@@ -115,7 +123,7 @@ fn the_rules_say_which_stage_ticks_the_box() {
 
 #[test]
 fn the_rules_warn_that_a_skipped_review_goes_unnoticed() {
-    // Given the workflow rules Keeler ships into other people's projects
+    // Given the gate chapter Keeler ships into other people's projects
 
     // Then the Quality gates section still carries the review-stage
     // warning: a skipped review leaves no artifact whose absence anything
@@ -124,7 +132,7 @@ fn the_rules_warn_that_a_skipped_review_goes_unnoticed() {
     // `the_rules_stop_claiming_nothing_can_notice` find the paragraph by.
     // Which enforcement regime the paragraph then describes is that test's
     // business — this one is here so the warning cannot vanish entirely.
-    let review = section(&rules(), "Quality gates");
+    let review = section(&gates(), "Quality gates");
     assert!(
         review.contains("leaves no artifact"),
         "the rules do not warn that a skipped review goes unnoticed:\n{review}",
@@ -325,12 +333,12 @@ fn the_gate_is_one_recipe_away_everywhere_the_gates_live() {
 
 // T9 — the rules stop claiming nothing can notice.
 
-/// The paragraph of the rules' Quality gates section that warns about the
-/// review stage, found by the phrase `the_rules_warn_that_a_skipped_review_
-/// goes_unnoticed` pins it by — so the two tests keep talking about the
-/// same paragraph however it is rewritten around them.
+/// The paragraph of the Quality gates chapter that warns about the review
+/// stage, found by the phrase `the_rules_warn_that_a_skipped_review_goes_
+/// unnoticed` pins it by — so the two tests keep talking about the same
+/// paragraph however it is rewritten around them.
 fn review_stage_warning() -> String {
-    section(&rules(), "Quality gates")
+    section(&gates(), "Quality gates")
         .split("\n\n")
         .find(|paragraph| paragraph.contains("leaves no artifact"))
         .expect("the rules' Quality gates section no longer warns about the review stage")

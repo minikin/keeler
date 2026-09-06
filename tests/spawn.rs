@@ -621,7 +621,7 @@ fn a_spawned_agent_commits_on_its_branch_and_nowhere_else() {
 
     // And the shipped rules say this is the one place an agent commits
     // without asking, and why the spawn was the asking
-    let rules = std::fs::read_to_string(repo_root().join(".claude/keeler.md")).unwrap();
+    let rules = std::fs::read_to_string(repo_root().join("keeler.md")).unwrap();
     let commits = section(&rules, "## Commits");
     for token in ["keeler-spawn", "keeler/", "push"] {
         assert!(

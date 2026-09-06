@@ -24,9 +24,9 @@ profiler, the complexity score, an independent review, and mutation testing.
 
 This file is the *why*. Two others carry the rest, and neither repeats it:
 Keeler's README is how to install it and what to type first, and
-`.claude/keeler.md` — installed beside this file, in your project — is this
-same workflow written as law for the agent: the file it actually reads while
-it works.
+`keeler.md` — the plugin's rules, printed into your session at its start —
+is this same workflow written as law for the agent: the file it actually
+reads while it works.
 
 > **Verdicts.** Every task's final report ends with a one-line status:
 >

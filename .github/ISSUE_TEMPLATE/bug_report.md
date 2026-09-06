@@ -22,7 +22,7 @@ cargo new --lib /tmp/probe
 
 **Environment**
 
-- Keeler version: <!-- the keeler-version marker at the top of .claude/keeler.md, or the tag you installed -->
+- Keeler version: <!-- the keeler-version marker at the top of the plugin's keeler.md, or the tag you installed -->
 - OS: <!-- macOS 15, Ubuntu 24.04, WSL2, … -->
 - Shell: <!-- bash 5.2, zsh 5.9, … -->
 - `just --version`, `cargo --version`:

@@ -1,0 +1,13 @@
+{
+  "name": "keeler",
+  "version": "0.4.1",
+  "description": "The spec-first, test-driven workflow for Rust: ten stage commands, two skills, the rules the agent obeys, and the gates that hold them — without a single Keeler file in your repository.",
+  "author": {
+    "name": "minikin",
+    "url": "https://github.com/minikin"
+  },
+  "homepage": "https://github.com/minikin/keeler",
+  "repository": "https://github.com/minikin/keeler",
+  "license": "MIT",
+  "keywords": ["rust", "tdd", "workflow", "gherkin", "quality-gates"]
+}

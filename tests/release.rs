@@ -279,10 +279,10 @@ fn the_verification_story_is_documented_where_adopters_look() {
 fn release_fixture(name: &str, version: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("keeler-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(dir.join(".claude")).unwrap();
+    std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("VERSION"), format!("{version}\n")).unwrap();
     std::fs::write(
-        dir.join(".claude/keeler.md"),
+        dir.join("keeler.md"),
         format!("<!-- keeler-version: {version} -->\n# rules\n"),
     )
     .unwrap();

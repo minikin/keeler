@@ -7,12 +7,13 @@ tool asks of its adopters. The short version:
 
 | Change                                    | Road                                                                                                     |
 | ----------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| New behavior, changed behavior            | Spec first: draft a Gherkin spec in `specs/` (copy `TEMPLATE.md`), get it approved in the PR discussion, then implement test-first |
+| New behavior, changed behavior            | Spec first: draft a Gherkin spec in `specs/` (copy `templates/spec.md`), get it approved in the PR discussion, then implement test-first |
 | A bug                                     | Failing regression test first, then the minimal fix                                                       |
 | Docs, comments, config — no behavior      | Just open the PR; run `just lint`                                                                         |
 
-The full rules live in [.claude/keeler.md](.claude/keeler.md) and
-[KEELER.md](KEELER.md).
+The full rules live in [keeler.md](keeler.md), with graph mode in
+[graph-mode.md](graph-mode.md), the gate table in [gates.md](gates.md), and
+the reasoning in [docs/KEELER.md](docs/KEELER.md).
 
 ## Before you push
 
@@ -33,19 +34,20 @@ Each doc has one job, and a change that outgrows its doc is not finished:
 - **`CHANGELOG.md`** — every user-visible change, under `[Unreleased]`.
 - **`README.md`** — only if the change alters what the installer puts in a
   project, what you need to run it, or the first commands you type.
-- **`KEELER.md`** — only if the *reasoning* changed: a new stage, a new gate,
-  a new failure mode one of them defends against.
-- **`.claude/keeler.md`** — only if the rules the agent obeys changed. It
-  carries the version marker, so a release bumps it either way.
+- **`docs/KEELER.md`** — only if the *reasoning* changed: a new stage, a new
+  gate, a new failure mode one of them defends against.
+- **`keeler.md`** — only if the rules the agent obeys changed. It carries the
+  version marker, so a release bumps it either way. Graph mode and the gate
+  table live beside it, in `graph-mode.md` and `gates.md`.
 - **`SECURITY.md`** — if the change moves what the installer trusts.
 
 Several of these are gate-checked: tests assert that the README explains
-verification, that the rules and `KEELER.md` both walk through a graph-mode
-day, and that `VERSION`, the rules marker and `CHANGELOG.md` agree.
+verification, that `graph-mode.md` and `docs/KEELER.md` both walk through a
+graph-mode day, and that `VERSION`, the rules marker and `CHANGELOG.md` agree.
 
 ## Writing for the agent
 
-The files under `.claude/commands/keeler/` and `.claude/skills/` are not
+The files under `commands/` and `skills/` are not
 documentation about the workflow — they *are* the workflow, executed by an
 agent that reads them fresh every run. Prose quality there is behavior.
 When you touch one, measure it against three levers (the framing comes
@@ -80,7 +82,7 @@ instruction the agent would *not* derive on its own.
 Everything `just dev` does, plus end-to-end installer runs on Linux and
 macOS, a from-scratch bootstrap (the installer installing its own tools,
 including the forced source-compile fallback), and version consistency
-(`VERSION` ↔ the marker in `.claude/keeler.md` ↔ a `CHANGELOG.md` entry).
+(`VERSION` ↔ the marker in `keeler.md` ↔ a `CHANGELOG.md` entry).
 The guard that checks that last one also runs the pipeline gate, so CI
 refuses a push whose specs tick a task no review record and no line of
 `reviews/BACKLOG.md` accounts for.
@@ -91,7 +93,7 @@ refuses a push whose specs tick a task no review record and no line of
    An empty section is refused: the notes are that section verbatim, and a
    release must not ship blank ones.
 2. Bump `VERSION`, the `<!-- keeler-version: -->` marker in
-   `.claude/keeler.md`, and the `version` in every manifest — the root
+   `keeler.md`, and the `version` in every manifest — the root
    `Cargo.toml` and each workspace member. `cargo xtask release-guard`
    holds all of them in agreement and names every one that disagrees.
 3. Bump the pinned tag in the worked examples — README's install section,

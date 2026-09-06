@@ -19,7 +19,7 @@ and a useful one.
 
 **How you would know it was solved**
 One or two Given/When/Then sentences — the shape a spec scenario takes. See
-[specs/TEMPLATE.md](https://github.com/minikin/keeler/blob/main/specs/TEMPLATE.md) for the full form.
+[templates/spec.md](https://github.com/minikin/keeler/blob/main/templates/spec.md) for the full form.
 
 ```gherkin
 Given ...

@@ -143,7 +143,7 @@ fn release_guard_command(root: &std::path::Path, args: &[String]) -> Result<Stri
     };
     let at = |name: &str| root.join(name).display().to_string();
     let version = read(&at("VERSION"))?.trim().to_string();
-    let rules = read(&at(".claude/keeler.md"))?;
+    let rules = read(&at("keeler.md"))?;
     let marker = guard::marker(&rules).unwrap_or_default().to_string();
     let changelog = read(&at("CHANGELOG.md"))?;
 
@@ -371,10 +371,10 @@ mod tests {
     ) -> std::path::PathBuf {
         let root = std::env::temp_dir().join(format!("xtask-guard-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(root.join(".claude")).unwrap();
+        std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("VERSION"), format!("{version}\n")).unwrap();
         std::fs::write(
-            root.join(".claude/keeler.md"),
+            root.join("keeler.md"),
             format!("<!-- keeler-version: {marker} -->\n"),
         )
         .unwrap();
