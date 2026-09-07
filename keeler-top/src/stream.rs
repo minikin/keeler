@@ -35,7 +35,8 @@ pub enum Record {
     /// so every `user` record in the stream is one of these.
     ToolResult(serde_json::Value),
     /// A record the board does not read — a `result`, a system record that
-    /// is not the init one, anything a later version of the CLI adds.
+    /// is not the init one, anything a later version of the CLI adds, and
+    /// anything a subagent said.
     Other,
 }
 
@@ -63,11 +64,24 @@ enum Wire {
         // far more than any column cares about the name.
         #[serde(default)]
         model: String,
+        #[serde(default)]
+        parent_tool_use_id: Option<String>,
     },
     #[serde(rename = "assistant")]
-    Assistant { message: serde_json::Value },
+    Assistant {
+        message: serde_json::Value,
+        // The one field that tells a subagent's record from the main
+        // session's, and it is here rather than in `message`: it is the
+        // record that belongs to a `Task` call, not the message.
+        #[serde(default)]
+        parent_tool_use_id: Option<String>,
+    },
     #[serde(rename = "user")]
-    User { message: serde_json::Value },
+    User {
+        message: serde_json::Value,
+        #[serde(default)]
+        parent_tool_use_id: Option<String>,
+    },
     #[serde(other)]
     Other,
 }
@@ -75,10 +89,30 @@ enum Wire {
 impl From<Wire> for Record {
     fn from(wire: Wire) -> Self {
         match wire {
-            Wire::System { subtype, model } if subtype == "init" => Self::Init { model },
-            Wire::Assistant { message } => Self::Assistant(message),
-            Wire::User { message } => Self::ToolResult(message),
-            Wire::System { .. } | Wire::Other => Self::Other,
+            // The main session's own account of itself, and only it. A run
+            // spawns subagents, and their records share the stream with
+            // `parent_tool_use_id` set — a third of t10's, on the run this
+            // spec was written against. Matching the null here rather than
+            // filtering in the fold is what makes "only the main session
+            // counts" true of every record shape at once, instead of a rule
+            // the stage, the tool, the texts, the usage and the restart
+            // signal each remember separately.
+            Wire::System {
+                subtype,
+                model,
+                parent_tool_use_id: None,
+            } if subtype == "init" => Self::Init { model },
+            Wire::Assistant {
+                message,
+                parent_tool_use_id: None,
+            } => Self::Assistant(message),
+            Wire::User {
+                message,
+                parent_tool_use_id: None,
+            } => Self::ToolResult(message),
+            Wire::System { .. } | Wire::Assistant { .. } | Wire::User { .. } | Wire::Other => {
+                Self::Other
+            }
         }
     }
 }
@@ -383,6 +417,42 @@ mod tests {
             super::parse_line(br#"{"type":"system","subtype":"compact_boundary"}"#),
             Some(Record::Other),
             "a system record that is not the init one would restart every run that compacts",
+        );
+    }
+
+    #[test]
+    fn a_record_a_subagent_made_is_one_the_board_does_not_read() {
+        // A run spawns subagents, and their records share the stream with
+        // `parent_tool_use_id` set. Dropping them here rather than in the
+        // fold is what makes "only the main session counts" true of every
+        // column at once — the stage, the tool, the texts and the usage —
+        // instead of a rule each of them has to remember separately.
+        assert_eq!(
+            super::parse_line(
+                br#"{"type":"assistant","parent_tool_use_id":"toolu_1","message":{"id":"m1"}}"#
+            ),
+            Some(Record::Other),
+        );
+        assert_eq!(
+            super::parse_line(
+                br#"{"type":"user","parent_tool_use_id":"toolu_1","message":{"content":[]}}"#
+            ),
+            Some(Record::Other),
+        );
+        assert_eq!(
+            super::parse_line(br#"{"type":"assistant","parent_tool_use_id":null,"message":{}}"#),
+            Some(Record::Assistant(serde_json::json!({}))),
+            "an explicit null parent is the main session, not a subagent",
+        );
+        // The init record most of all. One per run is what makes a second
+        // one the sign of a resume, so an init a subagent brought with it
+        // would rewind the reader and wipe a live view mid-run — the one
+        // record where reading a subagent's is worse than useless.
+        assert_eq!(
+            super::parse_line(
+                br#"{"type":"system","subtype":"init","model":"m","parent_tool_use_id":"toolu_1"}"#
+            ),
+            Some(Record::Other),
         );
     }
 
