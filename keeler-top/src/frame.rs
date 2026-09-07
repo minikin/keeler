@@ -312,11 +312,17 @@ pub fn render(frame: &mut ratatui::Frame, board: &Board, now: Timestamp) {
 
 /// The table, with the selected row marked.
 fn table(board: &Board, now: Timestamp, width: u16) -> Paragraph<'static> {
-    // The headings are the first line, so the selected row is the one after
-    // it.
-    let selected = board.selected.saturating_add(1);
-    let lines: Vec<Line> = Grid::new(board, now, width)
-        .lines()
+    Paragraph::new(marked(Grid::new(board, now, width).lines(), board.selected))
+}
+
+/// The table's lines, with the one the detail pane is about marked.
+///
+/// The headings are the first line, so the selected row is the one after
+/// it — and a board with no tasks has a `selected` that names no line,
+/// which marks nothing rather than marking the headings.
+fn marked(lines: Vec<String>, selected: usize) -> Vec<Line<'static>> {
+    let selected = selected.saturating_add(1);
+    lines
         .into_iter()
         .enumerate()
         .map(|(index, line)| {
@@ -326,8 +332,7 @@ fn table(board: &Board, now: Timestamp, width: u16) -> Paragraph<'static> {
                 Line::from(line)
             }
         })
-        .collect();
-    Paragraph::new(lines)
+        .collect()
 }
 
 #[cfg(test)]
@@ -525,6 +530,27 @@ mod tests {
         // half drawn — which leaves the answer a column short, and the
         // padding that follows it closes that up.
         assert_eq!(super::wide(&truncate("更新更", 4)), 3);
+    }
+
+    #[test]
+    fn the_row_the_pane_is_about_is_marked_and_the_headings_never_are() {
+        use ratatui::style::Modifier;
+
+        let lines = ["TASK …", "T1 …", "T2 …", "T3 …"].map(str::to_string);
+        let reversed =
+            |line: &ratatui::text::Line<'_>| line.style.add_modifier.contains(Modifier::REVERSED);
+
+        let marked = super::marked(lines.to_vec(), 1);
+
+        assert!(!reversed(&marked[0]), "the headings were marked as a row");
+        assert!(!reversed(&marked[1]));
+        assert!(reversed(&marked[2]), "T2's row is not marked");
+        assert!(!reversed(&marked[3]));
+
+        // A board with no tasks selects a row that is not there, and marks
+        // nothing rather than marking the line above it.
+        let empty = super::marked(vec!["TASK …".to_string()], 0);
+        assert!(!reversed(&empty[0]));
     }
 
     #[test]

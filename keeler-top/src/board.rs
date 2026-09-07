@@ -391,6 +391,28 @@ mod tests {
     }
 
     #[test]
+    fn a_row_whose_tool_has_not_come_back_counts_from_when_it_was_called() {
+        let row = row(
+            None,
+            Some(RunView {
+                last_tool: Some(crate::run::ToolCall {
+                    id: "toolu_1".to_string(),
+                    name: "Bash".to_string(),
+                    detail: "just dev".to_string(),
+                    at: Some(Timestamp::from_epoch_seconds(1_000)),
+                }),
+                ..RunView::default()
+            }),
+        );
+
+        assert_eq!(
+            row.elapsed_column(Timestamp::from_epoch_seconds(1_134)),
+            "02:14",
+        );
+        assert_eq!(row.tool_column(), "Bash: just dev");
+    }
+
+    #[test]
     fn a_row_with_a_run_answers_from_it() {
         let mut view = RunView {
             model: Some("claude-opus-5[1m]".to_string()),
