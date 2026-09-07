@@ -324,6 +324,37 @@ fn spec_text(t1_ticked: bool) -> String {
     )
 }
 
+/// git with a fixed identity and no user config, so a global
+/// `commit.gpgsign` cannot hang the suite waiting for a key.
+fn git(dir: &Path, args: &[&str]) -> String {
+    let output = std::process::Command::new("git")
+        .args(["-c", "user.email=probe@keeler", "-c", "user.name=probe"])
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .output()
+        .expect("failed to run git");
+    assert!(
+        output.status.success(),
+        "git {args:?} failed:\n{}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
+}
+
+fn write(dir: &Path, rel: &str, body: &str) {
+    let path = dir.join(rel);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, body).unwrap();
+}
+
+fn commit(dir: &Path, rel: &str, body: &str, message: &str) {
+    write(dir, rel, body);
+    git(dir, &["add", rel]);
+    git(dir, &["commit", "-qm", message]);
+}
+
 /// A synthetic project: the repository, and room beside it for the
 /// worktrees a wave cuts — `keeler-spawn` puts them next to the
 /// repository, and the board reads them there.
@@ -335,7 +366,7 @@ impl Project {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("repo")).unwrap();
         let project = Self(dir);
-        project.git(&project.root(), &["init", "-qb", "main"]);
+        git(&project.root(), &["init", "-qb", "main"]);
         project
     }
 
@@ -343,43 +374,19 @@ impl Project {
         self.0.join("repo")
     }
 
-    /// git with a fixed identity and no user config, so a global
-    /// `commit.gpgsign` cannot hang the suite waiting for a key.
-    fn git(&self, dir: &Path, args: &[&str]) -> String {
-        let output = std::process::Command::new("git")
-            .args(["-c", "user.email=probe@keeler", "-c", "user.name=probe"])
-            .args(args)
-            .current_dir(dir)
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_SYSTEM", "/dev/null")
-            .output()
-            .expect("failed to run git");
-        assert!(
-            output.status.success(),
-            "git {args:?} failed:\n{}",
-            String::from_utf8_lossy(&output.stderr),
-        );
-        String::from_utf8_lossy(&output.stdout).trim().to_string()
-    }
-
-    fn write(&self, dir: &Path, rel: &str, body: &str) {
-        let path = dir.join(rel);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, body).unwrap();
-    }
-
-    fn commit(&self, dir: &Path, rel: &str, body: &str, message: &str) {
-        self.write(dir, rel, body);
-        self.git(dir, &["add", rel]);
-        self.git(dir, &["commit", "-qm", message]);
-    }
-
     /// The worktree and branch a spawn cuts, from wherever HEAD is.
     fn worktree(&self, branch: &str) -> PathBuf {
         let path = self.0.join(branch.replace('/', "-"));
-        self.git(
+        git(
             &self.root(),
-            &["worktree", "add", "-q", "-b", branch, path.to_str().unwrap()],
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                branch,
+                path.to_str().unwrap(),
+            ],
         );
         path
     }
@@ -387,13 +394,13 @@ impl Project {
     /// The spec, committed on `feat/01-foo`, which is where every read of
     /// the graph goes.
     fn with_spec_on_the_feature_branch(&self) -> &Self {
-        self.commit(
+        commit(
             &self.root(),
             "specs/01-foo.md",
             &spec_text(false),
             "docs(01-foo): the approved spec",
         );
-        self.git(&self.root(), &["checkout", "-qb", "feat/01-foo"]);
+        git(&self.root(), &["checkout", "-qb", "feat/01-foo"]);
         self
     }
 }
@@ -411,7 +418,7 @@ fn the_graph_is_read_from_the_ref_not_the_working_tree() {
     // Given T1's box is ticked in the working tree but not committed on feat/01-foo
     let project = Project::new("graph-from-ref");
     project.with_spec_on_the_feature_branch();
-    project.write(&project.root(), "specs/01-foo.md", &spec_text(true));
+    write(&project.root(), "specs/01-foo.md", &spec_text(true));
 
     // When the board renders
     let shell = Shell::new(plugin_root(), project.root(), "specs/01-foo.md");
@@ -446,12 +453,12 @@ fn the_board_shells_back_through_the_justfile_it_was_launched_from() {
     // A plugin tree of its own, so the answers below can only have come
     // from it: a board that ran the project's own recipes, or the real
     // plugin's, would say something else.
-    project.write(
+    write(
         &plugin,
         "Justfile",
         "keeler-status SPEC:\n    @echo \"graph: {{SPEC}} on feat/01-foo\"\n    @pwd -P\n",
     );
-    project.write(
+    write(
         &plugin,
         "scripts/keeler-graph.sh",
         "#!/usr/bin/env bash\nprintf '%s\\n' \"$1\" > \"$(dirname \"$0\")/../argv\"\n\
@@ -512,7 +519,12 @@ fn the_commit_column_is_the_branchs_head_and_its_distance_from_the_feature_branc
     project.with_spec_on_the_feature_branch();
     let worktree = project.worktree("keeler/01-foo/t1");
     for step in ["T1 red", "T1 green", "T1 the review record"] {
-        project.commit(&worktree, "src/t1.rs", step, &format!("test(01-foo): {step}"));
+        commit(
+            &worktree,
+            "src/t1.rs",
+            step,
+            &format!("test(01-foo): {step}"),
+        );
     }
 
     // When the board renders
@@ -521,7 +533,7 @@ fn the_commit_column_is_the_branchs_head_and_its_distance_from_the_feature_branc
     // Then T1's commit column reads "f5064b1 +3"
     assert_eq!(
         facts.head,
-        project.git(&worktree, &["rev-parse", "--short", "HEAD"]),
+        git(&worktree, &["rev-parse", "--short", "HEAD"]),
     );
     assert_eq!(facts.ahead, 3);
     assert_eq!(facts.dirty, 0);
@@ -548,11 +560,11 @@ fn uncommitted_changes_in_the_worktree_are_counted() {
     let project = Project::new("dirty");
     project.with_spec_on_the_feature_branch();
     let worktree = project.worktree("keeler/01-foo/t1");
-    project.commit(&worktree, "src/a.rs", "one\n", "feat(01-foo): a");
-    project.commit(&worktree, "src/b.rs", "two\n", "feat(01-foo): b");
-    project.write(&worktree, "src/a.rs", "one, changed\n");
-    project.write(&worktree, "src/b.rs", "two, changed\n");
-    project.write(&worktree, "scratch", "not added\n");
+    commit(&worktree, "src/a.rs", "one\n", "feat(01-foo): a");
+    commit(&worktree, "src/b.rs", "two\n", "feat(01-foo): b");
+    write(&worktree, "src/a.rs", "one, changed\n");
+    write(&worktree, "src/b.rs", "two, changed\n");
+    write(&worktree, "scratch", "not added\n");
 
     // When the board renders
     let facts = branch_facts(&worktree, "feat/01-foo").expect("the branch and its base are there");
@@ -567,7 +579,7 @@ fn a_clean_worktree_on_the_base_commit_shows_the_base() {
     // Given keeler/01-foo/t1 equals feat/01-foo and the worktree is clean
     let project = Project::new("on-the-base");
     project.with_spec_on_the_feature_branch();
-    let base = project.git(&project.root(), &["rev-parse", "--short", "feat/01-foo"]);
+    let base = git(&project.root(), &["rev-parse", "--short", "feat/01-foo"]);
     let worktree = project.worktree("keeler/01-foo/t1");
 
     // When the board renders
