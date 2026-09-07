@@ -4,6 +4,7 @@
 //! unit tests, property tests and cargo-mutants can reach them without a
 //! terminal and without an agent.
 
+pub mod app;
 pub mod board;
 pub mod cli;
 pub mod clock;
@@ -14,6 +15,7 @@ pub mod graph;
 pub mod run;
 pub mod status;
 pub mod stream;
+pub mod terminal;
 
 /// A directory of one test's own, under whatever the machine calls
 /// temporary.

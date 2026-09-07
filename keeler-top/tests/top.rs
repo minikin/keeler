@@ -339,7 +339,9 @@ fn stream_line() -> impl proptest::prelude::Strategy<Value = String> {
 
 // ── T4
 
-use keeler_top::dispatch::{Dispatch as _, Shell};
+// The trait itself is named under T6's heading, which is where a `dyn
+// Dispatch` first appears; this file's own calls to it read from that.
+use keeler_top::dispatch::Shell;
 use keeler_top::git::branch_facts;
 use keeler_top::graph::{GraphLine, GraphState};
 use std::path::{Path, PathBuf};
@@ -1768,16 +1770,7 @@ fn drawn(board: &Board, width: u16, height: u16) -> Vec<String> {
     terminal
         .draw(|frame| render(frame, board, now(NOON)))
         .expect("the board drew a frame");
-    let buffer = terminal.backend().buffer().clone();
-    (0..height)
-        .map(|y| {
-            (0..width)
-                .map(|x| buffer[(x, y)].symbol())
-                .collect::<String>()
-                .trim_end()
-                .to_string()
-        })
-        .collect()
+    lines_of(&terminal, width, height)
 }
 
 /// The drawn line that begins with a task's id, or the whole frame in the
@@ -2355,5 +2348,527 @@ fn a_narrow_terminal_drops_the_detail_pane_before_it_drops_columns() {
         !frame.iter().any(|line| line.starts_with("T1 — running")),
         "the pane was drawn on a terminal with no room for it:\n{}",
         frame.join("\n"),
+    );
+}
+
+// ── T6
+
+use keeler_top::app::{Action, App, Events, StatusFeed, TICK, looping, on_key, step};
+use keeler_top::dispatch::Dispatch;
+use keeler_top::terminal::{Guard, Screen};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use std::collections::VecDeque;
+use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+/// The two reads, answered from a fixture rather than run.
+///
+/// What these scenarios are about is *when* the board asks and what it does
+/// while it waits, so the recipe's own words are somebody else's test —
+/// T5's, which runs the real one. What is counted here is how many reads
+/// were started, and the gate is how one of them is made slow.
+#[derive(Debug)]
+struct Reads {
+    report: String,
+    graph: String,
+    started: Mutex<usize>,
+    /// A read waits on this before answering, when a scenario wants one
+    /// still running. A gate the test opens rather than a sleep: what is
+    /// being asserted is that the board kept moving while a read was out,
+    /// and three seconds of sleeping would make the suite slow to say it
+    /// and flaky the moment somebody shortened the sleep to make it quick.
+    gate: Option<Mutex<Receiver<()>>>,
+}
+
+impl Reads {
+    fn answering(report: &str) -> Self {
+        Self {
+            report: report.to_string(),
+            graph: String::new(),
+            started: Mutex::new(0),
+            gate: None,
+        }
+    }
+
+    /// A read that will not answer until the test says so.
+    fn slow(report: &str) -> (Self, Sender<()>) {
+        let (opener, gate) = channel();
+        (
+            Self {
+                gate: Some(Mutex::new(gate)),
+                ..Self::answering(report)
+            },
+            opener,
+        )
+    }
+
+    fn started(&self) -> usize {
+        *self.started.lock().expect("the count")
+    }
+}
+
+impl Dispatch for Reads {
+    fn status(&self) -> Result<String, String> {
+        // Counted on the way in, not the way out: what the cadence decides
+        // is when a read *starts*, and a scenario about a read still running
+        // could not see one counted at the end.
+        *self.started.lock().expect("the count") += 1;
+        if let Some(gate) = &self.gate {
+            let _ = gate.lock().expect("the gate").recv();
+        }
+        Ok(self.report.clone())
+    }
+
+    fn graph(&self, _spec: &Path) -> Result<String, String> {
+        Ok(self.graph.clone())
+    }
+}
+
+/// A keyboard with a script: each pass takes the next entry, and a script
+/// that has run out is a keyboard nobody is at.
+///
+/// Every wait's timeout is kept, because the tick is a promise about how
+/// long the board sits still between reads of the streams.
+#[derive(Debug, Default)]
+struct Script {
+    keys: VecDeque<KeyEvent>,
+    waited: Vec<Duration>,
+}
+
+impl Script {
+    fn of(codes: &[KeyCode]) -> Self {
+        Self {
+            keys: codes.iter().map(|code| press(*code)).collect(),
+            waited: Vec::new(),
+        }
+    }
+}
+
+impl Events for Script {
+    fn next(&mut self, timeout: Duration) -> Result<Option<KeyEvent>, String> {
+        self.waited.push(timeout);
+        Ok(self.keys.pop_front())
+    }
+}
+
+/// A keyboard that falls over, which is how a board in the alternate screen
+/// comes to panic.
+struct Falls;
+
+impl Events for Falls {
+    fn next(&mut self, _timeout: Duration) -> Result<Option<KeyEvent>, String> {
+        panic!("the board fell over");
+    }
+}
+
+/// A screen that records what was asked of it, into whatever list it was
+/// given — the panic scenario hands it the same one the hooks write to, so
+/// that the order of all four events is one assertion.
+#[derive(Debug, Clone)]
+struct Recorder(Arc<Mutex<Vec<&'static str>>>);
+
+impl Screen for Recorder {
+    fn enter(&mut self) -> std::io::Result<()> {
+        self.0.lock().expect("the recorder").push("enter");
+        Ok(())
+    }
+
+    fn leave(&mut self) -> std::io::Result<()> {
+        self.0.lock().expect("the recorder").push("leave");
+        Ok(())
+    }
+}
+
+fn press(code: KeyCode) -> KeyEvent {
+    KeyEvent::new(code, KeyModifiers::NONE)
+}
+
+/// A terminal to draw the passes on — the same `TestBackend` T5's frames go
+/// through, wide enough that no column of these rows is dropped.
+fn surface() -> Terminal<TestBackend> {
+    Terminal::new(TestBackend::new(BOARD.0, BOARD.1)).expect("a terminal to draw on")
+}
+
+/// The size of that terminal, so a scenario reading back what a pass drew
+/// asks about the same rectangle it was drawn on.
+const BOARD: (u16, u16) = (140, 20);
+
+/// What is on a terminal now, read back as lines with the trailing blanks
+/// cut.
+///
+/// T5's [`drawn`] renders a board and reads it back in one call, which is
+/// what a scenario about a frame wants. A scenario about the loop wants the
+/// other half of that: what a *pass* put there, on a terminal it did not
+/// build itself — otherwise a `draw` that drew nothing reads exactly like
+/// one that drew the right thing.
+fn lines_of(terminal: &Terminal<TestBackend>, width: u16, height: u16) -> Vec<String> {
+    let buffer = terminal.backend().buffer().clone();
+    (0..height)
+        .map(|y| {
+            (0..width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+                .trim_end()
+                .to_string()
+        })
+        .collect()
+}
+
+/// The board the loop is driven over: the report a scenario describes, and
+/// the two reads behind it.
+fn app_over(reads: &Arc<Reads>, report: &str) -> App {
+    let status = keeler_top::status::parse(report).expect("the fixture's report has a header");
+    App::new(
+        Arc::clone(reads) as Arc<dyn Dispatch>,
+        PathBuf::from("/nowhere"),
+        status,
+        Vec::new(),
+        now(NOON),
+    )
+}
+
+/// One running task's report line, pointing at the stream the fixture wrote.
+fn running(id: &str, log: &str) -> String {
+    format!("{id:<6} running          log {log}  worktree /nowhere")
+}
+
+/// Passes over the board until the read that is out has come back, so what
+/// follows is asserted about a board holding the answer rather than one
+/// still waiting for it.
+fn settle(app: &mut App, feed: &mut StatusFeed, now: Timestamp) {
+    for _ in 0..500 {
+        step(&mut surface(), &mut Script::default(), app, feed, now).expect("a pass");
+        if !feed.pending() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    panic!("keeler-status never answered");
+}
+
+impl Runfiles {
+    /// Adds a record to a task's stream, as a run writes one while the board
+    /// is up.
+    fn append(&self, tid: &str, line: &str) {
+        use std::io::Write as _;
+        let mut stream = std::fs::OpenOptions::new()
+            .append(true)
+            .open(self.0.join(format!("{tid}.stream")))
+            .expect("the fixture's stream");
+        writeln!(stream, "{line}").expect("the fixture's stream");
+    }
+}
+
+#[test]
+fn j_and_k_move_the_selection_and_the_detail_pane_follows() {
+    // Given the board shows T1..T3 with T1 selected
+    let runfiles = Runfiles::new("t6-selection");
+    let lines: Vec<String> = (1..=3)
+        .map(|task| {
+            let log = runfiles.stream(
+                &format!("t{task}"),
+                &[
+                    INIT.to_string(),
+                    stamped_tool_use(
+                        "toolu_1",
+                        "Bash",
+                        serde_json::json!({ "command": format!("just test t{task}") }),
+                    ),
+                ],
+            );
+            running(&format!("T{task}"), &log)
+        })
+        .collect();
+    let mut app = app_over(&Arc::new(Reads::answering("")), &report(&lines));
+    assert_eq!(app.board.selected, 0, "the board opened on some other row");
+
+    // When the user presses j twice then k once
+    for code in [KeyCode::Char('j'), KeyCode::Char('j'), KeyCode::Char('k')] {
+        assert_eq!(on_key(&mut app, press(code)), Action::Nothing);
+    }
+
+    // Then T2 is selected and the detail pane shows T2
+    assert_eq!(app.board.selected, 1);
+    let frame = drawn(&app.board, 140, 20);
+    let pane = |id: &str| {
+        frame
+            .iter()
+            .any(|line| line.starts_with(&format!("{id} —")))
+    };
+    assert!(
+        pane("T2") && !pane("T1") && !pane("T3"),
+        "the pane did not follow the selection:\n{}",
+        frame.join("\n"),
+    );
+    // And it is that task's own run in the pane, not the row above's.
+    assert!(
+        frame.iter().any(|line| line.contains("just test t2")),
+        "the pane shows another task's work:\n{}",
+        frame.join("\n"),
+    );
+}
+
+#[test]
+fn the_stream_is_re_read_once_a_second_without_input() {
+    // Given T1's stream gains a new tool_use record after the board is up
+    let runfiles = Runfiles::new("t6-tick");
+    let log = runfiles.stream(
+        "t1",
+        &[
+            INIT.to_string(),
+            stamped_tool_use(
+                "toolu_1",
+                "Bash",
+                serde_json::json!({"command": "just dev"}),
+            ),
+        ],
+    );
+    let reads = Arc::new(Reads::answering(""));
+    let mut app = app_over(&reads, &report(&[running("T1", &log)]));
+    let mut feed = StatusFeed::new(Arc::clone(&reads) as Arc<dyn Dispatch>);
+    assert!(row_of(&drawn(&app.board, 140, 20), "T1").contains("just dev"));
+    runfiles.append(
+        "t1",
+        &stamped_tool_use(
+            "toolu_2",
+            "Bash",
+            serde_json::json!({"command": "just mutants-diff main"}),
+        ),
+    );
+
+    // When one second passes
+    //
+    // Two passes, because a pass draws what it has and then waits: the first
+    // wait is the second passing, and the frame carrying what arrived in it
+    // is the one the pass after draws. Read back from the terminal the
+    // passes drew on rather than rendered again here — a `draw` that drew
+    // nothing must not read like one that drew the right thing.
+    let mut terminal = surface();
+    let mut script = Script::default();
+    for _ in 0..2 {
+        assert_eq!(
+            step(&mut terminal, &mut script, &mut app, &mut feed, now(NOON)),
+            Ok(true),
+        );
+    }
+
+    // Then the tool column shows the new command
+    assert_eq!(
+        script.waited,
+        [TICK, TICK],
+        "the board did not wait exactly one tick for a key",
+    );
+    assert_eq!(TICK, Duration::from_secs(1), "the tick is not a second");
+    let frame = lines_of(&terminal, BOARD.0, BOARD.1);
+    let row = row_of(&frame, "T1").to_string();
+    assert!(
+        row.contains("just mutants-diff main"),
+        "the frame is a second out of date:\n{}",
+        frame.join("\n"),
+    );
+    assert_eq!(app.board.rows[0].stage_column(), "mutants");
+}
+
+#[test]
+fn keeler_status_is_re_read_every_five_seconds_and_on_r() {
+    // Given keeler-status's last answer is two seconds old
+    let answer = report(&["T1     not spawned".to_string()]);
+    let reads = Arc::new(Reads::answering(&answer));
+    let mut app = app_over(&reads, &answer);
+    let mut feed = StatusFeed::new(Arc::clone(&reads) as Arc<dyn Dispatch>);
+    let two = now("2026-09-07T12:00:02.000Z");
+    step(
+        &mut surface(),
+        &mut Script::default(),
+        &mut app,
+        &mut feed,
+        two,
+    )
+    .expect("a pass");
+    assert_eq!(
+        reads.started(),
+        0,
+        "a two-second-old answer was asked again"
+    );
+
+    // When the user presses r
+    step(
+        &mut surface(),
+        &mut Script::of(&[KeyCode::Char('r')]),
+        &mut app,
+        &mut feed,
+        two,
+    )
+    .expect("a pass");
+    settle(&mut app, &mut feed, two);
+
+    // Then keeler-status runs again and the header's age resets
+    assert_eq!(reads.started(), 1, "r asked nobody anything");
+    assert!(
+        app.board.header(two).ends_with("status 0s ago"),
+        "the header still shows the age of the answer r replaced: {}",
+        app.board.header(two),
+    );
+
+    // And without r it runs again when the answer is five seconds old
+    let four_seconds_old = now("2026-09-07T12:00:06.000Z");
+    step(
+        &mut surface(),
+        &mut Script::default(),
+        &mut app,
+        &mut feed,
+        four_seconds_old,
+    )
+    .expect("a pass");
+    assert_eq!(
+        reads.started(),
+        1,
+        "the answer was replaced at four seconds"
+    );
+    let five_seconds_old = now("2026-09-07T12:00:07.000Z");
+    step(
+        &mut surface(),
+        &mut Script::default(),
+        &mut app,
+        &mut feed,
+        five_seconds_old,
+    )
+    .expect("a pass");
+    assert_eq!(
+        reads.started(),
+        2,
+        "a five-second-old answer was left to stand"
+    );
+}
+
+#[test]
+fn a_slow_keeler_status_does_not_stall_the_board() {
+    // Given keeler-status takes three seconds to answer
+    let runfiles = Runfiles::new("t6-slow");
+    let log = runfiles.stream("t1", &[INIT.to_string()]);
+    let (slow, opener) = Reads::slow(&report(&[running("T1", &log)]));
+    let reads = Arc::new(slow);
+    let mut app = app_over(&reads, &report(&[running("T1", &log)]));
+    let mut feed = StatusFeed::new(Arc::clone(&reads) as Arc<dyn Dispatch>);
+    // Old enough that the cadence asks on the first pass below.
+    let later = now("2026-09-07T12:00:30.000Z");
+
+    // When the board is up
+    // Then the stream columns keep refreshing every second while it runs
+    for (call, command) in ["just dev", "just mutants-diff main", "just keeler-branch"]
+        .into_iter()
+        .enumerate()
+    {
+        runfiles.append(
+            "t1",
+            &stamped_tool_use(
+                &format!("toolu_{call}"),
+                "Bash",
+                serde_json::json!({ "command": command }),
+            ),
+        );
+        step(
+            &mut surface(),
+            &mut Script::default(),
+            &mut app,
+            &mut feed,
+            later,
+        )
+        .expect("a pass");
+        assert!(
+            row_of(&drawn(&app.board, 140, 20), "T1").contains(command),
+            "the streams stopped while the report was being waited for",
+        );
+        assert!(feed.pending(), "the fixture's slow read answered early");
+    }
+    // And what is out is one read, not one per pass: a machine already too
+    // slow to answer in five seconds must not be given a `just` a second.
+    assert_eq!(reads.started(), 1, "the board asked a slow recipe again");
+
+    opener.send(()).expect("the read is still waiting");
+    settle(&mut app, &mut feed, later);
+    assert!(
+        app.board.header(later).ends_with("status 0s ago"),
+        "the answer arrived and the header did not take it",
+    );
+}
+
+#[test]
+fn q_quits_and_restores_the_terminal() {
+    // Given the board is up
+    let screen = Arc::new(Mutex::new(Vec::new()));
+    let answer = report(&["T1     done".to_string(), "T2     done".to_string()]);
+    let reads = Arc::new(Reads::answering(&answer));
+    let mut app = app_over(&reads, &answer);
+    let mut feed = StatusFeed::new(Arc::clone(&reads) as Arc<dyn Dispatch>);
+    let mut script = Script::of(&[KeyCode::Char('j'), KeyCode::Char('q')]);
+
+    // When the user presses q
+    let ended = {
+        let _guard = Guard::new(Recorder(Arc::clone(&screen))).expect("the recorder entered");
+        let ended = looping(&mut surface(), &mut script, &mut app, &mut feed);
+        assert_eq!(
+            *screen.lock().expect("the recorder"),
+            ["enter"],
+            "the board gave the screen back while it was still drawing on it",
+        );
+        ended
+    };
+
+    // Then the process exits 0 and the terminal is restored to the screen it
+    // was on
+    assert_eq!(
+        ended,
+        Ok(()),
+        "the board ended on an error rather than on the key",
+    );
+    assert_eq!(
+        *screen.lock().expect("the recorder"),
+        ["enter", "leave"],
+        "the terminal was left in the board's own screen",
+    );
+    // And the key before it was acted on rather than skipped past.
+    assert_eq!(app.board.selected, 1);
+}
+
+#[test]
+fn a_panic_restores_the_terminal_before_the_message_is_printed() {
+    // Given the board is up in the alternate screen
+    //
+    // The panic hook is process-wide, and nextest gives every test a process
+    // of its own — which is what makes installing one here safe.
+    let order = Arc::new(Mutex::new(Vec::new()));
+    let printing = Arc::clone(&order);
+    std::panic::set_hook(Box::new(move |_| {
+        printing.lock().expect("the order").push("printed");
+    }));
+    let restoring = Arc::clone(&order);
+    keeler_top::terminal::restore_on_panic(move || {
+        restoring.lock().expect("the order").push("restored");
+    });
+    let answer = report(&["T1     done".to_string()]);
+    let reads = Arc::new(Reads::answering(&answer));
+    let mut app = app_over(&reads, &answer);
+    let mut feed = StatusFeed::new(Arc::clone(&reads) as Arc<dyn Dispatch>);
+
+    // When the process panics
+    let ended = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _guard = Guard::new(Recorder(Arc::clone(&order))).expect("the recorder entered");
+        looping(&mut surface(), &mut Falls, &mut app, &mut feed)
+    }));
+
+    // Then the terminal leaves raw mode and the alternate screen
+    // And the panic message is printed on the restored screen
+    assert!(ended.is_err(), "the fixture did not panic");
+    // Read out before asserting, never asserted on through the guard: the
+    // hooks above lock this list, and a failing `assert_eq!` holding the
+    // lock would panic into a hook that waits for it — a deadlock where a
+    // test failure should be.
+    let seen = order.lock().expect("the order").clone();
+    assert_eq!(
+        seen,
+        ["enter", "restored", "printed", "leave"],
+        "the message was printed onto a screen about to be thrown away",
     );
 }

@@ -22,7 +22,13 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// What the board asks the world for.
-pub trait Dispatch {
+///
+/// `Send + Sync` because one of these calls runs on a thread: `keeler-status`
+/// is a `just` recipe, seconds where the board's tick is one, so it is asked
+/// on a thread of its own and collected whenever it answers. Every
+/// implementation is a description of how to run something rather than
+/// something running, so the bound costs nothing to meet.
+pub trait Dispatch: Send + Sync {
     /// `keeler-status`'s report for the spec the board is watching.
     ///
     /// # Errors

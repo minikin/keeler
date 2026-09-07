@@ -32,6 +32,13 @@ unicode-width = "0.2"
 
 [dev-dependencies]
 proptest = "1"
+# The attribute `#[cfg_attr(test, mutants::skip)]` resolves to, and nothing
+# else: it is an empty macro whose only reader is cargo-mutants. A
+# dev-dependency, so the binary an adopter builds never sees it. Six
+# functions in this crate carry it, each with the reason beside it — they
+# are the raw-mode, alternate-screen and keyboard calls, which a test
+# process has no terminal to make.
+mutants = "0.0.4"
 
 [lints]
 workspace = true
