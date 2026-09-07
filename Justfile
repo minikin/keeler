@@ -834,7 +834,7 @@ keeler-spawn SPEC TASK:
 # verdict at all died before its gate ever ran, which is a different thing
 # from a gate that failed, and its log and worktree are what a resume reads.
 #
-# Graph mode: what every task of a spec is doing right now — running, passed, incomplete, failed, died, done, or never spawned.
+# Graph mode: what every task of a spec is doing right now — running, passed, incomplete, failed, died, paused, done, or never spawned.
 keeler-status SPEC:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -880,6 +880,11 @@ keeler-status SPEC:
         worktree="$(dirname "$root")/$(basename "$root")-$slug-$tid"
         exit_file="$runs/$tid.exit"
         log_file="$runs/$tid.log"
+        # A session killed by hand and a session that crashed leave the
+        # same nothing behind: no tmux session, no verdict. The marker is
+        # the one thing that tells them apart — written by `keeler-top`'s
+        # `p`, removed by `keeler-resume`, and read here.
+        paused_file="$runs/$tid.paused"
         branch="keeler/$slug/$tid"
         record="reviews/$slug/$tid.md"
         # Closed is three things, and two of them live on the task's own
@@ -931,7 +936,11 @@ keeler-status SPEC:
         elif [ -f "$exit_file" ] && [ "$(tr -d '[:space:]' < "$exit_file")" != 0 ]; then
             state="failed (exit $(tr -d '[:space:]' < "$exit_file"))"
         elif [ ! -f "$exit_file" ] && { [ -e "$worktree" ] || [ -f "$log_file" ]; }; then
+            # A run the board stopped is resumed exactly as a death is —
+            # same worktree, same branch, same log — so `paused` is `died`
+            # with the one fact a crash cannot leave: someone meant it.
             state=died
+            [ -f "$paused_file" ] && state=paused
         elif [ ! -f "$exit_file" ] && [ "$graph_state" != done ] && [ ! -e "$worktree" ]; then
             # Nothing was ever started here, so there is nothing to be
             # incomplete about.
@@ -950,10 +959,19 @@ keeler-status SPEC:
         # A death is ordinary rather than exceptional — five of this
         # project's first six spawns ended that way — so the board offers
         # the way back rather than leaving it to be remembered.
-        if [ "$state" = died ]; then
-            printf '       resume with: keeler keeler-resume %s %s\n' "$rel" "$id"
-        fi
         case "$state" in
+            died|paused)
+                printf '       resume with: keeler keeler-resume %s %s\n' "$rel" "$id"
+                ;;
+        esac
+        case "$state" in
+            paused)
+                # The marker outlives whatever it was written about: the
+                # worktree removed by hand, the branch deleted, the run
+                # abandoned. Nothing else clears it, so a board that never
+                # named the file would say paused about that task for ever.
+                printf '       nobody left to resume? rm %s to clear the marker\n' "$paused_file"
+                ;;
             failed*)
                 # A verdict is a run's record, and a run can turn out not
                 # to be believable — an earlier tooling, a gate that
@@ -966,6 +984,55 @@ keeler-status SPEC:
                 ;;
         esac
     done <<< "$report"
+
+# The same question as the board above, asked as a screen rather than an
+# answer: one row per task, refreshed every second, with attach, pause and
+# resume on three keys. It is a Rust binary and not shell, and it is built
+# from the plugin's own tree — an adopter pays for ratatui once, on the
+# first launch, and never again.
+#
+# The build runs with the plugin as the working directory, not the project:
+# rustup reads rust-toolchain.toml from where cargo was started, and a
+# project pinning an older toolchain, or setting rustflags of its own in
+# .cargo/config.toml, would otherwise decide how the plugin's board is
+# built. --manifest-path all the same, because the plugin's workspace has
+# more than one binary in it and only one of them is the board.
+#
+# The probe is {{justfile_directory()}}/target/release/keeler-top and not
+# the crate's own directory: a workspace member's artifacts land in the
+# workspace's target/, and a probe pointed at keeler-top/target/ would
+# print the first-build notice before every launch it ever made. It asks
+# CARGO_TARGET_DIR first for the same reason — an adopter who builds
+# everything into one shared directory has no board under the plugin at
+# all, and a probe that only ever looked there would promise them minutes
+# of compiling every time they opened the board.
+#
+# $ARGS unquoted, which is what carries several arguments as several: just
+# joins a variadic parameter into one string, and the alternative — leaving
+# it quoted — would hand the binary `--once specs/01-foo.md` as a single
+# word. `set -f` because word splitting is all that is wanted: the plugin
+# is a repository with a specs/ of its own and cargo is started inside it,
+# so an unguarded `specs/*.md` would reach the board answered with the
+# plugin's file names. A path holding a space is the one thing a variadic
+# cannot carry through.
+#
+# Graph mode: the live board — `keeler keeler-top specs/01-foo.md`.
+keeler-top *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    plugin="{{justfile_directory()}}"
+    root="$(pwd -P)"
+    if [ ! -x "${CARGO_TARGET_DIR:-$plugin/target}/release/keeler-top" ]; then
+        echo "keeler-top: building the board for the first time — this compiles ratatui and its tree, and takes a few minutes. Every launch after it is instant." >&2
+        echo "keeler-top: the plugin pins its compiler in rust-toolchain.toml, so rustup may fetch a toolchain before cargo starts." >&2
+    fi
+    # exec: the board owns the terminal it draws on, and a shell left
+    # sitting between it and the tty is one more process for a Ctrl-C to
+    # reach first. Last, because nothing after it in this recipe would run.
+    cd "$plugin"
+    set -f
+    exec cargo run --release --manifest-path "$plugin/keeler-top/Cargo.toml" -- \
+        --plugin-root "$plugin" --root "$root" $ARGS
 
 # A spawned session that ended before its pipeline finished left its
 # worktree, its branch and its commits exactly where they were — the
@@ -1037,6 +1104,11 @@ keeler-resume SPEC TASK:
         "$root/.keeler/runs/$slug/$tid.stream"
     printf -v run_cmd 'bash %q' "$runner"
     tmux new-session -d -s "$session" -c "$worktree" "$run_cmd"
+    # After the session, never before: the marker is the board's claim that
+    # this run was stopped on purpose, and clearing it ahead of a tmux that
+    # then refuses would hand the task back as `died` — the one word the
+    # marker exists to deny. `set -e` is what makes "after" mean it.
+    rm -f "$root/.keeler/runs/$slug/$tid.paused"
     echo "  worktree: $worktree"
     echo "  session:  tmux attach -t '=$session'"
     echo "  board:    keeler keeler-status $spec"

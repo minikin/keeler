@@ -32,13 +32,20 @@ here instead — project-specific instructions, in the file meant for them.
   proptest's default path, the harness sets
   `FileFailurePersistence::WithSource("proptest-regressions")`, so seeds
   land at `tests/installer.proptest-regressions`. Commit them.
-- **The gates measure `xtask/`, and only it.** The harness itself has no
-  library or binary target — its job is to drive `install.sh` as a
-  subprocess — so coverage, CRAP and mutation see the release tooling and
-  nothing else. That is real code doing a real job, so `crap-baseline.json`
-  is committed and `just crap-delta` ratchets against it. Until spec 04
-  there was nothing here to measure at all, and the recipes said so rather
-  than failing (spec 01).
+- **The gates measure `xtask/` and `keeler-top/`.** The harness itself has
+  no library or binary target — its job is to drive `install.sh` as a
+  subprocess — so coverage, CRAP and mutation see the two members that
+  have one, and nothing else. Both are real code doing a real job, so
+  `crap-baseline.json` is committed and `just crap-delta` ratchets against
+  it. Until spec 04 there was nothing here to measure at all, and the
+  recipes said so rather than failing (spec 01). The two members are not
+  alike: `xtask/` is machinery that never reaches an adopter, while
+  `keeler-top/` ships inside the plugin and is built from its tree by
+  `keeler keeler-top`. Its own suite is `keeler-top/tests/top.rs`, beside
+  the crate rather than in the root harness, because that is the only
+  place `CARGO_BIN_EXE_keeler-top` resolves; the recipes that launch it
+  are shell, so they are tested from the harness like every other recipe
+  (spec 10).
 - **Run the gates with the workspace selected.** The shipped recipes
   already pass `--workspace`; a bare `cargo nextest run` or `cargo mutants`
   in this repository silently skips the xtask member and reports success

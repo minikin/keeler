@@ -1,0 +1,44 @@
+# The live board: the one workspace member that ships to adopters. `keeler
+# keeler-top <spec>` builds it from the plugin's own tree, so its
+# dependencies are paid for by whoever runs the board and by nobody else.
+#
+# A library holding every decision and a thin binary, as xtask is laid out:
+# keeler-top/tests/ can reach the core that way, and the terminal surface
+# that no test can drive stays small enough to see.
+[package]
+name = "keeler-top"
+version = "0.4.1"
+edition = "2024"
+rust-version = "1.88"
+publish = false
+
+[dependencies]
+# Only the backend the board actually draws on. The default feature set
+# carries `all-widgets` — a calendar, a canvas, and the date library under
+# them — and the first launch after an install compiles this tree while the
+# person who asked for a board waits at a blank terminal.
+ratatui = { version = "0.30.2", default-features = false, features = [
+    "crossterm",
+    "layout-cache",
+    "std",
+] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# The table is composed as text and padded by hand, so the columns line up
+# only if what is measured is what the terminal draws. ratatui already
+# builds this crate for its own layout, so naming it here costs nothing
+# beyond the line.
+unicode-width = "0.2"
+
+[dev-dependencies]
+proptest = "1"
+# The attribute `#[cfg_attr(test, mutants::skip)]` resolves to, and nothing
+# else: it is an empty macro whose only reader is cargo-mutants. A
+# dev-dependency, so the binary an adopter builds never sees it. Six
+# functions in this crate carry it, each with the reason beside it — they
+# are the raw-mode, alternate-screen and keyboard calls, which a test
+# process has no terminal to make.
+mutants = "0.0.4"
+
+[lints]
+workspace = true

@@ -21,8 +21,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: rustfmt
         run: cargo fmt --all -- --check
+      # --workspace, the same word the Justfile's lint recipe carries: the
+      # root manifest is itself a package, so a bare `cargo clippy` lints
+      # keeler-harness alone and every member — xtask, keeler-top — merges
+      # unlinted while `keeler lint` fails locally.
       - name: clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
       # The deliverable is shell — shellcheck is its static gate.
       - name: shellcheck
         run: |

@@ -8,11 +8,13 @@ edition = "2024"
 rust-version = "1.88"
 publish = false
 
-# Two members: this harness, and the repository's own task runner. The
-# harness stays the root package so tests/ keeps its place; xtask is where
-# the release logic lives now that it is Rust and not shell.
+# Three members: this harness, the repository's own task runner, and the
+# board. The harness stays the root package so tests/ keeps its place;
+# xtask is where the release logic lives now that it is Rust and not shell,
+# and keeler-top is the one member that ships — `keeler keeler-top` builds
+# it from the plugin's tree.
 [workspace]
-members = ["xtask"]
+members = ["keeler-top", "xtask"]
 
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
