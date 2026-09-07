@@ -385,6 +385,40 @@ mod tests {
         }
     }
 
+    /// Not a scenario of its own: it is the one thing the levers can be
+    /// asked on a machine running a test suite. A session nobody started
+    /// cannot be killed, switched to or attached to, and every one of the
+    /// three has to say so — a board that reported success would write the
+    /// paused marker for a kill that killed nothing, or come back from an
+    /// attach that never happened without a word about why.
+    ///
+    /// It holds whether or not tmux is installed, which is what makes it
+    /// safe to run anywhere: the answer is the program's refusal on a
+    /// machine that has one and "not installed" on a machine that has not.
+    #[test]
+    fn a_lever_pulled_on_a_session_that_is_not_there_is_a_refusal() {
+        use super::{Dispatch as _, Shell};
+
+        let shell = Shell::new("/keeler-top-no-such-plugin", "/", "specs/01-foo.md");
+        let session = format!("keeler-top-no-such-session-{}", std::process::id());
+
+        for (lever, refused) in [
+            ("kill", shell.kill(&session)),
+            ("switch-client", shell.attach(&session, true)),
+            // With stdout a pipe rather than a terminal, and no session of
+            // that name on any server: tmux refuses and returns, which is
+            // the only way this may be run from a test at all.
+            ("attach", shell.attach(&session, false)),
+            ("resume", shell.resume("T1").map(drop)),
+        ] {
+            let said = refused.expect_err(&format!("{lever} answered about a session nobody has"));
+            assert!(
+                !said.is_empty(),
+                "{lever} refused without saying anything about it",
+            );
+        }
+    }
+
     #[test]
     fn the_board_is_inside_tmux_when_the_variable_names_a_server() {
         use std::ffi::OsStr;

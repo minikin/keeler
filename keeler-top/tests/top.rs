@@ -3399,6 +3399,36 @@ fn r_resumes_a_paused_or_died_task() {
     assert_eq!(app.board.rows[0].state, "running");
 }
 
+/// Not a scenario of its own: it is the other half of the argv above. A
+/// board that composed the right command and ran something else would pass
+/// every assertion made against `resume_command`, so the recipe is reached
+/// here for real — the plugin's Justfile, the project as working directory,
+/// and the two arguments in the order the recipe takes them.
+#[test]
+fn the_resume_the_board_asks_for_is_the_plugins_recipe_run_in_the_project() {
+    let project = Project::new("t7-resume-recipe");
+    let plugin = project.0.join("plugin");
+    write(
+        &plugin,
+        "Justfile",
+        "keeler-resume SPEC TASK:\n    #!/usr/bin/env bash\n    \
+         echo \"keeler-resume: re-running {{TASK}} of {{SPEC}}\"\n    pwd -P\n",
+    );
+    let shell = Shell::new(&plugin, project.root(), "specs/01-foo.md");
+
+    let said = shell.resume("T1").expect("the fixture recipe answers");
+
+    assert!(
+        said.contains("keeler-resume: re-running T1 of specs/01-foo.md"),
+        "the recipe that answered was not the plugin's:\n{said}",
+    );
+    let ran_in = std::fs::canonicalize(project.root()).unwrap();
+    assert!(
+        said.contains(&format!("{}\n", ran_in.display())),
+        "the recipe ran somewhere other than the project root:\n{said}",
+    );
+}
+
 #[test]
 fn r_on_a_task_that_is_not_resumable_shows_keeler_resumes_refusal() {
     // Given T1 is running and its row selected
