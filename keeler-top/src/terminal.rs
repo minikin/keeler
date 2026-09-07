@@ -153,7 +153,16 @@ impl<S: Screen> Guard<S> {
         IN_SCREEN.store(false, Ordering::SeqCst);
         self.screen.leave()?;
         body();
-        self.screen.enter()?;
+        if let Err(refused) = self.screen.enter() {
+            // A screen half taken is the one state nobody is left to put
+            // back: the flag says the board holds none, so neither `Drop`
+            // nor the panic hook will restore it, and the board is about to
+            // end on this error. [`Tty::enter`] is raw mode and then the
+            // alternate screen, and a failure between the two leaves a
+            // shell that no longer echoes what is typed into it.
+            let _ = self.screen.leave();
+            return Err(refused);
+        }
         IN_SCREEN.store(true, Ordering::SeqCst);
         Ok(())
     }
@@ -261,6 +270,57 @@ mod tests {
             *done.lock().expect("the recorder"),
             ["enter", "leave", "enter", "leave"],
             "the screen taken back at the end was not given back again",
+        );
+    }
+
+    /// A screen that gives itself back and then will not be taken again —
+    /// the terminal that went away while tmux had it.
+    #[derive(Debug)]
+    struct Reclaims {
+        done: Arc<Mutex<Vec<&'static str>>>,
+        entered: usize,
+    }
+
+    impl Screen for Reclaims {
+        fn enter(&mut self) -> std::io::Result<()> {
+            self.entered += 1;
+            if self.entered > 1 {
+                return Err(std::io::Error::other("the terminal went away"));
+            }
+            self.done.lock().expect("the recorder").push("enter");
+            Ok(())
+        }
+
+        fn leave(&mut self) -> std::io::Result<()> {
+            self.done.lock().expect("the recorder").push("leave");
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_screen_that_could_not_be_taken_again_is_put_back_rather_than_left_half_taken() {
+        // Nothing is left to do it afterwards: the flag says the board holds
+        // no screen, so neither the guard's `Drop` nor the panic hook will,
+        // and the board ends on this error. Raw mode without the alternate
+        // screen is a shell that no longer echoes what is typed into it.
+        let done = Arc::new(Mutex::new(Vec::new()));
+
+        {
+            let mut guard = Guard::new(Reclaims {
+                done: Arc::clone(&done),
+                entered: 0,
+            })
+            .expect("the recorder entered");
+
+            let refused = guard.away(&mut || {}).expect_err("the recorder refused");
+
+            assert_eq!(refused.to_string(), "the terminal went away");
+        }
+
+        assert_eq!(
+            *done.lock().expect("the recorder"),
+            ["enter", "leave", "leave"],
+            "a terminal half taken was left that way",
         );
     }
 

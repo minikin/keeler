@@ -103,6 +103,17 @@ pub struct App {
     /// and a report refusal by the tick a second later. Each read owns its
     /// own sentence, and clears it when the read stops refusing.
     status_said: Option<String>,
+    /// And what the last keypress had to say: the lever that refused, or
+    /// the reason nothing happened.
+    ///
+    /// A third sentence for the same reason there are two — a line written
+    /// straight into the frame would be gone within the second. Every tick
+    /// re-assembles the board, and a `keeler-resume` refusal that lasted
+    /// one frame is a refusal nobody read. This one is cleared by the next
+    /// keypress and by nothing else, and it is shown before either read's:
+    /// those are the board talking about itself, and this is the answer to
+    /// something the person did a moment ago.
+    key_said: Option<String>,
 }
 
 impl App {
@@ -127,6 +138,7 @@ impl App {
             ticked: answered,
             graph_said: None,
             status_said: None,
+            key_said: None,
         }
     }
 
@@ -193,15 +205,26 @@ impl App {
         }
     }
 
-    /// The line under the table: whatever the board has to say about its own
-    /// reads, the report's refusal before the graph's — that is the slower
-    /// read and the one whose absence costs more.
+    /// The line under the table: whatever the board has to say.
+    ///
+    /// The keypress first, because it is the answer to something somebody
+    /// just did; then the report's refusal before the graph's — that is the
+    /// slower read and the one whose absence costs more.
     fn said(&self) -> String {
-        self.status_said
+        self.key_said
             .as_ref()
+            .or(self.status_said.as_ref())
             .or(self.graph_said.as_ref())
             .cloned()
             .unwrap_or_default()
+    }
+
+    /// What a keypress had to say, kept until the next one has something of
+    /// its own — `None` for a lever that did what it was asked, which puts
+    /// whatever the two reads have to say back on the line.
+    fn says(&mut self, said: Option<String>) {
+        self.key_said = said;
+        self.board.message = self.said();
     }
 
     /// Puts a freshly assembled board in place of the one on screen, keeping
@@ -238,30 +261,32 @@ impl App {
     /// two facts.
     pub fn pause(&mut self) {
         let Some(row) = self.board.selected_row() else {
-            self.board.message = NO_ROW.to_string();
+            self.says(Some(NO_ROW.to_string()));
             return;
         };
         if !row.running() {
-            self.board.message = format!(
-                "keeler-top: {} is not running — there is nothing to pause.",
-                row.id,
-            );
+            let id = row.id.clone();
+            self.says(Some(format!(
+                "keeler-top: {id} is not running — there is nothing to pause."
+            )));
             return;
         }
         let id = row.id.clone();
         let session = row.session(self.board.slug());
         let Some(marker) = row.marker() else {
-            self.board.message =
-                format!("keeler-top: {id}'s report names no log to write the marker beside.");
+            self.says(Some(format!(
+                "keeler-top: {id}'s report names no log to write the marker beside."
+            )));
             return;
         };
-        self.board.message = match self.dispatch.kill(&session) {
+        let said = match self.dispatch.kill(&session) {
             Err(refused) => refused,
             Ok(()) => match std::fs::write(&marker, "") {
                 Ok(()) => format!("keeler-top: {id} paused — R resumes it."),
                 Err(err) => format!("keeler-top: {}: {err}", marker.display()),
             },
         };
+        self.says(Some(said));
     }
 
     /// `R`: hands the selected task to `keeler-resume`.
@@ -271,14 +296,26 @@ impl App {
     /// spawned, in sentences written for whoever has to act on them — and a
     /// board with a second opinion about resumability would be a second
     /// answer to disagree with.
-    pub fn resume(&mut self) {
+    ///
+    /// # Errors
+    ///
+    /// A terminal the waiting board could not be drawn on.
+    pub fn resume(&mut self, surface: &mut dyn Surface, now: Timestamp) -> Result<(), String> {
         let Some(row) = self.board.selected_row() else {
-            self.board.message = NO_ROW.to_string();
-            return;
+            self.says(Some(NO_ROW.to_string()));
+            return Ok(());
         };
         let id = row.id.clone();
+        // Said and drawn before the recipe runs. `keeler-resume` is a `just`
+        // that runs a second `just`, a graph read and a `tmux new-session` —
+        // seconds, on the thread the board draws from, where every other
+        // pass is one. A board that went still and said nothing is one whose
+        // watcher presses R again.
+        self.says(Some(format!("keeler-top: resuming {id}…")));
+        surface.draw(&self.board, now)?;
         let (Ok(said) | Err(said)) = self.dispatch.resume(&id);
-        self.board.message = sentence(&said);
+        self.says(Some(sentence(&said)));
+        Ok(())
     }
 
     /// `Enter`: puts the watcher in front of the selected task's session.
@@ -291,11 +328,12 @@ impl App {
     /// status line and a board still up.
     pub fn attach(&mut self, surface: &mut dyn Surface, now: Timestamp) -> Result<(), String> {
         let Some(row) = self.board.selected_row() else {
-            self.board.message = NO_ROW.to_string();
+            self.says(Some(NO_ROW.to_string()));
             return Ok(());
         };
         if !row.running() {
-            self.board.message = format!("keeler-top: {} has no session to attach.", row.id);
+            let id = row.id.clone();
+            self.says(Some(format!("keeler-top: {id} has no session to attach.")));
             return Ok(());
         }
         let session = row.session(self.board.slug());
@@ -304,18 +342,17 @@ impl App {
         // drawing on the screen it has. Giving that screen back for a
         // `switch-client` would be a board that blinked for no reason.
         if self.dispatch.in_tmux() {
-            self.board.message = refusal(&self.dispatch.attach(&session, true));
+            let said = refusal(self.dispatch.attach(&session, true));
+            self.says(said);
             return Ok(());
         }
-        let mut said = String::new();
-        surface.away(&mut || said = refusal(&self.dispatch.attach(&session, false)))?;
+        let mut said = None;
+        surface.away(&mut || said = refusal(self.dispatch.attach(&session, false)))?;
         // Whatever the run did while nobody was reading the board is the
         // first thing the frame after has to carry — an attach is minutes,
         // where every other pass of this loop is a second.
         self.tick(now);
-        if !said.is_empty() {
-            self.board.message = said;
-        }
+        self.says(said);
         Ok(())
     }
 }
@@ -342,8 +379,8 @@ fn sentence(said: &str) -> String {
 /// Silence on success is the point: the board has just come back from tmux
 /// or moved a client, and a line under the table saying so would be the
 /// board reporting its own success at what the watcher just watched happen.
-fn refusal(answer: &Result<(), String>) -> String {
-    answer.as_ref().err().cloned().unwrap_or_default()
+fn refusal(answer: Result<(), String>) -> Option<String> {
+    answer.err()
 }
 
 /// What a keypress does.
@@ -360,11 +397,16 @@ pub fn on_key(app: &mut App, key: KeyEvent) -> Action {
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => Action::Quit,
         KeyCode::Char('q') => Action::Quit,
         KeyCode::Char('r') => Action::Status,
-        KeyCode::Char('p') => Action::Pause,
+        // The three levers, and the only keys here that carry a guard:
+        // they are the ones that do something outside the board, and
+        // Ctrl-P is a chord half the world has bound to "previous". The
+        // keys above and below move a cursor or end a session the person
+        // is looking at; this one kills a running agent.
+        KeyCode::Char('p') if plain(key) => Action::Pause,
         // Shifted, as `keeler-resume` is the heavier of the two: `p` stops
         // a run that can be started again, and `R` starts an agent.
-        KeyCode::Char('R') => Action::Resume,
-        KeyCode::Enter => Action::Attach,
+        KeyCode::Char('R') if plain(key) => Action::Resume,
+        KeyCode::Enter if plain(key) => Action::Attach,
         KeyCode::Char('j') | KeyCode::Down => {
             app.select(selected.saturating_add(1));
             Action::Nothing
@@ -375,6 +417,14 @@ pub fn on_key(app: &mut App, key: KeyEvent) -> Action {
         }
         _ => Action::Nothing,
     }
+}
+
+/// Whether a key was pressed on its own.
+///
+/// Shift aside, which is how `R` is typed at all — and which no terminal
+/// turns into a chord of its own.
+fn plain(key: KeyEvent) -> bool {
+    key.modifiers.difference(KeyModifiers::SHIFT).is_empty()
 }
 
 /// Whether `keeler-status` is due another read.
@@ -677,10 +727,7 @@ pub fn step(
             app.pause();
             Ok(true)
         }
-        Action::Resume => {
-            app.resume();
-            Ok(true)
-        }
+        Action::Resume => app.resume(surface, now).map(|()| true),
         Action::Attach => app.attach(surface, now).map(|()| true),
         Action::Nothing => Ok(true),
     }
@@ -1207,12 +1254,37 @@ mod tests {
         let mut app = app(RUNNING);
 
         assert_eq!(on_key(&mut app, press(KeyCode::Char('p'))), Action::Pause);
-        assert_eq!(on_key(&mut app, press(KeyCode::Char('R'))), Action::Resume);
+        assert_eq!(
+            on_key(
+                &mut app,
+                KeyEvent::new(KeyCode::Char('R'), KeyModifiers::SHIFT),
+            ),
+            Action::Resume,
+            "the key that has to be typed shifted was refused for being shifted",
+        );
         assert_eq!(on_key(&mut app, press(KeyCode::Enter)), Action::Attach);
         // Unshifted, `r` is the read the board already had: a resume is the
         // heavier of the two, and it is the one that has to be reached for.
         assert_eq!(on_key(&mut app, press(KeyCode::Char('r'))), Action::Status);
         assert_eq!(on_key(&mut app, press(KeyCode::Char('P'))), Action::Nothing);
+    }
+
+    #[test]
+    fn a_chord_is_not_a_lever() {
+        // Ctrl-P is "previous" in half the world's key bindings, and here it
+        // would kill a running agent. The three keys that reach outside the
+        // board are the three that ask to have been pressed on their own.
+        let mut app = app(RUNNING);
+
+        for code in [KeyCode::Char('p'), KeyCode::Char('R'), KeyCode::Enter] {
+            for modifiers in [KeyModifiers::CONTROL, KeyModifiers::ALT] {
+                assert_eq!(
+                    on_key(&mut app, KeyEvent::new(code, modifiers)),
+                    Action::Nothing,
+                    "{code:?} with {modifiers:?} pulled a lever",
+                );
+            }
+        }
     }
 
     #[test]
@@ -1224,11 +1296,14 @@ mod tests {
 
         for lever in [Action::Pause, Action::Resume, Action::Attach] {
             let mut app = over(Arc::clone(&dispatch), empty);
+            let now = Timestamp::from_epoch_seconds(1_000);
             match lever {
                 Action::Pause => app.pause(),
-                Action::Resume => app.resume(),
+                Action::Resume => app
+                    .resume(&mut Frames::default(), now)
+                    .expect("no row is not a terminal that refused"),
                 _ => app
-                    .attach(&mut Frames::default(), Timestamp::from_epoch_seconds(1_000))
+                    .attach(&mut Frames::default(), now)
                     .expect("no row is not a terminal that refused"),
             }
             assert_eq!(app.board.message, super::NO_ROW, "on {lever:?}");
@@ -1311,10 +1386,84 @@ mod tests {
         // The watcher has just come back from tmux, or watched their client
         // move: a line under the table reporting it would be the board
         // congratulating itself on what they were looking at.
-        assert_eq!(super::refusal(&Ok(())), "");
+        assert_eq!(super::refusal(Ok(())), None);
         assert_eq!(
-            super::refusal(&Err("no server running".to_string())),
-            "no server running",
+            super::refusal(Err("no server running".to_string())),
+            Some("no server running".to_string()),
+        );
+    }
+
+    #[test]
+    fn what_a_lever_said_outlives_the_tick_a_second_later() {
+        // Every tick re-assembles the board, and the line under the table
+        // with it. A refusal drawn once and blanked before the next second
+        // is a refusal nobody read — and `p` and `R` are pressed precisely
+        // when something is going wrong.
+        let dispatch = Arc::new(Answers {
+            refuses: Some("can't find session: =keeler-01-foo-t1".to_string()),
+            ..Answers::default()
+        });
+        let mut app = over(Arc::clone(&dispatch), RUNNING);
+
+        app.pause();
+        let said = app.board.message.clone();
+        app.tick(Timestamp::from_epoch_seconds(1_001));
+
+        assert_eq!(said, "can't find session: =keeler-01-foo-t1");
+        assert_eq!(app.board.message, said, "the tick took the answer away");
+
+        // And a lever that did what it was asked takes the last sentence
+        // away with it, rather than leaving a refusal under a board it is
+        // no longer about.
+        let mut app = over(
+            Arc::new(Answers::default()),
+            &format!("{RUNNING}T2     not spawned\n"),
+        );
+        app.board.selected = 1;
+        app.pause();
+        assert!(app.board.message.contains("T2"));
+
+        app.board.selected = 0;
+        app.attach(&mut Frames::default(), Timestamp::from_epoch_seconds(1_002))
+            .expect("a recording surface does not refuse");
+
+        // What is left is whatever the two reads have to say — here the
+        // graph refusing, this fixture standing outside a repository — and
+        // not a word about T2.
+        assert!(
+            !app.board.message.contains("T2"),
+            "a lever that succeeded left the last one's sentence up: {}",
+            app.board.message,
+        );
+        assert!(app.board.message.contains("no graph to read"));
+    }
+
+    #[test]
+    fn the_board_says_it_is_resuming_before_the_recipe_takes_the_thread() {
+        // `keeler-resume` is a `just` that runs a second `just`, and it runs
+        // here rather than on a thread of its own — so the frame that says
+        // so has to be drawn before it starts, or the board simply stops for
+        // seconds with the row still reading `paused`.
+        let dispatch = Arc::new(Answers {
+            said: "keeler-resume: re-running T1 in the worktree it has\n".to_string(),
+            ..Answers::default()
+        });
+        let mut app = over(Arc::clone(&dispatch), RUNNING);
+        let mut frames = Frames::default();
+
+        app.resume(&mut frames, Timestamp::from_epoch_seconds(1_000))
+            .expect("a recording surface does not refuse");
+
+        assert_eq!(
+            frames.0.len(),
+            1,
+            "the board went still without drawing a word about it",
+        );
+        assert_eq!(frames.0[0].message, "keeler-top: resuming T1…");
+        assert_eq!(dispatch.done(), ["resume T1"]);
+        assert_eq!(
+            app.board.message,
+            "keeler-resume: re-running T1 in the worktree it has",
         );
     }
 

@@ -3276,6 +3276,18 @@ fn a_kill_that_fails_writes_no_marker() {
         "the board claimed a pause its kill did not make",
     );
     assert_eq!(app.board.message, "can't find session: =keeler-01-foo-t1");
+    // And a tick later it still is — `p` is pressed exactly when something
+    // is going wrong, and the answer must outlive the second it was given
+    // in.
+    step(
+        &mut screen,
+        &mut Script::default(),
+        &mut app,
+        &mut feed,
+        now("2026-09-07T12:00:01.000Z"),
+    )
+    .expect("a pass");
+    assert_eq!(app.board.message, "can't find session: =keeler-01-foo-t1");
 }
 
 #[test]
@@ -3456,6 +3468,19 @@ fn r_on_a_task_that_is_not_resumable_shows_keeler_resumes_refusal() {
         "the board decided for itself what was resumable",
     );
     assert_eq!(app.board.rows[0].state, "running");
+
+    // And it is still there a second later. Every tick re-assembles the
+    // board and the line under it, and a sentence drawn once and blanked
+    // before the next second is one nobody read.
+    step(
+        &mut screen,
+        &mut Script::default(),
+        &mut app,
+        &mut feed,
+        now("2026-09-07T12:00:01.000Z"),
+    )
+    .expect("a pass");
+    assert_eq!(app.board.message, refusal, "the tick took the answer away");
 }
 
 #[test]
