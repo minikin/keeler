@@ -1,6 +1,6 @@
 # Spec 09 — Keeler as a Claude Code plugin
 
-**Status:** Approved
+**Status:** Implemented
 **Effort:** Large
 **Module:** `.claude-plugin/`, `commands/`, `skills/`, `hooks/`, `bin/`, `keeler.md`, `graph-mode.md`, `gates.md`, `Justfile`, `scripts/keeler-graph.sh`, `install.sh`, `templates/keeler.yml`, `xtask/`, `tests/`, `README.md`, `CONTRIBUTING.md`
 

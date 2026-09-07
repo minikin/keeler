@@ -78,9 +78,9 @@
       "file": "/Users/mnkn/GitHub/keeler/xtask/src/guard.rs",
       "function": "disagreements",
       "line": 143,
-      "cyclomatic": 6.0,
+      "cyclomatic": 5.0,
       "coverage": 100.0,
-      "crap": 6.0,
+      "crap": 5.0,
       "crate": "xtask"
     },
     {
@@ -140,7 +140,7 @@
     {
       "file": "/Users/mnkn/GitHub/keeler/xtask/src/lib.rs",
       "function": "checksum_command",
-      "line": 263,
+      "line": 332,
       "cyclomatic": 4.0,
       "coverage": 100.0,
       "crap": 4.0,
@@ -149,7 +149,7 @@
     {
       "file": "/Users/mnkn/GitHub/keeler/xtask/src/lib.rs",
       "function": "declared_versions",
-      "line": 84,
+      "line": 87,
       "cyclomatic": 6.0,
       "coverage": 100.0,
       "crap": 6.0,
@@ -158,7 +158,7 @@
     {
       "file": "/Users/mnkn/GitHub/keeler/xtask/src/lib.rs",
       "function": "gate",
-      "line": 199,
+      "line": 268,
       "cyclomatic": 8.0,
       "coverage": 100.0,
       "crap": 8.0,
@@ -167,7 +167,7 @@
     {
       "file": "/Users/mnkn/GitHub/keeler/xtask/src/lib.rs",
       "function": "member_claim",
-      "line": 125,
+      "line": 128,
       "cyclomatic": 3.0,
       "coverage": 100.0,
       "crap": 3.0,
@@ -176,7 +176,7 @@
     {
       "file": "/Users/mnkn/GitHub/keeler/xtask/src/lib.rs",
       "function": "pipeline_check_command",
-      "line": 236,
+      "line": 305,
       "cyclomatic": 5.0,
       "coverage": 100.0,
       "crap": 5.0,
@@ -184,8 +184,26 @@
     },
     {
       "file": "/Users/mnkn/GitHub/keeler/xtask/src/lib.rs",
+      "function": "plugin_check_command",
+      "line": 200,
+      "cyclomatic": 5.0,
+      "coverage": 100.0,
+      "crap": 5.0,
+      "crate": "xtask"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/xtask/src/lib.rs",
+      "function": "plugin_files",
+      "line": 186,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "xtask"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/xtask/src/lib.rs",
       "function": "read",
-      "line": 28,
+      "line": 30,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -194,7 +212,7 @@
     {
       "file": "/Users/mnkn/GitHub/keeler/xtask/src/lib.rs",
       "function": "refusal",
-      "line": 254,
+      "line": 323,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -203,7 +221,7 @@
     {
       "file": "/Users/mnkn/GitHub/keeler/xtask/src/lib.rs",
       "function": "release_guard_command",
-      "line": 140,
+      "line": 143,
       "cyclomatic": 6.0,
       "coverage": 100.0,
       "crap": 6.0,
@@ -212,7 +230,7 @@
     {
       "file": "/Users/mnkn/GitHub/keeler/xtask/src/lib.rs",
       "function": "release_notes_command",
-      "line": 73,
+      "line": 76,
       "cyclomatic": 5.0,
       "coverage": 100.0,
       "crap": 5.0,
@@ -221,7 +239,7 @@
     {
       "file": "/Users/mnkn/GitHub/keeler/xtask/src/lib.rs",
       "function": "root_claims",
-      "line": 111,
+      "line": 114,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -230,7 +248,7 @@
     {
       "file": "/Users/mnkn/GitHub/keeler/xtask/src/lib.rs",
       "function": "run",
-      "line": 62,
+      "line": 65,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -239,7 +257,7 @@
     {
       "file": "/Users/mnkn/GitHub/keeler/xtask/src/lib.rs",
       "function": "skipped_pipeline",
-      "line": 171,
+      "line": 240,
       "cyclomatic": 4.0,
       "coverage": 100.0,
       "crap": 4.0,
@@ -247,8 +265,17 @@
     },
     {
       "file": "/Users/mnkn/GitHub/keeler/xtask/src/lib.rs",
+      "function": "unbumped_plugin",
+      "line": 175,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "xtask"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/xtask/src/lib.rs",
       "function": "usage",
-      "line": 14,
+      "line": 15,
       "cyclomatic": 1.0,
       "coverage": 100.0,
       "crap": 1.0,
@@ -550,12 +577,75 @@
       "coverage": 100.0,
       "crap": 1.0,
       "crate": "xtask"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/xtask/src/plugin.rs",
+      "function": "claim",
+      "line": 105,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "xtask"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/xtask/src/plugin.rs",
+      "function": "disagreements",
+      "line": 82,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "xtask"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/xtask/src/plugin.rs",
+      "function": "entries",
+      "line": 131,
+      "cyclomatic": 8.0,
+      "coverage": 100.0,
+      "crap": 8.0,
+      "crate": "xtask"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/xtask/src/plugin.rs",
+      "function": "field",
+      "line": 121,
+      "cyclomatic": 5.0,
+      "coverage": 100.0,
+      "crap": 5.0,
+      "crate": "xtask"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/xtask/src/plugin.rs",
+      "function": "marker_disagreement",
+      "line": 70,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "xtask"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/xtask/src/plugin.rs",
+      "function": "marketplace_version",
+      "line": 57,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "xtask"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/xtask/src/plugin.rs",
+      "function": "plugin_version",
+      "line": 46,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "xtask"
     }
   ],
   "diagnostics": {
-    "analyzed_files": 9,
-    "lcov_files": 9,
-    "matched_files": 9,
+    "analyzed_files": 10,
+    "lcov_files": 10,
+    "matched_files": 10,
     "source_only": {
       "count": 0,
       "examples": []
