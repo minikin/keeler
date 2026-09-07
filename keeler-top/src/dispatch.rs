@@ -73,6 +73,18 @@ impl Shell {
             .arg(self.plugin_root.join("Justfile"))
             .arg("--working-directory")
             .arg(&self.root)
+            // A refusal is the recipe's one sentence, written for whoever
+            // has to act on it — not that sentence plus just's report that
+            // a recipe the reader never named failed on some line of a
+            // file they have never opened. `keeler-spawn` passes `-q` to
+            // its own preflight for the same reason.
+            //
+            // It is safe here because `keeler-status` carries a shebang:
+            // just runs such a recipe as one process and leaves its two
+            // streams alone, while a *linewise* recipe under `-q` gets
+            // both of them nulled — which would leave the board with no
+            // report at all. The suite pins both halves.
+            .arg("-q")
             .arg("keeler-status")
             .arg(&self.spec);
         command

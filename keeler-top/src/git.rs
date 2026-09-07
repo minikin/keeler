@@ -55,7 +55,12 @@ pub fn spec_from_ref(root: &Path, git_ref: &str, rel: &str) -> Result<SpecCopy, 
         std::process::id(),
         next_serial()
     ));
-    std::fs::create_dir_all(&dir).map_err(|err| format!("{}: {err}", dir.display()))?;
+    // `create_dir`, not `create_dir_all`: the second adopts whatever is
+    // already at that path, and in a shared temporary directory that is
+    // somebody else's — the shell this mirrors reaches for `mktemp -d` for
+    // the same reason. A tick that refuses is a tick; the next one has the
+    // next serial.
+    std::fs::create_dir(&dir).map_err(|err| format!("{}: {err}", dir.display()))?;
     // Built before the read, so a failure below still takes the directory
     // with it — the board makes this copy every second it is up.
     let copy = SpecCopy {
@@ -123,7 +128,17 @@ pub fn branch_facts(worktree: &Path, base: &str) -> Option<BranchFacts> {
         .trim()
         .parse()
         .ok()?;
-    let dirty = git(worktree, &["status", "--porcelain"])?.lines().count();
+    // `--untracked-files=normal` is git's default and is asked for anyway:
+    // it is `status.showUntrackedFiles`'s default too, and a machine that
+    // set that to `no` would have the board report a worktree holding
+    // nothing but new files as clean — wrong in the direction that gets
+    // work thrown away.
+    let dirty = git(
+        worktree,
+        &["status", "--porcelain", "--untracked-files=normal"],
+    )?
+    .lines()
+    .count();
     let commits = git(worktree, &["log", "--format=%h %s", &range])?
         .lines()
         .map(|line| {
