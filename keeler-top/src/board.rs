@@ -15,6 +15,7 @@
 //! read one must not look alike.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use crate::clock::Timestamp;
 use crate::git::{BranchFacts, branch_facts};
@@ -27,6 +28,12 @@ use crate::stream::StreamReader;
 /// its vocabulary the graph can improve on.
 const NOT_SPAWNED: &str = "not spawned";
 
+/// The recipe's word for a task whose session is up.
+///
+/// The one state the board's levers divide on: `p` and `Enter` need a
+/// session, and `R` is for a task that has none.
+pub const RUNNING: &str = "running";
+
 /// One task, as the board shows it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Row {
@@ -35,6 +42,9 @@ pub struct Row {
     /// The state column: `keeler-status`'s word, or the graph's for the one
     /// it has none for.
     pub state: String,
+    /// The run's log, as the report named it — the path every other file of
+    /// the run is found beside.
+    pub log: Option<PathBuf>,
     /// What the run's stream says, for a task that has one.
     pub run: Option<RunView>,
     /// What the task's branch and worktree say, while they are there.
@@ -42,6 +52,32 @@ pub struct Row {
 }
 
 impl Row {
+    /// Whether the run's session is up.
+    #[must_use]
+    pub fn running(&self) -> bool {
+        self.state == RUNNING
+    }
+
+    /// The tmux session the run is in: `keeler-<slug>-<tid>`, the name
+    /// `keeler-spawn` gave it, with the id lowercased on the way in as
+    /// every name in graph mode is.
+    #[must_use]
+    pub fn session(&self, slug: &str) -> String {
+        format!("keeler-{slug}-{}", self.id.to_lowercase())
+    }
+
+    /// The marker the board writes when it has stopped a run.
+    ///
+    /// Beside the log the report named, rather than under a run directory
+    /// composed here: `keeler-status` prints the log it reads the marker
+    /// beside, and the board is launched with the working directory it
+    /// happened to be started in — which is not the repository root
+    /// whenever somebody opens the board from a subdirectory.
+    #[must_use]
+    pub fn marker(&self) -> Option<PathBuf> {
+        self.log.as_ref().map(|log| log.with_extension("paused"))
+    }
+
     /// The stage column: how far the run has got.
     #[must_use]
     pub fn stage_column(&self) -> String {
@@ -232,6 +268,7 @@ impl Board {
             .map(|task| Row {
                 id: task.id.clone(),
                 state: state_column(&task.state, graph.iter().find(|line| line.id == task.id)),
+                log: task.log.clone(),
                 run: runs.refresh(task),
                 // The distance is measured from the ref the report
                 // answered about, so the commit column and the state column
@@ -250,6 +287,20 @@ impl Board {
             selected: 0,
             message: String::new(),
         }
+    }
+
+    /// The spec's slug: its file name without `.md`.
+    ///
+    /// Every name in graph mode is derived from it — the branch, the
+    /// worktree, the run directory and the tmux session — and this is the
+    /// derivation `keeler-status` makes, from the path in the report's own
+    /// header rather than from anything the board was launched with.
+    #[must_use]
+    pub fn slug(&self) -> &str {
+        std::path::Path::new(&self.rel)
+            .file_stem()
+            .and_then(std::ffi::OsStr::to_str)
+            .unwrap_or_default()
     }
 
     /// The header line: which spec, read from which ref, and how long ago.
@@ -304,6 +355,7 @@ mod tests {
         Row {
             id: "T1".to_string(),
             state: "running".to_string(),
+            log: Some(std::path::PathBuf::from("/r/.keeler/runs/01-foo/t1.log")),
             run,
             branch,
         }
@@ -553,6 +605,57 @@ mod tests {
         assert_eq!(view.stage, crate::run::Stage::Reading);
         // And the rest of the stream is read as it always is.
         assert_eq!(view.tool_column(), "Edit: /tmp/probe/src/lib.rs");
+    }
+
+    #[test]
+    fn a_rows_session_and_marker_are_the_names_every_other_recipe_composes() {
+        // `keeler-spawn` named the session `keeler-<slug>-<tid>` and put the
+        // log in `.keeler/runs/<slug>/`; `keeler-status` reads the marker
+        // beside that log and `keeler-resume` removes it there. All three
+        // are the same two derivations, and this row makes neither of them
+        // up.
+        let row = row(None, None);
+
+        assert_eq!(row.session("01-foo"), "keeler-01-foo-t1");
+        assert_eq!(
+            row.marker(),
+            Some(std::path::PathBuf::from("/r/.keeler/runs/01-foo/t1.paused")),
+        );
+        assert!(row.running());
+    }
+
+    #[test]
+    fn a_task_whose_line_carries_no_paths_has_no_marker_to_write() {
+        let row = Row {
+            state: "done".to_string(),
+            log: None,
+            ..row(None, None)
+        };
+
+        assert_eq!(row.marker(), None);
+        assert!(!row.running());
+    }
+
+    #[test]
+    fn the_slug_is_the_specs_file_name_without_its_suffix() {
+        let slug = |rel: &str| {
+            Board::assemble(
+                &parse(&format!("graph: {rel} on HEAD\n")).expect("a report"),
+                &[],
+                &mut Runs::default(),
+                Timestamp::default(),
+            )
+            .slug()
+            .to_string()
+        };
+
+        assert_eq!(slug("specs/01-foo.md"), "01-foo");
+        // Named from wherever the reader stood: `keeler-status` prints the
+        // path relative to the repository root, and a board launched from a
+        // subdirectory would otherwise compose a session name of its own.
+        assert_eq!(slug("01-foo.md"), "01-foo");
+        assert_eq!(slug("specs/01 on the road.md"), "01 on the road");
+        assert_eq!(slug(""), "");
     }
 
     #[test]

@@ -602,6 +602,7 @@ mod tests {
         let row = Row {
             id: "T1".to_string(),
             state: "not spawned".to_string(),
+            log: None,
             run: None,
             branch: None,
         };
