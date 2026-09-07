@@ -985,6 +985,48 @@ keeler-status SPEC:
         esac
     done <<< "$report"
 
+# The same question as the board above, asked as a screen rather than an
+# answer: one row per task, refreshed every second, with attach, pause and
+# resume on three keys. It is a Rust binary and not shell, and it is built
+# from the plugin's own tree — an adopter pays for ratatui once, on the
+# first launch, and never again.
+#
+# The build runs with the plugin as the working directory, not the project:
+# rustup reads rust-toolchain.toml from where cargo was started, and a
+# project pinning an older toolchain, or setting rustflags of its own in
+# .cargo/config.toml, would otherwise decide how the plugin's board is
+# built. --manifest-path all the same, because the plugin's workspace has
+# more than one binary in it and only one of them is the board.
+#
+# The probe is {{justfile_directory()}}/target/release/keeler-top and not
+# the crate's own directory: a workspace member's artifacts land in the
+# workspace's target/, and a probe pointed at keeler-top/target/ would
+# print the first-build notice before every launch it ever made.
+#
+# $ARGS unquoted, which is what carries several arguments as several: just
+# joins a variadic parameter into one string, and the alternative — leaving
+# it quoted — would hand the binary `--once specs/01-foo.md` as a single
+# word. Expansion is not re-evaluated, so a spec whose name holds $( … )
+# still reaches the binary as text; a path holding a space is the one thing
+# a variadic cannot carry through.
+#
+# Graph mode: the live board — `keeler keeler-top specs/01-foo.md`.
+keeler-top *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    plugin="{{justfile_directory()}}"
+    root="$(pwd -P)"
+    if [ ! -x "$plugin/target/release/keeler-top" ]; then
+        echo "keeler-top: building the board for the first time — this compiles ratatui and its tree, and takes a few minutes. Every launch after it is instant." >&2
+        echo "keeler-top: the plugin pins its compiler in rust-toolchain.toml, so rustup may fetch a toolchain before cargo starts." >&2
+    fi
+    # exec: the board owns the terminal it draws on, and a shell left
+    # sitting between it and the tty is one more process for a Ctrl-C to
+    # reach first.
+    cd "$plugin"
+    exec cargo run --release --manifest-path "$plugin/keeler-top/Cargo.toml" -- \
+        --plugin-root "$plugin" --root "$root" $ARGS
+
 # A spawned session that ended before its pipeline finished left its
 # worktree, its branch and its commits exactly where they were — the
 # runner it was started from is re-runnable, and this gives that a name.
