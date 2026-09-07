@@ -186,18 +186,21 @@ impl StreamReader {
         self.offset += fresh.len() as u64;
         self.partial.append(&mut fresh);
 
-        let mut records = Vec::new();
-        let mut consumed = 0;
-        while let Some(newline) = self.partial[consumed..]
-            .iter()
-            .position(|byte| *byte == b'\n')
-        {
-            if let Some(record) = parse_line(&self.partial[consumed..consumed + newline]) {
-                records.push(record);
-            }
-            consumed += newline + 1;
-        }
-        self.partial.drain(..consumed);
+        // Split at the last newline rather than walking an index forward
+        // one line at a time: everything before it is whole lines and
+        // everything after it is the tail that has no newline yet. The
+        // hand-rolled walk said the same thing, and the mutation gate
+        // showed what it cost — every arithmetic slip in the advance is an
+        // infinite loop rather than a wrong answer, which a test suite can
+        // only report as a hang.
+        let Some(end) = self.partial.iter().rposition(|byte| *byte == b'\n') else {
+            return Vec::new();
+        };
+        let records = self.partial[..=end]
+            .split(|byte| *byte == b'\n')
+            .filter_map(parse_line)
+            .collect();
+        self.partial.drain(..=end);
         records
     }
 }

@@ -1,0 +1,18 @@
+test(10-keeler-top): split the stream at its last newline, not by hand
+
+The mutation gate found three timeouts and no survivors, all on one
+line: `consumed += newline + 1`, the index advance in the line-splitting
+loop. Every arithmetic mutation of it — `*=`, `+ newline - 1`,
+`+ newline * 1` — leaves the index where it was or sends it backwards,
+so the loop never ends. A test suite cannot report that as a failure;
+it can only hang, and a gate that reads a hang has learned nothing about
+whether the tests would catch the bug.
+
+So the arithmetic goes. `rposition` finds the last newline, everything
+up to and including it is `split` into whole lines, and the tail stays
+in the buffer for the next poll. Same answer, no index to slip, and the
+three timeouts become no mutants at all.
+
+The fix is the shape the rules ask for — a stronger test would not have
+helped here, because the tests were already strong enough to catch a
+wrong answer and the mutant did not produce one.
