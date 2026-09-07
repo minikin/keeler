@@ -270,6 +270,26 @@ mod tests {
     }
 
     #[test]
+    fn two_copies_alive_at_once_do_not_share_a_directory() {
+        // What the serial is for. Sharing would be worse than untidy:
+        // the directory is made rather than adopted, so the second read
+        // would refuse outright, and the first copy's end would take the
+        // second's file with it.
+        let repo = Repo::new("two-copies");
+        repo.commit("specs/01-foo.md", "## Tasks\n");
+
+        let first = spec_from_ref(&repo.0, "HEAD", "specs/01-foo.md").expect("HEAD holds it");
+        let second = spec_from_ref(&repo.0, "HEAD", "specs/01-foo.md").expect("HEAD holds it");
+
+        assert_ne!(first.path(), second.path());
+        drop(first);
+        assert!(
+            second.path().exists(),
+            "one copy's end took the other's file",
+        );
+    }
+
+    #[test]
     fn the_copy_keeps_the_specs_name_and_goes_when_it_does() {
         let repo = Repo::new("copy");
         repo.commit("specs/01-foo.md", "## Tasks\n\n- [ ] **T1 — one.**\n");
