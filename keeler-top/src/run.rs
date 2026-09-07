@@ -331,11 +331,17 @@ impl RunView {
     }
 
     /// The model column: the run's model, short.
+    ///
+    /// An init record with no model still begins a run, so "no model" and
+    /// "a model named nothing" both reach here — and both are the dash,
+    /// because a blank cell in the middle of a row reads as a bug in the
+    /// board rather than as a gap in the stream.
     #[must_use]
     pub fn model_column(&self) -> String {
-        self.model
-            .as_deref()
-            .map_or_else(|| DASH.to_string(), short_model)
+        match self.model.as_deref() {
+            Some(model) if !model.is_empty() => short_model(model),
+            _ => DASH.to_string(),
+        }
     }
 
     /// The tool column: the last call the main session made.
@@ -446,7 +452,14 @@ impl RunView {
 
     /// One of the run's own lines, with the oldest dropped once there are
     /// more than the pane shows.
+    ///
+    /// A blank one is not a line. The CLI writes a text block beside a tool
+    /// call whether or not the turn said anything, so five empty ones in a
+    /// row would leave the pane holding nothing the run ever said.
     fn remember(&mut self, text: &str) {
+        if text.trim().is_empty() {
+            return;
+        }
         self.texts.push_back(text.to_string());
         while self.texts.len() > TEXTS_KEPT {
             self.texts.pop_front();
@@ -777,6 +790,12 @@ mod tests {
         let mut view = RunView::default();
         assert_eq!(view.model_column(), DASH);
 
+        // An init record with no model still begins a run, so the model it
+        // does not name reaches the view as an empty string. A blank cell
+        // in the middle of a row is not an answer; the dash is.
+        view.model = Some(String::new());
+        assert_eq!(view.model_column(), DASH);
+
         for (model, shown) in [
             ("claude-opus-5[1m]", "opus5[1m]"),
             ("claude-sonnet-5", "sonnet5"),
@@ -991,6 +1010,26 @@ mod tests {
         assert_eq!(
             view.texts.iter().map(String::as_str).collect::<Vec<_>>(),
             ["two", "three", "four", "five", "six"],
+        );
+    }
+
+    #[test]
+    fn a_text_block_with_nothing_in_it_does_not_push_a_word_out_of_the_ring() {
+        // The CLI writes a text block beside a tool call whether or not the
+        // turn said anything, so blanks arrive in the same stream as words.
+        // Five of them would empty the pane of everything the run has said.
+        let mut view = RunView::default();
+        for text in ["a real line", "", "   ", "\n", "", ""] {
+            absorb(
+                &mut view,
+                serde_json::json!({"content": [{"type": "text", "text": text}]}),
+                None,
+            );
+        }
+
+        assert_eq!(
+            view.texts.iter().map(String::as_str).collect::<Vec<_>>(),
+            ["a real line"],
         );
     }
 

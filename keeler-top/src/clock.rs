@@ -68,25 +68,41 @@ impl Timestamp {
 }
 
 /// `YYYY-MM-DD` into its three numbers.
+///
+/// Ranged, and the year most of all: the seconds a date multiplies into
+/// overflow an `i64` somewhere past the year 292 billion, and a stamp is
+/// whatever a half-written stream holds. What the ranges do not do is count
+/// the days in a month — a 31st of February reads as the 3rd of March,
+/// which is wrong by two days rather than by an era, and a calendar is more
+/// than this column is worth.
 fn parse_date(date: &str) -> Option<(i64, i64, i64)> {
     let mut parts = date.split('-');
-    let year = parts.next()?.parse().ok()?;
-    let month = parts.next()?.parse().ok()?;
-    let day = parts.next()?.parse().ok()?;
+    let year = in_range(parts.next()?, 0, 9_999)?;
+    let month = in_range(parts.next()?, 1, 12)?;
+    let day = in_range(parts.next()?, 1, 31)?;
     Some((year, month, day))
 }
 
 /// `HH:MM:SS`, and whatever follows the seconds, into seconds of the day.
 fn parse_time(time: &str) -> Option<i64> {
     let mut parts = time.split(':');
-    let hour: i64 = parts.next()?.parse().ok()?;
-    let minute: i64 = parts.next()?.parse().ok()?;
+    let hour = in_range(parts.next()?, 0, 23)?;
+    let minute = in_range(parts.next()?, 0, 59)?;
     let whole_seconds = parts
         .next()?
         .split(|character: char| !character.is_ascii_digit())
         .next()?;
-    let second: i64 = whole_seconds.parse().ok()?;
+    // Sixty, because a leap second is spelled `23:59:60` and is a real
+    // instant that a real stream can be stamped with.
+    let second = in_range(whole_seconds, 0, 60)?;
     Some(hour * 3_600 + minute * 60 + second)
+}
+
+/// One field of a stamp, or nothing when it is not a number this file will
+/// answer for.
+fn in_range(text: &str, lowest: i64, highest: i64) -> Option<i64> {
+    let value: i64 = text.parse().ok()?;
+    (lowest..=highest).contains(&value).then_some(value)
 }
 
 /// Days from 1970-01-01 to `year-month-day`, by Howard Hinnant's
@@ -219,6 +235,35 @@ mod tests {
                 "{text} was read as an instant"
             );
         }
+    }
+
+    #[test]
+    fn a_field_outside_its_range_is_not_a_date() {
+        for text in [
+            // A year large enough to overflow the seconds it multiplies
+            // into. Read rather than refused, this panics in a debug build
+            // and wraps in a release one — a garbled stamp taking the board
+            // down with it, in the one file whose whole job is surviving
+            // what a half-written stream holds.
+            "999999999999999-01-01T00:00:00Z",
+            "2026-00-07T00:00:00Z",
+            "2026-13-07T00:00:00Z",
+            "2026-09-00T00:00:00Z",
+            "2026-09-32T00:00:00Z",
+            "2026-09-07T24:00:00Z",
+            "2026-09-07T00:60:00Z",
+            "2026-09-07T00:00:61Z",
+        ] {
+            assert_eq!(
+                Timestamp::parse(text),
+                None,
+                "{text} was read as an instant"
+            );
+        }
+
+        // A leap second is a real time of day, and 23:59:60 is how it is
+        // spelled.
+        assert!(Timestamp::parse("2016-12-31T23:59:60Z").is_some());
     }
 
     #[test]

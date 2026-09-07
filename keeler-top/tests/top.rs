@@ -1278,6 +1278,28 @@ fn fold_line() -> impl proptest::prelude::Strategy<Value = String> {
             text("…"),
         )),
         "m[0-9]".prop_map(|id| record(Some("toolu_1"), &id, Some(input_usage(900_000)), text("…"))),
+        // A record stamped with whatever a garbled stream might hold. The
+        // clock has to answer for those too: a year of twenty digits
+        // multiplied into seconds is the shape that took the board down
+        // before the ranges went in.
+        "[0-9]{0,20}(-[0-9]{0,4}){0,3}[T ]?[0-9]{0,20}(:[0-9]{0,20}){0,3}Z?".prop_map(|stamp| {
+            restamped(
+                &stamp,
+                &stamped_tool_use(
+                    "toolu_1",
+                    "Bash",
+                    serde_json::json!({ "command": "just dev" }),
+                ),
+            )
+        }),
         "[^\n]{0,12}",
     ]
+}
+
+/// The same record with some other stamp.
+fn restamped(stamp: &str, line: &str) -> String {
+    let mut record: serde_json::Value =
+        serde_json::from_str(line).expect("the fixture's own record is not JSON");
+    record["timestamp"] = serde_json::Value::String(stamp.to_string());
+    record.to_string()
 }
