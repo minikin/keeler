@@ -23,6 +23,32 @@ fn assistant(id: &str) -> String {
     format!(r#"{{"type":"assistant","parent_tool_use_id":null,"message":{{"id":"{id}"}}}}"#)
 }
 
+/// A directory of this test's own, under whatever the machine calls
+/// temporary.
+///
+/// The test's name and the process id are not enough between them. A
+/// mutation run is 361 mutants of these 165 tests, four at a time, and
+/// nextest gives every test a process of its own: tens of thousands of
+/// processes in five minutes, which is enough for the pid space to come
+/// round, and every fixture below opens by removing whatever is at its
+/// path. Two live runs of one test on one name is not two tests sharing a
+/// directory — it is one of them deleting the other's files halfway
+/// through, which is a failing gate nobody can reproduce. The instant this
+/// process started, and a serial that only goes up, are what the pid is
+/// missing.
+fn fixture_dir(name: &str) -> std::path::PathBuf {
+    static SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let started = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "keeler-top-{name}-{}-{started}-{}",
+        std::process::id(),
+        SERIAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+    ))
+}
+
 /// A stream file in its own directory, removed on drop. Named after the
 /// test that owns it, so two tests never share one.
 struct Stream {
@@ -32,7 +58,7 @@ struct Stream {
 
 impl Stream {
     fn new(name: &str) -> Self {
-        let dir = std::env::temp_dir().join(format!("keeler-top-{name}-{}", std::process::id()));
+        let dir = fixture_dir(name);
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("t1.stream");
@@ -378,7 +404,7 @@ struct Project(PathBuf);
 
 impl Project {
     fn new(name: &str) -> Self {
-        let dir = std::env::temp_dir().join(format!("keeler-top-{name}-{}", std::process::id()));
+        let dir = fixture_dir(name);
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("repo")).unwrap();
         let project = Self(dir);
@@ -1684,7 +1710,7 @@ struct Runfiles(std::path::PathBuf);
 
 impl Runfiles {
     fn new(name: &str) -> Self {
-        let dir = std::env::temp_dir().join(format!("keeler-top-{name}-{}", std::process::id()));
+        let dir = fixture_dir(name);
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         Self(dir)
@@ -1808,7 +1834,7 @@ fn stub_plugin(at: &Path, report: &str, graph: &str) {
 #[test]
 fn outside_a_git_repository_the_board_refuses_with_keeler_statuss_words() {
     // Given a directory that is not a git repository
-    let outside = std::env::temp_dir().join(format!("keeler-top-outside-{}", std::process::id()));
+    let outside = fixture_dir("outside");
     let _ = std::fs::remove_dir_all(&outside);
     std::fs::create_dir_all(&outside).unwrap();
 

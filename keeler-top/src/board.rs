@@ -448,8 +448,7 @@ mod tests {
 
     impl Runfiles {
         fn new(name: &str) -> Self {
-            let dir =
-                std::env::temp_dir().join(format!("keeler-top-unit-{name}-{}", std::process::id()));
+            let dir = crate::fixture_dir(name);
             let _ = std::fs::remove_dir_all(&dir);
             std::fs::create_dir_all(&dir).unwrap();
             Self(dir)
