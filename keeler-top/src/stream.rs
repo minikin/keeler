@@ -35,7 +35,8 @@ pub enum Record {
     /// so every `user` record in the stream is one of these.
     ToolResult(serde_json::Value),
     /// A record the board does not read — a `result`, a system record that
-    /// is not the init one, anything a later version of the CLI adds.
+    /// is not the init one, anything a later version of the CLI adds, and
+    /// anything a subagent said.
     Other,
 }
 
@@ -65,9 +66,20 @@ enum Wire {
         model: String,
     },
     #[serde(rename = "assistant")]
-    Assistant { message: serde_json::Value },
+    Assistant {
+        message: serde_json::Value,
+        // The one field that tells a subagent's record from the main
+        // session's, and it is here rather than in `message`: it is the
+        // record that belongs to a `Task` call, not the message.
+        #[serde(default)]
+        parent_tool_use_id: Option<String>,
+    },
     #[serde(rename = "user")]
-    User { message: serde_json::Value },
+    User {
+        message: serde_json::Value,
+        #[serde(default)]
+        parent_tool_use_id: Option<String>,
+    },
     #[serde(other)]
     Other,
 }
@@ -76,9 +88,25 @@ impl From<Wire> for Record {
     fn from(wire: Wire) -> Self {
         match wire {
             Wire::System { subtype, model } if subtype == "init" => Self::Init { model },
-            Wire::Assistant { message } => Self::Assistant(message),
-            Wire::User { message } => Self::ToolResult(message),
-            Wire::System { .. } | Wire::Other => Self::Other,
+            // The main session's own account of itself, and only it. A run
+            // spawns subagents, and their records share the stream with
+            // `parent_tool_use_id` set — a third of t10's, on the run this
+            // spec was written against. Matching the null here rather than
+            // filtering in the fold is what makes "only the main session
+            // counts" true of every column at once, instead of a rule the
+            // stage, the tool, the texts and the usage each remember
+            // separately.
+            Wire::Assistant {
+                message,
+                parent_tool_use_id: None,
+            } => Self::Assistant(message),
+            Wire::User {
+                message,
+                parent_tool_use_id: None,
+            } => Self::ToolResult(message),
+            Wire::System { .. } | Wire::Assistant { .. } | Wire::User { .. } | Wire::Other => {
+                Self::Other
+            }
         }
     }
 }

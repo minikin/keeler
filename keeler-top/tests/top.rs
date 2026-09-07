@@ -309,7 +309,7 @@ const WORKTREE: &str = "/Users/k/GitHub/keeler-01-foo-t1";
 /// it: one record per content block, `parent_tool_use_id` null for the
 /// session the board is watching.
 fn tool_use(name: &str, input: serde_json::Value) -> String {
-    tool_use_under(serde_json::Value::Null, name, input)
+    tool_use_under(None, name, input)
 }
 
 /// The same call made by a subagent. The one thing telling it from the
@@ -317,19 +317,22 @@ fn tool_use(name: &str, input: serde_json::Value) -> String {
 /// started it — and which sits at the top level of the record, not inside
 /// its message.
 fn subagent_tool_use(name: &str, input: serde_json::Value) -> String {
-    tool_use_under(serde_json::json!("toolu_the_task_call"), name, input)
+    tool_use_under(Some("toolu_the_task_call"), name, input)
 }
 
-fn tool_use_under(parent: serde_json::Value, name: &str, input: serde_json::Value) -> String {
-    serde_json::json!({
+fn tool_use_under(parent: Option<&str>, name: &str, input: serde_json::Value) -> String {
+    let mut record = serde_json::json!({
         "type": "assistant",
         "parent_tool_use_id": parent,
         "message": {
             "id": "m1",
-            "content": [{ "type": "tool_use", "id": "toolu_1", "name": name, "input": input }],
+            "content": [{ "type": "tool_use", "id": "toolu_1", "name": name }],
         },
-    })
-    .to_string()
+    });
+    // Placed rather than written into the literal above: `json!` borrows
+    // every value handed to it, and `input` is owned here to be spent.
+    record["message"]["content"][0]["input"] = input;
+    record.to_string()
 }
 
 /// An absolute path inside T1's worktree, the way the stream spells one.
@@ -366,8 +369,14 @@ fn before_any_signal_the_stage_is_reading() {
     // Given T1's stream holds an init record and Read tool calls only
     let lines = vec![
         INIT.to_string(),
-        tool_use("Read", serde_json::json!({ "file_path": in_worktree("keeler.md") })),
-        tool_use("Read", serde_json::json!({ "file_path": in_worktree("tests/top.rs") })),
+        tool_use(
+            "Read",
+            serde_json::json!({ "file_path": in_worktree("keeler.md") }),
+        ),
+        tool_use(
+            "Read",
+            serde_json::json!({ "file_path": in_worktree("tests/top.rs") }),
+        ),
     ];
 
     // When the board renders
@@ -381,7 +390,10 @@ fn an_edit_under_tests_moves_the_stage_to_tdd() {
     // Given T1's stream holds an Edit tool_use on tests/top.rs
     let lines = vec![
         INIT.to_string(),
-        tool_use("Edit", serde_json::json!({ "file_path": in_worktree("tests/top.rs") })),
+        tool_use(
+            "Edit",
+            serde_json::json!({ "file_path": in_worktree("tests/top.rs") }),
+        ),
     ];
 
     // When the board renders
@@ -394,7 +406,10 @@ fn a_gate_recipe_moves_the_stage_to_qa() {
     // Given T1's stream holds a Bash tool_use with command "just dev 2>&1 | tail -35"
     let lines = vec![
         INIT.to_string(),
-        tool_use("Bash", serde_json::json!({ "command": "just dev 2>&1 | tail -35" })),
+        tool_use(
+            "Bash",
+            serde_json::json!({ "command": "just dev 2>&1 | tail -35" }),
+        ),
     ];
 
     // When the board renders
@@ -430,7 +445,10 @@ fn a_mutants_command_means_mutants() {
     // Given T1's stream holds a Bash tool_use with command "just mutants-diff main"
     let lines = vec![
         INIT.to_string(),
-        tool_use("Bash", serde_json::json!({ "command": "just mutants-diff main" })),
+        tool_use(
+            "Bash",
+            serde_json::json!({ "command": "just mutants-diff main" }),
+        ),
     ];
 
     // When the board renders
@@ -443,7 +461,10 @@ fn a_keeler_branch_command_sets_the_stage_to_gate() {
     // Given T1's stream holds a Bash tool_use whose command starts with "just keeler-branch"
     let lines = vec![
         INIT.to_string(),
-        tool_use("Bash", serde_json::json!({ "command": "just keeler-branch 2>&1 | tail -40" })),
+        tool_use(
+            "Bash",
+            serde_json::json!({ "command": "just keeler-branch 2>&1 | tail -40" }),
+        ),
     ];
 
     // When the board renders
@@ -500,7 +521,10 @@ fn a_task_with_an_exit_file_shows_ended_as_its_stage() {
         "stage-ended-passed",
         &[
             INIT.to_string(),
-            tool_use("Bash", serde_json::json!({ "command": "just keeler-branch" })),
+            tool_use(
+                "Bash",
+                serde_json::json!({ "command": "just keeler-branch" }),
+            ),
         ],
     );
     passed.ended();
@@ -512,7 +536,10 @@ fn a_task_with_an_exit_file_shows_ended_as_its_stage() {
         "stage-ended-failed",
         &[
             INIT.to_string(),
-            tool_use("Edit", serde_json::json!({ "file_path": in_worktree("src/lib.rs") })),
+            tool_use(
+                "Edit",
+                serde_json::json!({ "file_path": in_worktree("src/lib.rs") }),
+            ),
         ],
     );
     failed.ended();
@@ -528,7 +555,10 @@ fn an_edit_outside_the_worktree_is_not_tdd() {
     // Given T1's stream holds a Write tool_use on /tmp/probe/src/lib.rs and nothing else
     let lines = vec![
         INIT.to_string(),
-        tool_use("Write", serde_json::json!({ "file_path": "/tmp/probe/src/lib.rs" })),
+        tool_use(
+            "Write",
+            serde_json::json!({ "file_path": "/tmp/probe/src/lib.rs" }),
+        ),
     ];
 
     // When the board renders
@@ -543,7 +573,10 @@ fn an_edit_to_the_worktrees_justfile_is_tdd() {
     // knew only src/ and tests/ would have shown "reading" throughout.
     let lines = vec![
         INIT.to_string(),
-        tool_use("Edit", serde_json::json!({ "file_path": in_worktree("Justfile") })),
+        tool_use(
+            "Edit",
+            serde_json::json!({ "file_path": in_worktree("Justfile") }),
+        ),
     ];
 
     // When the board renders
@@ -556,7 +589,10 @@ fn a_command_that_merely_mentions_mutants_is_not_the_mutants_stage() {
     // Given T1's stream holds a Bash tool_use with command "grep -c mutants mutants.out"
     let lines = vec![
         INIT.to_string(),
-        tool_use("Bash", serde_json::json!({ "command": "grep -c mutants mutants.out" })),
+        tool_use(
+            "Bash",
+            serde_json::json!({ "command": "grep -c mutants mutants.out" }),
+        ),
     ];
 
     // When the board renders
@@ -569,7 +605,10 @@ fn crap_delta_is_qa() {
     // Given T1's stream holds a Bash tool_use with command "keeler crap-delta"
     let lines = vec![
         INIT.to_string(),
-        tool_use("Bash", serde_json::json!({ "command": "keeler crap-delta" })),
+        tool_use(
+            "Bash",
+            serde_json::json!({ "command": "keeler crap-delta" }),
+        ),
     ];
 
     // When the board renders
@@ -633,7 +672,10 @@ fn stage_signal() -> impl proptest::prelude::Strategy<Value = (String, Stage)> {
     use proptest::prelude::{Just, prop_oneof};
     prop_oneof![
         Just((
-            tool_use("Edit", serde_json::json!({ "file_path": in_worktree("src/run.rs") })),
+            tool_use(
+                "Edit",
+                serde_json::json!({ "file_path": in_worktree("src/run.rs") })
+            ),
             Stage::Tdd,
         )),
         Just((
@@ -645,23 +687,38 @@ fn stage_signal() -> impl proptest::prelude::Strategy<Value = (String, Stage)> {
             Stage::Review,
         )),
         Just((
-            tool_use("Bash", serde_json::json!({ "command": "just mutants-diff main" })),
+            tool_use(
+                "Bash",
+                serde_json::json!({ "command": "just mutants-diff main" })
+            ),
             Stage::Mutants,
         )),
         Just((
-            tool_use("Bash", serde_json::json!({ "command": "just keeler-branch" })),
+            tool_use(
+                "Bash",
+                serde_json::json!({ "command": "just keeler-branch" })
+            ),
             Stage::Gate,
         )),
         Just((
-            tool_use("Read", serde_json::json!({ "file_path": in_worktree("keeler.md") })),
+            tool_use(
+                "Read",
+                serde_json::json!({ "file_path": in_worktree("keeler.md") })
+            ),
             Stage::Reading,
         )),
         Just((
-            tool_use("Write", serde_json::json!({ "file_path": "/tmp/probe/src/lib.rs" })),
+            tool_use(
+                "Write",
+                serde_json::json!({ "file_path": "/tmp/probe/src/lib.rs" })
+            ),
             Stage::Reading,
         )),
         Just((
-            subagent_tool_use("Bash", serde_json::json!({ "command": "just keeler-branch" })),
+            subagent_tool_use(
+                "Bash",
+                serde_json::json!({ "command": "just keeler-branch" })
+            ),
             Stage::Reading,
         )),
         Just(("not a record at all".to_string(), Stage::Reading)),

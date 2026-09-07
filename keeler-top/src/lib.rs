@@ -4,4 +4,5 @@
 //! unit tests, property tests and cargo-mutants can reach them without a
 //! terminal and without an agent.
 
+pub mod run;
 pub mod stream;
