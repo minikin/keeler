@@ -64,6 +64,8 @@ enum Wire {
         // far more than any column cares about the name.
         #[serde(default)]
         model: String,
+        #[serde(default)]
+        parent_tool_use_id: Option<String>,
     },
     #[serde(rename = "assistant")]
     Assistant {
@@ -87,15 +89,19 @@ enum Wire {
 impl From<Wire> for Record {
     fn from(wire: Wire) -> Self {
         match wire {
-            Wire::System { subtype, model } if subtype == "init" => Self::Init { model },
             // The main session's own account of itself, and only it. A run
             // spawns subagents, and their records share the stream with
             // `parent_tool_use_id` set — a third of t10's, on the run this
             // spec was written against. Matching the null here rather than
             // filtering in the fold is what makes "only the main session
-            // counts" true of every column at once, instead of a rule the
-            // stage, the tool, the texts and the usage each remember
-            // separately.
+            // counts" true of every record shape at once, instead of a rule
+            // the stage, the tool, the texts, the usage and the restart
+            // signal each remember separately.
+            Wire::System {
+                subtype,
+                model,
+                parent_tool_use_id: None,
+            } if subtype == "init" => Self::Init { model },
             Wire::Assistant {
                 message,
                 parent_tool_use_id: None,
@@ -437,6 +443,16 @@ mod tests {
             super::parse_line(br#"{"type":"assistant","parent_tool_use_id":null,"message":{}}"#),
             Some(Record::Assistant(serde_json::json!({}))),
             "an explicit null parent is the main session, not a subagent",
+        );
+        // The init record most of all. One per run is what makes a second
+        // one the sign of a resume, so an init a subagent brought with it
+        // would rewind the reader and wipe a live view mid-run — the one
+        // record where reading a subagent's is worse than useless.
+        assert_eq!(
+            super::parse_line(
+                br#"{"type":"system","subtype":"init","model":"m","parent_tool_use_id":"toolu_1"}"#
+            ),
+            Some(Record::Other),
         );
     }
 
