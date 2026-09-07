@@ -450,20 +450,26 @@ impl RunView {
         });
     }
 
-    /// One of the run's own lines, with the oldest dropped once there are
-    /// more than the pane shows.
+    /// One of the run's own lines, with the oldest dropped once the pane is
+    /// full.
     ///
     /// A blank one is not a line. The CLI writes a text block beside a tool
     /// call whether or not the turn said anything, so five empty ones in a
     /// row would leave the pane holding nothing the run ever said.
+    ///
+    /// Room is made before the line goes in rather than trimmed after, and
+    /// without a loop: the mutation gate showed what a loop costs here, as
+    /// it did for the reader's line-splitting in T1. Every slip in a
+    /// `while len > 5 { pop }` is an infinite loop rather than a wrong
+    /// answer, and a test suite can only report that as a hang.
     fn remember(&mut self, text: &str) {
         if text.trim().is_empty() {
             return;
         }
-        self.texts.push_back(text.to_string());
-        while self.texts.len() > TEXTS_KEPT {
+        if self.texts.len() == TEXTS_KEPT {
             self.texts.pop_front();
         }
+        self.texts.push_back(text.to_string());
     }
 
     /// The one way the stage ever changes.
