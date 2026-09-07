@@ -23,6 +23,32 @@ fn assistant(id: &str) -> String {
     format!(r#"{{"type":"assistant","parent_tool_use_id":null,"message":{{"id":"{id}"}}}}"#)
 }
 
+/// A directory of this test's own, under whatever the machine calls
+/// temporary.
+///
+/// The test's name and the process id are not enough between them. A
+/// mutation run is 361 mutants of these 165 tests, four at a time, and
+/// nextest gives every test a process of its own: tens of thousands of
+/// processes in five minutes, which is enough for the pid space to come
+/// round, and every fixture below opens by removing whatever is at its
+/// path. Two live runs of one test on one name is not two tests sharing a
+/// directory — it is one of them deleting the other's files halfway
+/// through, which is a failing gate nobody can reproduce. The instant this
+/// process started, and a serial that only goes up, are what the pid is
+/// missing.
+fn fixture_dir(name: &str) -> std::path::PathBuf {
+    static SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let started = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "keeler-top-{name}-{}-{started}-{}",
+        std::process::id(),
+        SERIAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+    ))
+}
+
 /// A stream file in its own directory, removed on drop. Named after the
 /// test that owns it, so two tests never share one.
 struct Stream {
@@ -32,7 +58,7 @@ struct Stream {
 
 impl Stream {
     fn new(name: &str) -> Self {
-        let dir = std::env::temp_dir().join(format!("keeler-top-{name}-{}", std::process::id()));
+        let dir = fixture_dir(name);
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("t1.stream");
@@ -378,7 +404,7 @@ struct Project(PathBuf);
 
 impl Project {
     fn new(name: &str) -> Self {
-        let dir = std::env::temp_dir().join(format!("keeler-top-{name}-{}", std::process::id()));
+        let dir = fixture_dir(name);
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("repo")).unwrap();
         let project = Self(dir);
@@ -1661,4 +1687,673 @@ fn restamped(stamp: &str, line: &str) -> String {
         serde_json::from_str(line).expect("the fixture's own record is not JSON");
     record["timestamp"] = serde_json::Value::String(stamp.to_string());
     record.to_string()
+}
+
+// ── T5
+
+use keeler_top::board::{Board, Runs};
+use keeler_top::frame::{cells, detail, layout, render};
+use ratatui::Terminal;
+use ratatui::backend::TestBackend;
+use ratatui::layout::Rect;
+
+/// The clock every frame below is drawn against. Fixed rather than
+/// `Timestamp::now()`: the elapsed and age columns are differences, and a
+/// test that read the machine's clock would assert on a number that
+/// changes between the two lines that produce it.
+const NOON: &str = "2026-09-07T12:00:00.000Z";
+
+/// The run files keeler-status's report points at: a `<tid>.stream` the
+/// board reads, and the `<tid>.log` path the report actually names — the
+/// board finds the one from the other, so the fixture hands out the log.
+struct Runfiles(std::path::PathBuf);
+
+impl Runfiles {
+    fn new(name: &str) -> Self {
+        let dir = fixture_dir(name);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        Self(dir)
+    }
+
+    /// The log path for a task, whether or not anything was written beside
+    /// it — a report names one for every state that has a run.
+    fn log(&self, tid: &str) -> String {
+        self.0.join(format!("{tid}.log")).display().to_string()
+    }
+
+    /// Writes a task's stream and gives back the log path the report names.
+    fn stream(&self, tid: &str, lines: &[String]) -> String {
+        let mut body = lines.join("\n");
+        body.push('\n');
+        std::fs::write(self.0.join(format!("{tid}.stream")), body).unwrap();
+        self.log(tid)
+    }
+}
+
+impl Drop for Runfiles {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// A report the recipe could have printed: the header it opens with, and
+/// the lines a scenario describes under it.
+fn report(lines: &[String]) -> String {
+    let mut report = "graph: specs/01-foo.md on feat/01-foo\n".to_string();
+    report.push_str(&lines.join("\n"));
+    report.push('\n');
+    report
+}
+
+/// One tick's board, assembled as the binary assembles one: the report
+/// keeler-status printed, the graph script's answer beside it, and
+/// whatever is on disk under the paths the report names.
+fn assemble(report: &str, graph: &str, answered: &str) -> Board {
+    let status =
+        keeler_top::status::parse(report).expect("the fixture's report opens with a header");
+    Board::assemble(
+        &status,
+        &keeler_top::graph::parse(graph),
+        &mut Runs::default(),
+        now(answered),
+    )
+}
+
+/// A frame, drawn on a terminal of the given size and read back as lines
+/// of text with the trailing blanks cut.
+fn drawn(board: &Board, width: u16, height: u16) -> Vec<String> {
+    let mut terminal =
+        Terminal::new(TestBackend::new(width, height)).expect("a terminal to draw on");
+    terminal
+        .draw(|frame| render(frame, board, now(NOON)))
+        .expect("the board drew a frame");
+    let buffer = terminal.backend().buffer().clone();
+    (0..height)
+        .map(|y| {
+            (0..width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+                .trim_end()
+                .to_string()
+        })
+        .collect()
+}
+
+/// The drawn line that begins with a task's id, or the whole frame in the
+/// failure message — a row that is missing is the thing most of these
+/// tests are about.
+fn row_of<'a>(frame: &'a [String], id: &str) -> &'a str {
+    frame
+        .iter()
+        .find(|line| line.starts_with(&format!("{id} ")))
+        .unwrap_or_else(|| panic!("no row for {id} in:\n{}", frame.join("\n")))
+}
+
+/// The board's binary, run the way `keeler keeler-top` runs it: the plugin
+/// tree it shells back to, the project it is watching, and the flags and
+/// spec after them.
+fn keeler_top(plugin: &Path, root: &Path, args: &[&str]) -> std::process::Output {
+    std::process::Command::new(env!("CARGO_BIN_EXE_keeler-top"))
+        .arg("--plugin-root")
+        .arg(plugin)
+        .arg("--root")
+        .arg(root)
+        .args(args)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .output()
+        .expect("failed to run the keeler-top binary")
+}
+
+/// A plugin tree of the fixture's own: a `keeler-status` recipe printing
+/// the report a scenario describes, and the graph script beside it.
+///
+/// The two refusal scenarios use the real plugin, because there the
+/// recipe's own words are the answer. A frame is not: it is a reading of
+/// whatever report arrives, and the states a live wave produces —
+/// `running`, `died`, `failed (exit 1)` — need a tmux session and four
+/// spawned agents to produce. The recipe's format is pinned against the
+/// recipe itself, by the round-trip property in `status.rs`.
+fn stub_plugin(at: &Path, report: &str, graph: &str) {
+    write(at, "report", report);
+    write(at, "graph", graph);
+    write(
+        at,
+        "Justfile",
+        "keeler-status SPEC:\n    #!/usr/bin/env bash\n    \
+         cat \"{{justfile_directory()}}/report\"\n",
+    );
+    write(
+        at,
+        "scripts/keeler-graph.sh",
+        "#!/usr/bin/env bash\ncat \"$(dirname \"$0\")/../graph\"\n",
+    );
+}
+
+#[test]
+fn outside_a_git_repository_the_board_refuses_with_keeler_statuss_words() {
+    // Given a directory that is not a git repository
+    let outside = fixture_dir("outside");
+    let _ = std::fs::remove_dir_all(&outside);
+    std::fs::create_dir_all(&outside).unwrap();
+
+    // When the user runs `keeler-top specs/01-foo.md`
+    let output = keeler_top(&plugin_root(), &outside, &["--once", "specs/01-foo.md"]);
+    let _ = std::fs::remove_dir_all(&outside);
+
+    // Then it exits 1
+    assert!(
+        !output.status.success(),
+        "the board drew a board it had not"
+    );
+    // And stderr carries the reason keeler-status gave
+    let said = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        said.contains("graph mode needs a git repository"),
+        "the recipe's own reason did not reach the board:\n{said}",
+    );
+}
+
+#[test]
+fn a_spec_not_committed_on_the_feature_branch_is_refused() {
+    // Given specs/01-foo.md exists in the working tree but is not committed
+    // on feat/01-foo or HEAD
+    let project = Project::new("not-committed");
+    commit(
+        &project.root(),
+        "README.md",
+        "a project\n",
+        "docs: the first commit",
+    );
+    git(&project.root(), &["checkout", "-qb", "feat/01-foo"]);
+    write(&project.root(), "specs/01-foo.md", &spec_text(false));
+
+    // When the user runs `keeler-top specs/01-foo.md`
+    let output = keeler_top(
+        &plugin_root(),
+        &project.root(),
+        &["--once", "specs/01-foo.md"],
+    );
+
+    // Then it exits 1
+    assert!(!output.status.success(), "an uncommitted spec drew a board");
+    // And stderr says the spec is not committed on the ref the board reads
+    let said = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        said.contains("specs/01-foo.md is not committed on feat/01-foo"),
+        "the refusal names neither the spec nor the ref:\n{said}",
+    );
+}
+
+#[test]
+fn once_prints_one_frame_as_a_table_and_exits() {
+    // Given a spec whose T1 is running and T2 is not spawned
+    let project = Project::new("once");
+    project.with_spec_on_the_feature_branch();
+    let runfiles = Runfiles::new("once-runs");
+    let plugin = project.0.join("plugin");
+    stub_plugin(
+        &plugin,
+        &format!(
+            "graph: specs/01-foo.md on feat/01-foo\n\
+             T1     running          log {}  worktree /nowhere\n\
+             T2     not spawned\n",
+            runfiles.stream(
+                "t1",
+                &[
+                    INIT.to_string(),
+                    stamped_tool_use(
+                        "toolu_1",
+                        "Bash",
+                        serde_json::json!({"command": "just dev"})
+                    ),
+                ],
+            ),
+        ),
+        "T1 ready\nT2 blocked T1\n",
+    );
+
+    // When the user runs `keeler-top --once specs/01-foo.md`
+    let output = keeler_top(&plugin, &project.root(), &["--once", "specs/01-foo.md"]);
+
+    // Then stdout is a plain table with a header line and one row per task
+    assert!(
+        output.status.success(),
+        "the board refused:\n{}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let shown = String::from_utf8_lossy(&output.stdout);
+    let lines: Vec<&str> = shown.lines().collect();
+    assert_eq!(lines.len(), 3, "not a heading and two rows:\n{shown}");
+    assert!(lines[0].starts_with("TASK"), "no heading line:\n{shown}");
+    assert!(lines[1].starts_with("T1 "), "no row for T1:\n{shown}");
+    assert!(
+        lines[1].contains("running"),
+        "T1's state is missing:\n{shown}"
+    );
+    assert!(lines[2].starts_with("T2 "), "no row for T2:\n{shown}");
+
+    // And the process exits 0 without entering the alternate screen
+    assert!(
+        !shown.contains('\u{1b}'),
+        "the plain frame carried terminal escapes:\n{shown:?}",
+    );
+}
+
+#[test]
+fn without_a_terminal_the_board_refuses_and_names_once() {
+    // Given stdout is a pipe and --once was not given
+    let project = Project::new("no-terminal");
+    project.with_spec_on_the_feature_branch();
+    let plugin = project.0.join("plugin");
+    stub_plugin(
+        &plugin,
+        "graph: specs/01-foo.md on feat/01-foo\nT1     not spawned\nT2     not spawned\n",
+        "T1 ready\nT2 blocked T1\n",
+    );
+
+    // When the user runs `keeler-top specs/01-foo.md`
+    let output = keeler_top(&plugin, &project.root(), &["specs/01-foo.md"]);
+
+    // Then it exits 1
+    assert!(!output.status.success(), "a pipe was drawn a live board");
+    // And stderr says the board needs a terminal, and that --once prints one frame
+    let said = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        said.contains("terminal") && said.contains("--once"),
+        "the refusal names neither the terminal nor the way out:\n{said}",
+    );
+}
+
+#[test]
+fn the_header_names_the_ref_keeler_status_answered_from_and_the_age_of_that_answer() {
+    // Given keeler-status printed "graph: specs/01-foo.md on feat/01-foo"
+    // four seconds ago
+    let board = assemble(
+        "graph: specs/01-foo.md on feat/01-foo\nT1     not spawned\n",
+        "T1 ready\n",
+        "2026-09-07T11:59:56.000Z",
+    );
+
+    // When the board renders
+    let frame = drawn(&board, 100, 12);
+
+    // Then the header reads "specs/01-foo.md on feat/01-foo" and "status 4s ago"
+    assert!(
+        frame[0].contains("specs/01-foo.md on feat/01-foo") && frame[0].contains("status 4s ago"),
+        "the header names neither the ref nor the age: {:?}",
+        frame[0],
+    );
+}
+
+#[test]
+fn every_task_in_the_graph_has_a_row_in_spec_order() {
+    // Given a spec with tasks T1..T5
+    let lines: Vec<String> = (1..=5)
+        .map(|task| format!("T{task}     not spawned"))
+        .collect();
+    let board = assemble(&report(&lines), "T1 ready\n", NOON);
+
+    // When the board renders
+    let frame = drawn(&board, 100, 20);
+
+    // Then it shows five rows, T1 first and T5 last
+    let heading = frame
+        .iter()
+        .position(|line| line.starts_with("TASK"))
+        .expect("the table has a heading line");
+    let rows = &frame[heading + 1..=heading + 5];
+    for (index, task) in (1..=5).enumerate() {
+        assert!(
+            rows[index].starts_with(&format!("T{task} ")),
+            "the rows are not in spec order:\n{}",
+            frame.join("\n"),
+        );
+    }
+    assert_eq!(
+        board
+            .rows
+            .iter()
+            .map(|row| row.id.as_str())
+            .collect::<Vec<_>>(),
+        ["T1", "T2", "T3", "T4", "T5"],
+    );
+}
+
+#[test]
+fn the_state_column_is_keeler_statuss_word_for_the_task() {
+    // Given keeler-status reports T1 running, T2 died, T3 passed, T4
+    // incomplete (no review record), T5 failed (exit 1)
+    let runfiles = Runfiles::new("states");
+    let states = [
+        ("T1", "running"),
+        ("T2", "died"),
+        ("T3", "passed"),
+        ("T4", "incomplete (no review record)"),
+        ("T5", "failed (exit 1)"),
+    ];
+    let lines: Vec<String> = states
+        .iter()
+        .map(|(id, state)| {
+            format!(
+                "{id:<6} {state:<16} log {}  worktree /nowhere",
+                runfiles.log(&id.to_lowercase()),
+            )
+        })
+        .collect();
+    let board = assemble(&report(&lines), "T1 ready\n", NOON);
+
+    // When the board renders
+    let frame = drawn(&board, 140, 20);
+
+    // Then each row's state column shows exactly that word, with
+    // incomplete's reason and failed's exit code kept
+    for (index, (id, state)) in states.into_iter().enumerate() {
+        assert_eq!(board.rows[index].state, state);
+        assert!(
+            row_of(&frame, id).contains(state),
+            "{id}'s state was cut: {:?}",
+            row_of(&frame, id),
+        );
+    }
+}
+
+#[test]
+fn a_not_spawned_task_the_graph_holds_reads_blocked_with_its_needs() {
+    // Given keeler-status reports T3 not spawned and keeler-graph.sh
+    // reports "T3 blocked T1 T2"
+    let board = assemble(
+        "graph: specs/01-foo.md on feat/01-foo\nT3     not spawned\n",
+        "T3 blocked T1 T2\n",
+        NOON,
+    );
+
+    // When the board renders
+    // Then T3's state column reads "blocked ← T1, T2"
+    assert_eq!(board.rows[0].state, "blocked ← T1, T2");
+    assert!(
+        row_of(&drawn(&board, 100, 12), "T3").contains("blocked ← T1, T2"),
+        "the graph's word did not reach the column",
+    );
+}
+
+#[test]
+fn a_not_spawned_task_the_graph_calls_ready_reads_ready() {
+    // Given keeler-status reports T1 not spawned and keeler-graph.sh
+    // reports "T1 ready"
+    let board = assemble(
+        "graph: specs/01-foo.md on feat/01-foo\nT1     not spawned\n",
+        "T1 ready\n",
+        NOON,
+    );
+
+    // When the board renders
+    // Then T1's state column reads "ready"
+    assert_eq!(board.rows[0].state, "ready");
+    assert!(row_of(&drawn(&board, 100, 12), "T1").contains("ready"));
+}
+
+#[test]
+fn a_done_task_with_no_worktree_shows_dashes_for_the_live_columns() {
+    // Given T1 is done and ../<repo>-01-foo-t1 no longer exists
+    let board = assemble(
+        "graph: specs/01-foo.md on feat/01-foo\nT1     done\n",
+        "T1 done\n",
+        NOON,
+    );
+
+    // When the board renders
+    // Then T1's state is done
+    assert_eq!(board.rows[0].state, "done");
+
+    // And its stage, tool, context, tokens and commit columns show "—"
+    let cells = cells(&board.rows[0], now(NOON));
+    for column in [2, 3, 5, 6, 8] {
+        assert_eq!(cells[column], "—", "column {column} of {cells:?}");
+    }
+}
+
+#[test]
+fn a_landed_feature_whose_branch_is_gone_still_renders() {
+    // Given feat/01-foo no longer exists and keeler-status answers from HEAD
+    let board = assemble(
+        "graph: specs/01-foo.md on HEAD\nT1     done\nT2     done\n",
+        "T1 done\nT2 done\n",
+        NOON,
+    );
+
+    // When the board renders
+    let frame = drawn(&board, 100, 16);
+
+    // Then every row is shown and the commit column reads "—" for each
+    for (index, id) in ["T1", "T2"].into_iter().enumerate() {
+        assert!(row_of(&frame, id).ends_with('—'), "{id} named a commit");
+        assert_eq!(cells(&board.rows[index], now(NOON))[8], "—");
+    }
+
+    // And the header names HEAD as the ref
+    assert!(
+        frame[0].contains("specs/01-foo.md on HEAD"),
+        "the header does not name the ref: {:?}",
+        frame[0],
+    );
+}
+
+#[test]
+fn a_long_command_is_cut_to_the_column_with_an_ellipsis() {
+    // Given the last command is longer than the tool column
+    let runfiles = Runfiles::new("long-command");
+    let command = format!("just dev 2>&1 | tail -35 {}", "#".repeat(64));
+    let log = runfiles.stream(
+        "t1",
+        &[
+            INIT.to_string(),
+            stamped_tool_use(
+                "toolu_1",
+                "Bash",
+                serde_json::json!({ "command": command.clone() }),
+            ),
+        ],
+    );
+    let board = assemble(
+        &format!(
+            "graph: specs/01-foo.md on feat/01-foo\nT1     running          log {log}  worktree /nowhere\n"
+        ),
+        "T1 ready\n",
+        NOON,
+    );
+
+    // When the board renders
+    let frame = drawn(&board, 120, 24);
+
+    // Then the column shows its head followed by "…"
+    let row = row_of(&frame, "T1");
+    assert!(
+        row.contains("Bash: just dev 2>&1 | tail -35 #") && row.contains('…'),
+        "the command was not cut to the column: {row:?}",
+    );
+    assert!(
+        !row.contains(&command),
+        "the whole command was written into the row: {row:?}",
+    );
+
+    // And the detail pane shows it whole
+    let whole = format!("Bash: {command}");
+    assert!(
+        frame.contains(&whole),
+        "the pane did not show the command whole:\n{}",
+        frame.join("\n"),
+    );
+}
+
+#[test]
+fn the_detail_pane_shows_the_selected_tasks_last_five_texts_and_its_last_command() {
+    // Given T1's stream holds seven main-session assistant text blocks and
+    // the last tool_use is Bash "just dev"
+    let runfiles = Runfiles::new("pane-texts");
+    let mut lines = vec![INIT.to_string()];
+    for word in ["one", "two", "three", "four", "five", "six", "seven"] {
+        lines.push(record(None, "m1", None, text(word)));
+    }
+    lines.push(stamped_tool_use(
+        "toolu_1",
+        "Bash",
+        serde_json::json!({ "command": "just dev" }),
+    ));
+    let log = runfiles.stream("t1", &lines);
+    let board = assemble(
+        &format!(
+            "graph: specs/01-foo.md on feat/01-foo\nT1     running          log {log}  worktree /nowhere\n"
+        ),
+        "T1 ready\n",
+        NOON,
+    );
+
+    // When T1 is selected
+    let pane = detail(board.selected_row().expect("the first row is selected"));
+
+    // Then the pane shows the last five texts, oldest first, and the
+    // command in full
+    let texts: Vec<&String> = pane
+        .iter()
+        .filter(|line| {
+            ["one", "two", "three", "four", "five", "six", "seven"].contains(&line.as_str())
+        })
+        .collect();
+    assert_eq!(texts, ["three", "four", "five", "six", "seven"]);
+    assert!(
+        pane.contains(&"Bash: just dev".to_string()),
+        "the pane does not name the command:\n{}",
+        pane.join("\n"),
+    );
+    // And it is drawn where the pane is.
+    let frame = drawn(&board, 120, 24);
+    assert!(
+        frame.contains(&"Bash: just dev".to_string()),
+        "the pane was not drawn:\n{}",
+        frame.join("\n"),
+    );
+}
+
+#[test]
+fn the_detail_pane_lists_the_branchs_commits_since_the_feature_branch() {
+    // Given keeler/01-foo/t1 holds commits "test(01-foo): T1 red" and
+    // "feat(01-foo): T1 green" on top of feat/01-foo
+    let project = Project::new("pane-commits");
+    project.with_spec_on_the_feature_branch();
+    let worktree = project.worktree("keeler/01-foo/t1");
+    for step in ["test(01-foo): T1 red", "feat(01-foo): T1 green"] {
+        commit(&worktree, "src/t1.rs", step, step);
+    }
+    let board = assemble(
+        &format!(
+            "graph: specs/01-foo.md on feat/01-foo\nT1     running          log /nowhere/t1.log  worktree {}\n",
+            worktree.display(),
+        ),
+        "T1 ready\n",
+        NOON,
+    );
+
+    // When T1 is selected
+    let pane = detail(board.selected_row().expect("the first row is selected"));
+
+    // Then the pane lists both subjects with their short hashes, newest first
+    let listed: Vec<&String> = pane
+        .iter()
+        .filter(|line| line.contains("(01-foo): T1 "))
+        .collect();
+    assert_eq!(listed.len(), 2, "not both commits:\n{}", pane.join("\n"));
+    assert!(
+        listed[0].ends_with("feat(01-foo): T1 green")
+            && listed[1].ends_with("test(01-foo): T1 red"),
+        "the commits are not newest first:\n{}",
+        pane.join("\n"),
+    );
+    let head = git(&worktree, &["rev-parse", "HEAD"]);
+    let hash = listed[0]
+        .split_whitespace()
+        .next()
+        .expect("a commit line names a hash");
+    assert!(
+        head.starts_with(hash) && hash.len() >= 7,
+        "the hash shown is not the branch's head: {hash}",
+    );
+}
+
+#[test]
+fn a_missing_stream_file_shows_the_state_alone() {
+    // Given keeler-status says T1 died but
+    // .keeler/runs/01-foo/t1.stream does not exist
+    let runfiles = Runfiles::new("no-stream");
+    let board = assemble(
+        &format!(
+            "graph: specs/01-foo.md on feat/01-foo\nT1     died             log {}  worktree /nowhere\n",
+            runfiles.log("t1"),
+        ),
+        "T1 ready\n",
+        NOON,
+    );
+
+    // When the board renders
+    // Then T1's state is died and its live columns show "—"
+    assert_eq!(board.rows[0].state, "died");
+    assert!(
+        board.rows[0].run.is_none(),
+        "a stream that is not there was read"
+    );
+    let cells = cells(&board.rows[0], now(NOON));
+    for column in [2, 3, 5, 6, 8] {
+        assert_eq!(cells[column], "—", "column {column} of {cells:?}");
+    }
+    assert!(row_of(&drawn(&board, 100, 12), "T1").contains("died"));
+}
+
+#[test]
+fn a_narrow_terminal_drops_the_detail_pane_before_it_drops_columns() {
+    // Given a terminal 100 columns wide and 12 lines tall
+    let runfiles = Runfiles::new("narrow");
+    let lines: Vec<String> = (1..=5)
+        .map(|task| {
+            format!(
+                "T{task:<5} running          log {}  worktree /nowhere",
+                runfiles.stream(
+                    &format!("t{task}"),
+                    &[
+                        INIT.to_string(),
+                        stamped_tool_use(
+                            "toolu_1",
+                            "Bash",
+                            serde_json::json!({"command": "just dev"}),
+                        ),
+                    ],
+                ),
+            )
+        })
+        .collect();
+    let board = assemble(&report(&lines), "T1 ready\n", NOON);
+
+    // When the board renders
+    let frame = drawn(&board, 100, 12);
+
+    // Then every task row is shown with state, stage and tool
+    for task in 1..=5 {
+        let row = row_of(&frame, &format!("T{task}"));
+        assert!(
+            row.contains("running") && row.contains("qa") && row.contains("Bash: just dev"),
+            "T{task}'s row lost a column: {row:?}",
+        );
+        assert!(
+            row.chars().count() <= 100,
+            "the row runs past the window and is clipped where it stands: {row:?}",
+        );
+    }
+
+    // And the detail pane is absent
+    assert_eq!(layout(Rect::new(0, 0, 100, 12), 5).detail, None);
+    assert!(
+        !frame.iter().any(|line| line.starts_with("T1 — running")),
+        "the pane was drawn on a terminal with no room for it:\n{}",
+        frame.join("\n"),
+    );
 }
