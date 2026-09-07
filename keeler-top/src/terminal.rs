@@ -16,10 +16,28 @@
 //! guard is tested and [`Tty`] is the single implementation that touches a
 //! real one.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use ratatui::crossterm::cursor::Show;
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
+
+/// Whether the board has the screen.
+///
+/// Process-wide because the panic hook is. The hook cannot reach the guard —
+/// it is installed before one exists and outlives every one — so on a panic
+/// both of them would give the same screen back, and `ESC[?1049l` sent twice
+/// is not idempotent: the second one restores the cursor to where the last
+/// entry saved it, which is above the message the first one made room for.
+/// Whoever gets here first gives the screen back; the other finds it gone.
+static IN_SCREEN: AtomicBool = AtomicBool::new(false);
+
+/// Claims the screen back, and says whether there was one to claim.
+fn claimed() -> bool {
+    IN_SCREEN.swap(false, Ordering::SeqCst)
+}
 
 /// What entering and leaving the board's screen does.
 pub trait Screen {
@@ -72,6 +90,12 @@ impl Screen for Tty {
 /// one answered: a terminal left in raw mode because the screen switch
 /// failed is one whose shell no longer echoes what is typed into it.
 ///
+/// `Show` because `Terminal::draw` hides the cursor on every frame that sets
+/// no position, and this board sets none. Leaving the alternate screen
+/// restores where the cursor is and not whether it can be seen, so a board
+/// that did not show it again would hand back a shell whose prompt has no
+/// cursor in front of it.
+///
 /// # Errors
 ///
 /// The first refusal of the two, the other having been attempted anyway.
@@ -80,7 +104,7 @@ impl Screen for Tty {
 /// are a real terminal's, and a test process has none.
 #[cfg_attr(test, mutants::skip)]
 pub fn restore() -> std::io::Result<()> {
-    let left = execute!(std::io::stdout(), LeaveAlternateScreen);
+    let left = execute!(std::io::stdout(), LeaveAlternateScreen, Show);
     let cooked = disable_raw_mode();
     left.and(cooked)
 }
@@ -105,13 +129,16 @@ impl<S: Screen> Guard<S> {
     /// its `Drop` never runs.
     pub fn new(mut screen: S) -> std::io::Result<Self> {
         screen.enter()?;
+        IN_SCREEN.store(true, Ordering::SeqCst);
         Ok(Self { screen })
     }
 }
 
 impl<S: Screen> Drop for Guard<S> {
     fn drop(&mut self) {
-        let _ = self.screen.leave();
+        if claimed() {
+            let _ = self.screen.leave();
+        }
     }
 }
 
@@ -121,10 +148,20 @@ impl<S: Screen> Drop for Guard<S> {
 /// so the message lands on the screen the reader can still see. Chaining
 /// rather than replacing: the hook in place is the one that prints, and on a
 /// machine where somebody has installed their own it is theirs.
+///
+/// Two things it does not do. It does not restore for a panic on any other
+/// thread — `keeler-status` is read on one of its own, and a panic there is
+/// no reason to pull the screen out from under a board that is still drawing
+/// on it; that message belongs on the board. And it does not restore a
+/// screen the guard has already given back, nor leave one for the guard to
+/// give back after it: whichever of the two runs first is the one that runs.
 pub fn restore_on_panic(restore: impl Fn() + Sync + Send + 'static) {
+    let board = std::thread::current().id();
     let printed = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic| {
-        restore();
+        if std::thread::current().id() == board && claimed() {
+            restore();
+        }
         printed(panic);
     }));
 }
@@ -193,10 +230,13 @@ mod tests {
         );
     }
 
-    #[test]
-    fn the_panic_hook_restores_the_terminal_before_the_message_is_printed() {
-        // The hook is process-wide, and nextest gives every test a process
-        // of its own — which is what makes installing one here safe.
+    /// The two hooks these scenarios need: one standing in for the hook that
+    /// prints, and the board's restore chained ahead of it. Both write to
+    /// one list, so the order of everything that happens is one assertion.
+    ///
+    /// The hook is process-wide, and nextest gives every test a process of
+    /// its own — which is what makes installing one here safe.
+    fn hooked() -> Arc<Mutex<Vec<&'static str>>> {
         let order = Arc::new(Mutex::new(Vec::new()));
         let printing = Arc::clone(&order);
         std::panic::set_hook(Box::new(move |_| {
@@ -206,17 +246,72 @@ mod tests {
         restore_on_panic(move || {
             restoring.lock().expect("the order").push("restored");
         });
+        order
+    }
+
+    /// What was recorded, read out before anything is asserted about it: the
+    /// hooks above lock this list, and a failing `assert_eq!` holding the
+    /// lock would panic into a hook that waits for it — a deadlock where a
+    /// test failure should be.
+    fn seen(order: &Arc<Mutex<Vec<&'static str>>>) -> Vec<&'static str> {
+        order.lock().expect("the order").clone()
+    }
+
+    #[test]
+    fn a_screen_the_hook_gave_back_is_not_given_back_again_by_the_guard() {
+        let order = hooked();
+
+        let ended = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = Guard::new(Recorder {
+                done: Arc::clone(&order),
+                refuses: false,
+            })
+            .expect("the recorder entered");
+            panic!("the board fell over");
+        }));
+
+        assert!(ended.is_err(), "the fixture did not panic");
+        assert_eq!(
+            seen(&order),
+            ["enter", "restored", "printed"],
+            "the screen was given back twice, the second time over the message",
+        );
+    }
+
+    #[test]
+    fn a_panic_on_another_thread_leaves_the_boards_screen_alone() {
+        // `keeler-status` is read on a thread of its own. A panic there ends
+        // that read; it does not end the board, and the board is still
+        // drawing on the screen the message has to land on.
+        let order = hooked();
+        let _guard = Guard::new(Recorder {
+            done: Arc::clone(&order),
+            refuses: false,
+        })
+        .expect("the recorder entered");
+
+        let read = std::thread::spawn(|| panic!("the recipe took the thread with it"));
+
+        assert!(read.join().is_err(), "the fixture did not panic");
+        assert_eq!(
+            seen(&order),
+            ["enter", "printed"],
+            "a read that died took the board's screen with it",
+        );
+    }
+
+    #[test]
+    fn the_panic_hook_restores_the_terminal_before_the_message_is_printed() {
+        let order = hooked();
+        // No guard, so there is a screen for the hook to claim: the scenario
+        // above is the other half, where the guard held it.
+        super::IN_SCREEN.store(true, super::Ordering::SeqCst);
 
         let ended = std::panic::catch_unwind(|| panic!("the board fell over"));
 
         assert!(ended.is_err(), "the fixture did not panic");
-        // Read out before asserting, never asserted on through the guard:
-        // the hook installed above locks this list, and a failing
-        // `assert_eq!` holding the lock would panic into a hook that waits
-        // for it — a deadlock where a test failure should be.
-        let seen = order.lock().expect("the order").clone();
         assert_eq!(
-            seen,
+            seen(&order),
             ["restored", "printed"],
             "the message was printed onto a screen about to be thrown away",
         );

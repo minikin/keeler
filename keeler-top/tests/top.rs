@@ -2353,7 +2353,7 @@ fn a_narrow_terminal_drops_the_detail_pane_before_it_drops_columns() {
 
 // ── T6
 
-use keeler_top::app::{Action, App, Events, StatusFeed, TICK, looping, on_key, step};
+use keeler_top::app::{Action, App, Events, StatusFeed, TICK, Woke, looping, on_key, step};
 use keeler_top::dispatch::Dispatch;
 use keeler_top::terminal::{Guard, Screen};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -2432,23 +2432,32 @@ impl Dispatch for Reads {
 /// long the board sits still between reads of the streams.
 #[derive(Debug, Default)]
 struct Script {
-    keys: VecDeque<KeyEvent>,
+    woke: VecDeque<Woke>,
     waited: Vec<Duration>,
 }
 
 impl Script {
     fn of(codes: &[KeyCode]) -> Self {
         Self {
-            keys: codes.iter().map(|code| press(*code)).collect(),
+            woke: codes.iter().map(|code| Woke::Key(press(*code))).collect(),
+            waited: Vec::new(),
+        }
+    }
+
+    /// A keyboard that keeps waking the loop with something that is not a
+    /// key — a window being dragged across the board.
+    fn resizing(times: usize) -> Self {
+        Self {
+            woke: std::iter::repeat_n(Woke::Other, times).collect(),
             waited: Vec::new(),
         }
     }
 }
 
 impl Events for Script {
-    fn next(&mut self, timeout: Duration) -> Result<Option<KeyEvent>, String> {
+    fn next(&mut self, timeout: Duration) -> Result<Woke, String> {
         self.waited.push(timeout);
-        Ok(self.keys.pop_front())
+        Ok(self.woke.pop_front().unwrap_or(Woke::Elapsed))
     }
 }
 
@@ -2457,7 +2466,7 @@ impl Events for Script {
 struct Falls;
 
 impl Events for Falls {
-    fn next(&mut self, _timeout: Duration) -> Result<Option<KeyEvent>, String> {
+    fn next(&mut self, _timeout: Duration) -> Result<Woke, String> {
         panic!("the board fell over");
     }
 }
@@ -2626,7 +2635,7 @@ fn the_stream_is_re_read_once_a_second_without_input() {
     );
     let reads = Arc::new(Reads::answering(""));
     let mut app = app_over(&reads, &report(&[running("T1", &log)]));
-    let mut feed = StatusFeed::new(Arc::clone(&reads) as Arc<dyn Dispatch>);
+    let mut feed = StatusFeed::new(Arc::clone(&reads) as Arc<dyn Dispatch>, now(NOON));
     assert!(row_of(&drawn(&app.board, 140, 20), "T1").contains("just dev"));
     runfiles.append(
         "t1",
@@ -2670,13 +2679,67 @@ fn the_stream_is_re_read_once_a_second_without_input() {
     assert_eq!(app.board.rows[0].stage_column(), "mutants");
 }
 
+/// Not a scenario of its own: it is the other half of the one above, and it
+/// is what the review found there. A tick is a `git show`, a `bash` and four
+/// `git` calls per task, and a board that ticked on every event the terminal
+/// sent would run all of that dozens of times a second while somebody
+/// dragged a window edge across it. The wait running out is the tick;
+/// everything else is worth a frame.
+#[test]
+fn a_window_being_dragged_is_frames_and_not_ticks() {
+    let runfiles = Runfiles::new("t6-resize");
+    let log = runfiles.stream("t1", &[INIT.to_string()]);
+    let reads = Arc::new(Reads::answering(""));
+    let mut app = app_over(&reads, &report(&[running("T1", &log)]));
+    let mut feed = StatusFeed::new(Arc::clone(&reads) as Arc<dyn Dispatch>, now(NOON));
+    let mut terminal = surface();
+    // One more than the passes below, so the pass that does tick ticks
+    // because a second has gone by and not because the script ran out.
+    let mut resizes = Script::resizing(4);
+    runfiles.append(
+        "t1",
+        &stamped_tool_use(
+            "toolu_1",
+            "Bash",
+            serde_json::json!({"command": "just dev"}),
+        ),
+    );
+
+    for _ in 0..3 {
+        assert_eq!(
+            step(&mut terminal, &mut resizes, &mut app, &mut feed, now(NOON)),
+            Ok(true),
+        );
+    }
+
+    assert_eq!(
+        app.board.rows[0].stage_column(),
+        "reading",
+        "a resize read the streams, and with them the graph and four git calls a task",
+    );
+    // And the second that passes while the window is being dragged is still
+    // a tick: the columns must not freeze for as long as somebody holds the
+    // mouse down.
+    assert_eq!(
+        step(
+            &mut terminal,
+            &mut resizes,
+            &mut app,
+            &mut feed,
+            now("2026-09-07T12:00:01.000Z"),
+        ),
+        Ok(true),
+    );
+    assert_eq!(app.board.rows[0].stage_column(), "qa");
+}
+
 #[test]
 fn keeler_status_is_re_read_every_five_seconds_and_on_r() {
     // Given keeler-status's last answer is two seconds old
     let answer = report(&["T1     not spawned".to_string()]);
     let reads = Arc::new(Reads::answering(&answer));
     let mut app = app_over(&reads, &answer);
-    let mut feed = StatusFeed::new(Arc::clone(&reads) as Arc<dyn Dispatch>);
+    let mut feed = StatusFeed::new(Arc::clone(&reads) as Arc<dyn Dispatch>, now(NOON));
     let two = now("2026-09-07T12:00:02.000Z");
     step(
         &mut surface(),
@@ -2750,7 +2813,7 @@ fn a_slow_keeler_status_does_not_stall_the_board() {
     let (slow, opener) = Reads::slow(&report(&[running("T1", &log)]));
     let reads = Arc::new(slow);
     let mut app = app_over(&reads, &report(&[running("T1", &log)]));
-    let mut feed = StatusFeed::new(Arc::clone(&reads) as Arc<dyn Dispatch>);
+    let mut feed = StatusFeed::new(Arc::clone(&reads) as Arc<dyn Dispatch>, now(NOON));
     // Old enough that the cadence asks on the first pass below.
     let later = now("2026-09-07T12:00:30.000Z");
 
@@ -2794,6 +2857,63 @@ fn a_slow_keeler_status_does_not_stall_the_board() {
     );
 }
 
+/// Not a scenario of its own either: the tick reads the graph as well as the
+/// streams, and every fixture above stands outside a repository, where that
+/// read refuses. This is the other side — a project the read can answer
+/// about, so that a tick moving the state column, and a refusal that has
+/// gone taking its sentence with it, are both seen at least once.
+#[test]
+fn a_tick_that_could_read_the_graph_takes_its_word_and_its_refusal_back() {
+    let project = Project::new("t6-graph");
+    project.with_spec_on_the_feature_branch();
+    let reads = Arc::new(Reads {
+        graph: "T1 ready\nT2 blocked T1\n".to_string(),
+        ..Reads::answering("")
+    });
+    let status = keeler_top::status::parse(&report(&[
+        "T1     not spawned".to_string(),
+        "T2     not spawned".to_string(),
+    ]))
+    .expect("the fixture's report has a header");
+    let mut app = App::new(
+        Arc::clone(&reads) as Arc<dyn Dispatch>,
+        project.root(),
+        status,
+        Vec::new(),
+        now(NOON),
+    );
+    // A refusal to be taken away: the first tick reads a ref the project
+    // does not have, and the second reads the one it does.
+    let mut lost = App::new(
+        Arc::clone(&reads) as Arc<dyn Dispatch>,
+        PathBuf::from("/nowhere"),
+        keeler_top::status::parse(&report(&["T1     not spawned".to_string()])).expect("a report"),
+        Vec::new(),
+        now(NOON),
+    );
+    lost.tick(now(NOON));
+    assert!(
+        !lost.board.message.is_empty(),
+        "a graph read outside a repository said nothing about it",
+    );
+
+    app.tick(now(NOON));
+
+    assert_eq!(
+        app.board.message, "",
+        "a read that answered still complained"
+    );
+    assert_eq!(
+        app.board
+            .rows
+            .iter()
+            .map(|row| row.state.as_str())
+            .collect::<Vec<_>>(),
+        ["ready", "blocked ← T1"],
+        "the tick did not take the graph's word for the two it has one for",
+    );
+}
+
 #[test]
 fn q_quits_and_restores_the_terminal() {
     // Given the board is up
@@ -2801,7 +2921,7 @@ fn q_quits_and_restores_the_terminal() {
     let answer = report(&["T1     done".to_string(), "T2     done".to_string()]);
     let reads = Arc::new(Reads::answering(&answer));
     let mut app = app_over(&reads, &answer);
-    let mut feed = StatusFeed::new(Arc::clone(&reads) as Arc<dyn Dispatch>);
+    let mut feed = StatusFeed::new(Arc::clone(&reads) as Arc<dyn Dispatch>, now(NOON));
     let mut script = Script::of(&[KeyCode::Char('j'), KeyCode::Char('q')]);
 
     // When the user presses q
@@ -2850,7 +2970,7 @@ fn a_panic_restores_the_terminal_before_the_message_is_printed() {
     let answer = report(&["T1     done".to_string()]);
     let reads = Arc::new(Reads::answering(&answer));
     let mut app = app_over(&reads, &answer);
-    let mut feed = StatusFeed::new(Arc::clone(&reads) as Arc<dyn Dispatch>);
+    let mut feed = StatusFeed::new(Arc::clone(&reads) as Arc<dyn Dispatch>, now(NOON));
 
     // When the process panics
     let ended = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -2868,7 +2988,10 @@ fn a_panic_restores_the_terminal_before_the_message_is_printed() {
     let seen = order.lock().expect("the order").clone();
     assert_eq!(
         seen,
-        ["enter", "restored", "printed", "leave"],
+        ["enter", "restored", "printed"],
         "the message was printed onto a screen about to be thrown away",
     );
+    // And the guard unwinding past does not give the same screen back a
+    // second time: `ESC[?1049l` twice restores the cursor to where the entry
+    // saved it, which is above the message the first one made room for.
 }

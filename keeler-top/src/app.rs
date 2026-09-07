@@ -84,6 +84,18 @@ pub struct App {
     root: PathBuf,
     /// What the board runs outside itself.
     dispatch: Arc<dyn Dispatch>,
+    /// When the streams were last read, which is what the tick is due from.
+    ticked: Timestamp,
+    /// What the last read of the graph refused with, if it did.
+    graph_said: Option<String>,
+    /// And of the report.
+    ///
+    /// Two, rather than one line written over by whichever read spoke last,
+    /// because they are asked on cadences five seconds apart: a graph
+    /// refusal written into one line would be wiped by the report arriving,
+    /// and a report refusal by the tick a second later. Each read owns its
+    /// own sentence, and clears it when the read stops refusing.
+    status_said: Option<String>,
 }
 
 impl App {
@@ -105,6 +117,9 @@ impl App {
             graph,
             root,
             dispatch,
+            ticked: answered,
+            graph_said: None,
+            status_said: None,
         }
     }
 
@@ -118,17 +133,23 @@ impl App {
     /// A graph the script refused leaves the last one standing, with the
     /// refusal in the status line. The alternative is a board that empties
     /// its own state column the moment somebody has a spec open in an
-    /// editor, which is the reading it was drawn to avoid.
-    pub fn tick(&mut self) {
-        match crate::graph::read(
+    /// editor, which is the reading it was drawn to avoid — and a refusal
+    /// that has gone takes its sentence with it, or one bad second would
+    /// leave a line under the table for the rest of the session.
+    pub fn tick(&mut self, now: Timestamp) {
+        self.ticked = now;
+        self.graph_said = match crate::graph::read(
             self.dispatch.as_ref(),
             &self.root,
             &self.status.git_ref,
             &self.status.rel,
         ) {
-            Ok(graph) => self.graph = graph,
-            Err(refused) => self.board.message = refused,
-        }
+            Ok(graph) => {
+                self.graph = graph;
+                None
+            }
+            Err(refused) => Some(refused),
+        };
         let fresh = Board::assemble(
             &self.status,
             &self.graph,
@@ -142,35 +163,50 @@ impl App {
     ///
     /// A refusal keeps the board that is there and shows the words in the
     /// status line: the recipe refusing does not make the last answer
-    /// untrue, and the header's age says how long ago it was true. A board
-    /// that blanked itself would throw away the one reading it still has.
+    /// untrue, and the header's age says how long ago it was true — which is
+    /// why `answered` moves on a report and not on a refusal. A board that
+    /// blanked itself would throw away the one reading it still has.
     pub fn receive(&mut self, answer: &Result<String, String>, now: Timestamp) {
-        let report = match answer {
-            Ok(report) => report,
-            Err(refused) => {
-                self.board.message.clone_from(refused);
-                return;
+        let read = match answer {
+            Ok(report) => crate::status::parse(report)
+                .ok_or_else(|| "keeler-top: keeler-status printed no board to read.".to_string()),
+            Err(refused) => Err(refused.clone()),
+        };
+        match read {
+            Ok(status) => {
+                self.status = status;
+                self.status_said = None;
+                let fresh = Board::assemble(&self.status, &self.graph, &mut self.runs, now);
+                self.adopt(fresh);
             }
-        };
-        let Some(status) = crate::status::parse(report) else {
-            self.board.message = "keeler-top: keeler-status printed no board to read.".to_string();
-            return;
-        };
-        self.status = status;
-        let fresh = Board::assemble(&self.status, &self.graph, &mut self.runs, now);
-        self.adopt(fresh);
+            Err(refused) => {
+                self.status_said = Some(refused);
+                self.board.message = self.said();
+            }
+        }
+    }
+
+    /// The line under the table: whatever the board has to say about its own
+    /// reads, the report's refusal before the graph's — that is the slower
+    /// read and the one whose absence costs more.
+    fn said(&self) -> String {
+        self.status_said
+            .as_ref()
+            .or(self.graph_said.as_ref())
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// Puts a freshly assembled board in place of the one on screen, keeping
-    /// the two things a re-assembly knows nothing about: which row the
-    /// person is looking at, and what the last keypress said.
+    /// the one thing a re-assembly knows nothing about — which row the
+    /// person is looking at — and saying again whatever there is to say.
     ///
     /// The selection is clamped rather than kept, because the rows are the
     /// report's and the report can lose one — a task whose spec line was
     /// removed, or a graph read against a different ref.
     fn adopt(&mut self, fresh: Board) {
         let selected = self.board.selected.min(fresh.rows.len().saturating_sub(1));
-        let message = std::mem::take(&mut self.board.message);
+        let message = self.said();
         self.board = Board {
             selected,
             message,
@@ -229,16 +265,31 @@ pub fn status_due(age: u64, pending: bool) -> bool {
 pub struct StatusFeed {
     dispatch: Arc<dyn Dispatch>,
     pending: Option<Receiver<Result<String, String>>>,
+    /// When the last read came back, whatever it came back with.
+    ///
+    /// The feed's own clock, and not the board's `answered`. That one is the
+    /// age of the last *report*, which is what the header is about and which
+    /// a refusal must not reset — but a cadence measured from it would ask
+    /// again on every pass for as long as the recipe kept refusing, which is
+    /// a `just` a second on a machine that has just said it cannot answer.
+    answered: Timestamp,
 }
 
 impl StatusFeed {
-    /// A feed that has not asked anything yet.
+    /// A feed whose last answer is the one the board opened with.
     #[must_use]
-    pub fn new(dispatch: Arc<dyn Dispatch>) -> Self {
+    pub fn new(dispatch: Arc<dyn Dispatch>, answered: Timestamp) -> Self {
         Self {
             dispatch,
             pending: None,
+            answered,
         }
+    }
+
+    /// Whether the cadence is due another read.
+    #[must_use]
+    pub fn due(&self, now: Timestamp) -> bool {
+        status_due(now.seconds_since(self.answered), self.pending())
     }
 
     /// Asks again, unless a read is already out.
@@ -268,20 +319,17 @@ impl StatusFeed {
     /// A channel that closed without an answer is a refusal rather than
     /// nothing: the read's thread panicked, and a feed that went on calling
     /// that pending would never ask again for as long as the board was up.
-    pub fn take(&mut self) -> Option<Result<String, String>> {
-        match self.pending.as_ref()?.try_recv() {
-            Ok(answer) => {
-                self.pending = None;
-                Some(answer)
-            }
-            Err(TryRecvError::Empty) => None,
+    pub fn take(&mut self, now: Timestamp) -> Option<Result<String, String>> {
+        let answer = match self.pending.as_ref()?.try_recv() {
+            Ok(answer) => answer,
+            Err(TryRecvError::Empty) => return None,
             Err(TryRecvError::Disconnected) => {
-                self.pending = None;
-                Some(Err(
-                    "keeler-top: the keeler-status read ended without an answer.".to_string(),
-                ))
+                Err("keeler-top: the keeler-status read ended without an answer.".to_string())
             }
-        }
+        };
+        self.pending = None;
+        self.answered = now;
+        Some(answer)
     }
 }
 
@@ -308,14 +356,31 @@ impl<B: Backend> Surface for Terminal<B> {
     }
 }
 
+/// What a pass's wait ended with.
+///
+/// Three answers and not two, because the terminal sends more than keys and
+/// a board that could not tell them apart would treat every one as the tick.
+/// Dragging a window edge is dozens of resizes a second, and a tick is a
+/// `git show`, a `bash`, and four `git` calls per task.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Woke {
+    /// A key was pressed.
+    Key(KeyEvent),
+    /// The terminal sent something else — a resize, a mouse, a paste. Worth
+    /// the frame the next pass draws, and nothing else.
+    Other,
+    /// Nothing arrived: the wait ran out, which is the tick.
+    Elapsed,
+}
+
 /// Where the board's keypresses come from.
 pub trait Events {
-    /// The next keypress, or nothing when `timeout` passed without one.
+    /// What the next `timeout` ends with.
     ///
     /// # Errors
     ///
     /// Whatever the terminal refused while it was being read.
-    fn next(&mut self, timeout: Duration) -> Result<Option<KeyEvent>, String>;
+    fn next(&mut self, timeout: Duration) -> Result<Woke, String>;
 }
 
 /// The real keyboard.
@@ -326,11 +391,11 @@ impl Events for Keys {
     // Outside the mutation gate, like [`waited`] under it and the three
     // calls in `terminal.rs`: crossterm reads the keyboard from the
     // controlling terminal, and a test process under nextest has none. The
-    // one decision either of them makes — what counts as a keypress — was
-    // moved into [`press`], which is a function of an event and is tested.
+    // one decision either of them makes — what an event counts as — was
+    // moved into [`woke_of`], which is a function of an event and is tested.
     #[cfg_attr(test, mutants::skip)]
-    fn next(&mut self, timeout: Duration) -> Result<Option<KeyEvent>, String> {
-        Ok(waited(timeout)?.as_ref().and_then(press))
+    fn next(&mut self, timeout: Duration) -> Result<Woke, String> {
+        waited(timeout).map(|event| woke_of(event.as_ref()))
     }
 }
 
@@ -348,28 +413,43 @@ fn keyboard(err: &std::io::Error) -> String {
     format!("keeler-top: reading the keyboard: {err}")
 }
 
-/// The keypress in a terminal event, if it is one.
+/// What one wait ended with: whatever the terminal sent, or the tick when it
+/// sent nothing.
 ///
 /// A press and not a release: Windows terminals report both, and a board
 /// that read them alike would move the selection two rows for every `j`.
-/// Everything else a terminal sends — a resize, a mouse, a paste — is no
-/// keypress, and reaches the loop as the timeout does: one more pass, one
-/// more frame, drawn at whatever size the window now is.
-fn press(event: &Event) -> Option<KeyEvent> {
+///
+/// The whole of what [`Keys::next`] decides, here rather than there, because
+/// there is the one place no test can reach.
+fn woke_of(event: Option<&Event>) -> Woke {
     match event {
-        Event::Key(key) if key.kind == KeyEventKind::Press => Some(*key),
-        _ => None,
+        Some(Event::Key(key)) if key.kind == KeyEventKind::Press => Woke::Key(*key),
+        Some(_) => Woke::Other,
+        None => Woke::Elapsed,
     }
 }
 
-/// One pass of the loop: collect, ask, draw, wait.
+/// Whether the streams are due another read.
+///
+/// A wait that ran out is a second with nothing in it, which is the tick as
+/// the board has always meant it. The age is the other half, and it is what
+/// keeps the columns moving when something else keeps waking the loop: a
+/// finger held on `j` is a keypress every few milliseconds and a window
+/// being dragged is a resize every few, and on either of them a board that
+/// only ticked on the timeout would stop reading the streams altogether.
+#[must_use]
+pub fn tick_due(woke: Woke, since_tick: u64) -> bool {
+    matches!(woke, Woke::Elapsed) || since_tick >= TICK.as_secs()
+}
+
+/// One pass of the loop: collect, ask, draw, wait, tick.
 ///
 /// The order is the contract. Collecting first means an answer that arrived
 /// while the board was waiting is on screen before the frame is drawn rather
 /// than a second later. Drawing before waiting means the pass that ends in a
-/// keypress has already shown what the last one did. And the wait is the
-/// tick: a second with nothing in it is a second's worth of new stream
-/// bytes, which is what the board is for.
+/// keypress has already shown what the last one did. And the tick comes
+/// after the wait, so the bytes it reads are the ones that arrived during it
+/// — the frame carrying them is the next pass's, one draw away.
 ///
 /// # Errors
 ///
@@ -383,15 +463,18 @@ pub fn step(
     feed: &mut StatusFeed,
     now: Timestamp,
 ) -> Result<bool, String> {
-    if let Some(answer) = feed.take() {
+    if let Some(answer) = feed.take(now) {
         app.receive(&answer, now);
     }
-    if status_due(now.seconds_since(app.board.answered), feed.pending()) {
+    if feed.due(now) {
         feed.ask();
     }
     surface.draw(&app.board, now)?;
-    let Some(key) = events.next(TICK)? else {
-        app.tick();
+    let woke = events.next(TICK)?;
+    if tick_due(woke, now.seconds_since(app.ticked)) {
+        app.tick(now);
+    }
+    let Woke::Key(key) = woke else {
         return Ok(true);
     };
     match on_key(app, key) {
@@ -442,12 +525,8 @@ pub fn run(app: &mut App, dispatch: Arc<dyn Dispatch>) -> Result<(), String> {
     let _guard = crate::terminal::Guard::new(crate::terminal::Tty).map_err(|err| screen(&err))?;
     let mut terminal = Terminal::new(ratatui::backend::CrosstermBackend::new(std::io::stdout()))
         .map_err(|err| screen(&err))?;
-    looping(
-        &mut terminal,
-        &mut Keys,
-        app,
-        &mut StatusFeed::new(dispatch),
-    )
+    let mut feed = StatusFeed::new(dispatch, app.board.answered);
+    looping(&mut terminal, &mut Keys, app, &mut feed)
 }
 
 /// A terminal the board could not take over.
@@ -591,9 +670,9 @@ mod tests {
     /// The feed's answer, waited for the way a test may wait for one:
     /// bounded, so a feed that never answers fails here rather than holding
     /// the suite open until something else times it out.
-    fn collected(feed: &mut StatusFeed) -> Result<String, String> {
+    fn collected(feed: &mut StatusFeed, now: Timestamp) -> Result<String, String> {
         for _ in 0..1_000 {
-            if let Some(answer) = feed.take() {
+            if let Some(answer) = feed.take(now) {
                 return answer;
             }
             std::thread::sleep(Duration::from_millis(2));
@@ -607,14 +686,15 @@ mod tests {
             report: "graph: s.md on HEAD\n".to_string(),
             asked: Mutex::new(0),
         });
-        let mut feed = StatusFeed::new(Arc::clone(&dispatch) as Arc<dyn Dispatch>);
+        let opened = Timestamp::from_epoch_seconds(1_000);
+        let mut feed = StatusFeed::new(Arc::clone(&dispatch) as Arc<dyn Dispatch>, opened);
         assert!(!feed.pending());
 
         feed.ask();
         assert!(feed.pending());
         // Asking again while one is out is not a second recipe.
         feed.ask();
-        let answer = collected(&mut feed);
+        let answer = collected(&mut feed, Timestamp::from_epoch_seconds(1_006));
 
         assert_eq!(answer, Ok("graph: s.md on HEAD\n".to_string()));
         assert!(
@@ -626,13 +706,35 @@ mod tests {
 
     #[test]
     fn a_read_whose_thread_died_is_a_refusal_and_not_a_board_waiting_for_ever() {
-        let mut feed = StatusFeed::new(Arc::new(Panics));
+        let mut feed = StatusFeed::new(Arc::new(Panics), Timestamp::from_epoch_seconds(1_000));
 
         feed.ask();
-        let answer = collected(&mut feed);
+        let answer = collected(&mut feed, Timestamp::from_epoch_seconds(1_006));
 
         assert!(answer.is_err(), "a thread that died answered the board");
         assert!(!feed.pending(), "the board went on waiting for a dead read");
+    }
+
+    #[test]
+    fn a_read_that_refused_starts_the_cadence_again_rather_than_asking_at_once() {
+        // The board's own `answered` is the age of the last *report*, and a
+        // refusal is not one — so a cadence measured from it would find the
+        // answer five seconds old on every pass and spawn a `just` a second
+        // at a machine that has just said it cannot answer.
+        let opened = Timestamp::from_epoch_seconds(1_000);
+        let mut feed = StatusFeed::new(Arc::new(Panics), opened);
+        assert!(!feed.due(Timestamp::from_epoch_seconds(1_004)));
+        assert!(feed.due(Timestamp::from_epoch_seconds(1_005)));
+
+        feed.ask();
+        let refused = collected(&mut feed, Timestamp::from_epoch_seconds(1_005));
+
+        assert!(refused.is_err(), "the fixture answered");
+        assert!(
+            !feed.due(Timestamp::from_epoch_seconds(1_009)),
+            "a refusal was asked again before the cadence came round",
+        );
+        assert!(feed.due(Timestamp::from_epoch_seconds(1_010)));
     }
 
     #[test]
@@ -672,7 +774,6 @@ mod tests {
     fn a_report_that_lost_a_task_brings_the_selection_back_with_it() {
         let mut app = app(THREE);
         app.board.selected = 2;
-        app.board.message = "something the last key said".to_string();
 
         app.receive(
             &Ok("graph: s.md on HEAD\nT1     done\n".to_string()),
@@ -689,10 +790,63 @@ mod tests {
             Timestamp::from_epoch_seconds(2_000),
             "the header's age did not reset on a fresh answer",
         );
-        assert_eq!(
-            app.board.message, "something the last key said",
-            "the status line was cleared by a refresh nobody asked for",
+    }
+
+    #[test]
+    fn a_refusal_that_has_gone_takes_its_sentence_with_it() {
+        // A `git show` that lost a race, a spec uncommitted for a second
+        // while somebody rebases: a line written under the table by one bad
+        // read and never taken away is a board reporting, for the rest of
+        // the session, something that stopped being true immediately.
+        let mut app = app(THREE);
+
+        app.receive(
+            &Err("keeler-status: not a git repository".to_string()),
+            Timestamp::from_epoch_seconds(1_001),
         );
+        assert_eq!(app.board.message, "keeler-status: not a git repository");
+
+        app.receive(&Ok(THREE.to_string()), Timestamp::from_epoch_seconds(1_002));
+
+        assert_eq!(
+            app.board.message, "",
+            "the read stopped refusing and its sentence stayed under the table",
+        );
+    }
+
+    #[test]
+    fn the_report_refusing_is_not_wiped_by_the_tick_a_second_later() {
+        // The two reads are five seconds apart, and this fixture's graph
+        // read refuses too — it has no repository to read from. One line
+        // written over by whichever spoke last would show a `keeler-status`
+        // refusal for the one second before the next tick, and never again.
+        let mut app = app(THREE);
+        app.receive(
+            &Err("keeler-status: not a git repository".to_string()),
+            Timestamp::from_epoch_seconds(1_001),
+        );
+
+        app.tick(Timestamp::from_epoch_seconds(1_002));
+
+        assert_eq!(
+            app.board.message, "keeler-status: not a git repository",
+            "the graph's refusal wrote over the report's, which is the slower read",
+        );
+    }
+
+    #[test]
+    fn the_streams_are_read_on_the_timeout_and_again_once_a_second_has_passed() {
+        use super::{Woke, tick_due};
+
+        // The tick as the board has always meant it: a second with nothing
+        // in it.
+        assert!(tick_due(Woke::Elapsed, 0));
+        // And the half that keeps the columns moving under something that
+        // wakes the loop faster than the timeout ever fires.
+        assert!(!tick_due(Woke::Other, 0), "a resize storm was a tick each");
+        assert!(!tick_due(Woke::Key(press(KeyCode::Char('j'))), 0));
+        assert!(tick_due(Woke::Other, 1));
+        assert!(tick_due(Woke::Key(press(KeyCode::Char('j'))), 1));
     }
 
     /// A surface that keeps what it was asked to draw.
@@ -710,36 +864,46 @@ mod tests {
     struct Idle;
 
     impl Events for Idle {
-        fn next(&mut self, _timeout: Duration) -> Result<Option<KeyEvent>, String> {
-            Ok(None)
+        fn next(&mut self, _timeout: Duration) -> Result<super::Woke, String> {
+            Ok(super::Woke::Elapsed)
         }
     }
 
     #[test]
     fn a_release_is_not_a_press_and_nothing_else_is_a_key_at_all() {
+        use super::Woke;
         use ratatui::crossterm::event::{Event, KeyEventKind};
 
         let pressed = press(KeyCode::Char('j'));
-        assert_eq!(super::press(&Event::Key(pressed)), Some(pressed));
+        assert_eq!(
+            super::woke_of(Some(&Event::Key(pressed))),
+            Woke::Key(pressed)
+        );
 
         let released = KeyEvent {
             kind: KeyEventKind::Release,
             ..pressed
         };
         assert_eq!(
-            super::press(&Event::Key(released)),
-            None,
+            super::woke_of(Some(&Event::Key(released))),
+            Woke::Other,
             "one j moved the selection two rows",
         );
-        // A resize is a pass of its own, and a pass with no key in it is the
-        // tick — which is a redraw at whatever size the window now is.
-        assert_eq!(super::press(&Event::Resize(80, 24)), None);
+        // A resize is worth a frame and not a tick: dragging a window edge
+        // is dozens a second, and a tick is a `git show`, a `bash` and four
+        // `git` calls per task.
+        assert_eq!(super::woke_of(Some(&Event::Resize(80, 24))), Woke::Other);
+        // And nothing at all is the wait running out, which is the tick.
+        assert_eq!(super::woke_of(None), Woke::Elapsed);
     }
 
     #[test]
     fn a_terminal_that_would_not_answer_says_which_half_of_it_did_not() {
         for (refused, half) in [
-            (super::keyboard(&std::io::Error::other("no tty")), "keyboard"),
+            (
+                super::keyboard(&std::io::Error::other("no tty")),
+                "keyboard",
+            ),
             (super::screen(&std::io::Error::other("no tty")), "terminal"),
         ] {
             assert!(
@@ -757,7 +921,10 @@ mod tests {
         // the next key is pressed rather than a second afterwards.
         let mut app = app(THREE);
         let mut frames = Frames::default();
-        let mut feed = StatusFeed::new(Arc::new(Answers::default()));
+        let mut feed = StatusFeed::new(
+            Arc::new(Answers::default()),
+            Timestamp::from_epoch_seconds(1_000),
+        );
 
         let carry_on = super::step(
             &mut frames,
