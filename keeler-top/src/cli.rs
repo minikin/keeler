@@ -13,10 +13,12 @@
 
 use std::io::{IsTerminal as _, Write as _};
 use std::path::PathBuf;
+use std::sync::Arc;
 
-use crate::board::{Board, Runs};
+use crate::app::App;
+use crate::board::Board;
 use crate::clock::Timestamp;
-use crate::dispatch::{Dispatch as _, Shell};
+use crate::dispatch::{Dispatch, Shell};
 
 /// What `keeler keeler-top` hands the binary, and what a person adds after
 /// it.
@@ -97,15 +99,17 @@ fn value(args: &mut impl Iterator<Item = String>, flag: &str) -> Result<PathBuf,
 /// is not a terminal.
 pub fn main(args: impl IntoIterator<Item = String>) -> Result<(), String> {
     let args = Args::parse(args)?;
-    let shell = Shell::new(&args.plugin_root, &args.root, &args.spec);
+    let shell: Arc<dyn Dispatch> = Arc::new(Shell::new(&args.plugin_root, &args.root, &args.spec));
     let report = shell.status()?;
     let status = crate::status::parse(&report)
         .ok_or_else(|| format!("keeler-top: keeler-status printed no board to read:\n{report}"))?;
-    let graph = crate::graph::read(&shell, &args.root, &status.git_ref, &status.rel)?;
+    let graph = crate::graph::read(shell.as_ref(), &args.root, &status.git_ref, &status.rel)?;
     let now = Timestamp::now();
-    let board = Board::assemble(&status, &graph, &mut Runs::default(), now);
-    let frame = shown(&board, now, args.once, std::io::stdout().is_terminal())?;
-    written(std::io::stdout().write_all(frame.as_bytes()))
+    let mut app = App::new(Arc::clone(&shell), args.root.clone(), status, graph, now);
+    match shown(&app.board, now, args.once, std::io::stdout().is_terminal())? {
+        Show::Frame(frame) => written(std::io::stdout().write_all(frame.as_bytes())),
+        Show::Live => crate::app::run(&mut app, shell),
+    }
 }
 
 /// What a write to stdout means.
@@ -124,6 +128,15 @@ fn written(wrote: std::io::Result<()>) -> Result<(), String> {
     }
 }
 
+/// The two things the board can be: one frame of text, or a live screen.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Show {
+    /// `--once`: the table, printed, and nothing after it.
+    Frame(String),
+    /// The board, drawn on the terminal until somebody leaves it.
+    Live,
+}
+
 /// What the board has to show, once it has read one.
 ///
 /// A value rather than a print, and the terminal an argument rather than a
@@ -131,18 +144,12 @@ fn written(wrote: std::io::Result<()>) -> Result<(), String> {
 /// condition this turns on is the one condition a test cannot arrange. As
 /// an argument both answers are reachable, and the untestable part is the
 /// single call that supplies it.
-fn shown(board: &Board, now: Timestamp, once: bool, terminal: bool) -> Result<String, String> {
+fn shown(board: &Board, now: Timestamp, once: bool, terminal: bool) -> Result<Show, String> {
     if once {
-        return Ok(crate::frame::once(board, now));
+        return Ok(Show::Frame(crate::frame::once(board, now)));
     }
     if terminal {
-        // The loop, the keys and the terminal guard are the task after this
-        // one. Refusing is what the binary has done since the crate existed:
-        // a front door that reports success for work it did not do is the
-        // one failure this whole spec exists to prevent elsewhere.
-        return Err(
-            "keeler-top: the live board is not wired up yet — --once prints one frame.".to_string(),
-        );
+        return Ok(Show::Live);
     }
     Err(
         "keeler-top: the board needs a terminal to draw on — --once prints one frame instead."
@@ -233,22 +240,21 @@ mod tests {
         for terminal in [true, false] {
             assert_eq!(
                 super::shown(&board, now, true, terminal),
-                Ok(crate::frame::once(&board, now)),
+                Ok(super::Show::Frame(crate::frame::once(&board, now))),
             );
         }
 
-        // Without it, the two refusals are different sentences, because the
-        // two ways out are different: one is the task after this, and the
-        // other is a flag the reader can add now.
+        // Without it, a terminal is a board and a pipe is a refusal naming
+        // the flag that turns one into the other.
+        assert_eq!(
+            super::shown(&board, now, false, true),
+            Ok(super::Show::Live)
+        );
         let piped = super::shown(&board, now, false, false).expect_err("a pipe is not a board");
-        let attached =
-            super::shown(&board, now, false, true).expect_err("the loop is not written yet");
         assert!(
             piped.contains("terminal") && piped.contains("--once"),
             "the refusal names neither the terminal nor the way out: {piped}",
         );
-        assert_ne!(piped, attached);
-        assert!(attached.starts_with("keeler-top: "));
     }
 
     #[test]
