@@ -834,7 +834,7 @@ keeler-spawn SPEC TASK:
 # verdict at all died before its gate ever ran, which is a different thing
 # from a gate that failed, and its log and worktree are what a resume reads.
 #
-# Graph mode: what every task of a spec is doing right now — running, passed, incomplete, failed, died, done, or never spawned.
+# Graph mode: what every task of a spec is doing right now — running, passed, incomplete, failed, died, paused, done, or never spawned.
 keeler-status SPEC:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -880,6 +880,11 @@ keeler-status SPEC:
         worktree="$(dirname "$root")/$(basename "$root")-$slug-$tid"
         exit_file="$runs/$tid.exit"
         log_file="$runs/$tid.log"
+        # A session killed by hand and a session that crashed leave the
+        # same nothing behind: no tmux session, no verdict. The marker is
+        # the one thing that tells them apart — written by `keeler-top`'s
+        # `p`, removed by `keeler-resume`, and read here.
+        paused_file="$runs/$tid.paused"
         branch="keeler/$slug/$tid"
         record="reviews/$slug/$tid.md"
         # Closed is three things, and two of them live on the task's own
@@ -931,7 +936,11 @@ keeler-status SPEC:
         elif [ -f "$exit_file" ] && [ "$(tr -d '[:space:]' < "$exit_file")" != 0 ]; then
             state="failed (exit $(tr -d '[:space:]' < "$exit_file"))"
         elif [ ! -f "$exit_file" ] && { [ -e "$worktree" ] || [ -f "$log_file" ]; }; then
+            # A run the board stopped is resumed exactly as a death is —
+            # same worktree, same branch, same log — so `paused` is `died`
+            # with the one fact a crash cannot leave: someone meant it.
             state=died
+            [ -f "$paused_file" ] && state=paused
         elif [ ! -f "$exit_file" ] && [ "$graph_state" != done ] && [ ! -e "$worktree" ]; then
             # Nothing was ever started here, so there is nothing to be
             # incomplete about.
@@ -950,10 +959,19 @@ keeler-status SPEC:
         # A death is ordinary rather than exceptional — five of this
         # project's first six spawns ended that way — so the board offers
         # the way back rather than leaving it to be remembered.
-        if [ "$state" = died ]; then
-            printf '       resume with: keeler keeler-resume %s %s\n' "$rel" "$id"
-        fi
         case "$state" in
+            died|paused)
+                printf '       resume with: keeler keeler-resume %s %s\n' "$rel" "$id"
+                ;;
+        esac
+        case "$state" in
+            paused)
+                # The marker outlives whatever it was written about: the
+                # worktree removed by hand, the branch deleted, the run
+                # abandoned. Nothing else clears it, so a board that never
+                # named the file would say paused about that task for ever.
+                printf '       nobody left to resume? rm %s to clear the marker\n' "$paused_file"
+                ;;
             failed*)
                 # A verdict is a run's record, and a run can turn out not
                 # to be believable — an earlier tooling, a gate that
@@ -1037,6 +1055,11 @@ keeler-resume SPEC TASK:
         "$root/.keeler/runs/$slug/$tid.stream"
     printf -v run_cmd 'bash %q' "$runner"
     tmux new-session -d -s "$session" -c "$worktree" "$run_cmd"
+    # After the session, never before: the marker is the board's claim that
+    # this run was stopped on purpose, and clearing it ahead of a tmux that
+    # then refuses would hand the task back as `died` — the one word the
+    # marker exists to deny. `set -e` is what makes "after" mean it.
+    rm -f "$root/.keeler/runs/$slug/$tid.paused"
     echo "  worktree: $worktree"
     echo "  session:  tmux attach -t '=$session'"
     echo "  board:    keeler keeler-status $spec"
