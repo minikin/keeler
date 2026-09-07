@@ -402,15 +402,22 @@ const STUB_FRAME: &str = "TASK  STATE    STAGE\nT1    running  qa\n";
 /// printed anything, is the scenario.
 const FIRST_BUILD: &str = "building the board for the first time";
 
-/// A `cargo` that compiles nothing. It records the argument list it was
-/// handed, then plays the two streams the scenario is about: cargo's own
-/// chatter on stderr, the board's frame on stdout.
+/// A `cargo` that compiles nothing. It records the directory it was run in
+/// and the argument list it was handed, then plays the two streams the
+/// scenario is about: cargo's own chatter on stderr, the board's frame on
+/// stdout.
 ///
-/// The log is appended to rather than overwritten — the first-build
+/// The directory is recorded because it decides the build as much as the
+/// arguments do — rustup reads `rust-toolchain.toml` from where cargo was
+/// started, and a stub that only counted arguments would let that go
+/// unwatched.
+///
+/// Both logs are appended to rather than overwritten — the first-build
 /// scenario launches twice, and has to see that the second launch reached
 /// cargo at all rather than being skipped along with its notice.
 const CARGO_STUB: &str = r#"#!/usr/bin/env bash
 { for a in "$@"; do printf '%s\037' "$a"; done; printf '\n'; } >> "$KEELER_STUB_CARGO_LOG"
+pwd -P >> "$KEELER_STUB_CARGO_CWD"
 echo "   Compiling ratatui v0.30.2" >&2
 echo "    Finished release profile [optimized] target(s)" >&2
 printf '%s' "$KEELER_STUB_CARGO_FRAME"
@@ -424,7 +431,10 @@ printf '%s' "$KEELER_STUB_CARGO_FRAME"
 /// The plugin is a copy of the shipped `Justfile` with a `keeler-top/`
 /// beside it; the project gets a decoy crate of the same name, so a recipe
 /// reaching for `keeler-top/Cargo.toml` relative to the working directory
-/// would find one and still be pointed at the wrong tree.
+/// would find one and still be pointed at the wrong tree. Both carry a
+/// `specs/`, because the plugin is a repository with specs of its own —
+/// that is the collision an unguarded glob in an argument would resolve
+/// the wrong way round.
 struct Front {
     dir: PathBuf,
     plugin: PathBuf,
@@ -438,6 +448,7 @@ impl Front {
         let (plugin, project) = (dir.join("plugin"), dir.join("project"));
         std::fs::create_dir_all(dir.join("bin")).unwrap();
         std::fs::create_dir_all(plugin.join("keeler-top")).unwrap();
+        std::fs::create_dir_all(plugin.join("specs")).unwrap();
         std::fs::create_dir_all(project.join("keeler-top")).unwrap();
         std::fs::create_dir_all(project.join("specs")).unwrap();
         std::fs::copy(repo_root().join("Justfile"), plugin.join("Justfile")).unwrap();
@@ -448,6 +459,12 @@ impl Front {
             std::fs::write(manifest, "[package]\nname = \"keeler-top\"\n").unwrap();
         }
         std::fs::write(project.join("specs/01-foo.md"), "# Spec 01 — foo\n").unwrap();
+        // The plugin's own specs, under names the project's spec does not
+        // share: a glob that resolved here rather than in the project would
+        // come back with these.
+        for own in ["specs/98-plugins-own.md", "specs/99-plugins-other.md"] {
+            std::fs::write(plugin.join(own), "# a spec the plugin ships\n").unwrap();
+        }
         let stub = dir.join("bin/cargo");
         std::fs::write(&stub, CARGO_STUB).unwrap();
         std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -462,20 +479,31 @@ impl Front {
         };
         // A repository, because that is what the wrapper asks the project
         // for: `git rev-parse --show-toplevel` is where it gets the root it
-        // passes as the working directory.
-        let git = Command::new("git")
-            .args(["init", "-qb", "main"])
-            .current_dir(&front.project)
+        // passes as the working directory. And the spec committed on the
+        // feature's own branch, because that is the state every scenario
+        // here opens from — the recipe never reads it, but a launch made
+        // from anywhere else is a launch the board would refuse.
+        front.git(&["init", "-qb", "main"]);
+        front.git(&["add", "-A"]);
+        front.git(&["commit", "-qm", "the spec"]);
+        front.git(&["checkout", "-qb", "feat/01-foo"]);
+        front
+    }
+
+    fn git(&self, args: &[&str]) {
+        let output = Command::new("git")
+            .args(["-c", "user.email=probe@keeler", "-c", "user.name=probe"])
+            .args(args)
+            .current_dir(&self.project)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_SYSTEM", "/dev/null")
             .output()
             .expect("failed to run git");
         assert!(
-            git.status.success(),
-            "{}",
-            String::from_utf8_lossy(&git.stderr)
+            output.status.success(),
+            "git {args:?} failed:\n{}",
+            String::from_utf8_lossy(&output.stderr)
         );
-        front
     }
 
     /// The path the recipe probes to decide whether the board has ever
@@ -497,9 +525,19 @@ impl Front {
         self.dir.join("cargo-calls")
     }
 
+    fn cwd_log(&self) -> PathBuf {
+        self.dir.join("cargo-cwds")
+    }
+
     /// The recipe as `keeler` runs it — the plugin's Justfile, the project
     /// as working directory — with the stub cargo first on PATH.
     fn top(&self, args: &[&str]) -> Output {
+        self.top_with_env(args, &[])
+    }
+
+    /// The one place a launch is composed, so a caller that needs one more
+    /// variable cannot quietly lose the fixture's own.
+    fn top_with_env(&self, args: &[&str], extra: &[(&str, &str)]) -> Output {
         let mut command = Command::new(real_just());
         command
             .arg("--justfile")
@@ -508,7 +546,7 @@ impl Front {
             .arg(&self.project)
             .arg("keeler-top")
             .args(args);
-        self.run(command)
+        self.run(command, extra)
     }
 
     /// The recipe through the front door itself: `bin/keeler` as it ships,
@@ -517,22 +555,30 @@ impl Front {
     fn front_door(&self, args: &[&str]) -> Output {
         let mut command = Command::new(repo_root().join("bin/keeler"));
         command.arg("keeler-top").args(args);
-        self.run(command)
+        self.run(command, &[])
     }
 
     /// The one place a launch is run, so the two doors above cannot differ
-    /// in what the stub is given to see.
-    fn run(&self, mut command: Command) -> Output {
+    /// in what the stub is given to see. The caller's own variables are set
+    /// last, so a test can put back one the fixture clears.
+    fn run(&self, mut command: Command, extra: &[(&str, &str)]) -> Output {
         let path = std::env::var("PATH").unwrap();
         command
             .current_dir(&self.project)
             .env("PATH", format!("{}:{path}", self.dir.join("bin").display()))
             .env("KEELER_STUB_CARGO_LOG", self.log())
+            .env("KEELER_STUB_CARGO_CWD", self.cwd_log())
             .env("KEELER_STUB_CARGO_FRAME", STUB_FRAME)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_SYSTEM", "/dev/null")
-            .output()
-            .expect("failed to launch the board")
+            // Removed rather than left to chance: whoever runs this suite
+            // may have one set, and where cargo puts its artifacts is what
+            // the first-build probe is looking at.
+            .env_remove("CARGO_TARGET_DIR");
+        for (key, value) in extra {
+            command.env(key, value);
+        }
+        command.output().expect("failed to launch the board")
     }
 
     /// Every argument list the stub cargo was handed, oldest first.
@@ -557,6 +603,14 @@ impl Front {
         let calls = self.calls();
         assert_eq!(calls.len(), 1, "cargo was not run exactly once: {calls:?}");
         calls.into_iter().next().expect("one call")
+    }
+
+    /// The directory each launch ran cargo in, oldest first.
+    fn cwds(&self) -> Vec<String> {
+        let Ok(text) = std::fs::read_to_string(self.cwd_log()) else {
+            return Vec::new();
+        };
+        text.lines().map(str::to_string).collect()
     }
 }
 
@@ -634,6 +688,29 @@ fn the_recipe_builds_the_crate_from_the_plugin_tree_and_passes_it_three_paths() 
             "specs/01-foo.md",
             "--once",
         ],
+    );
+
+    // And cargo built it standing in the plugin. Where cargo is started
+    // decides which rust-toolchain.toml rustup honours and whose
+    // .cargo/config.toml applies, so a build run in the project would let
+    // an adopter's pinned compiler or rustflags decide how the plugin's
+    // own board is compiled.
+    assert_eq!(
+        front.cwds(),
+        vec![front.plugin.to_str().unwrap().to_string()],
+        "cargo was not run in the plugin"
+    );
+
+    // And an argument is passed on as it was typed, not resolved. The
+    // plugin has a specs/ of its own and cargo is started inside it, so a
+    // spec name holding a glob would come back answered with the plugin's
+    // file names — a board watching specs the project has never had.
+    let globbed = front.top(&["specs/*.md"]);
+    assert!(globbed.status.success(), "{}", both(&globbed));
+    assert_eq!(
+        passed(&front.calls()[1]).last(),
+        Some(&"specs/*.md"),
+        "the spec was expanded against the plugin's own tree"
     );
 }
 
@@ -735,5 +812,25 @@ fn the_first_launch_says_it_is_building_before_cargo_starts() {
         front.calls().len(),
         2,
         "the second launch never reached cargo at all"
+    );
+
+    // And the probe follows cargo. An adopter with CARGO_TARGET_DIR set —
+    // one shared build directory for everything they compile — is an
+    // adopter whose board is not under the plugin's target/ at all, and a
+    // probe that only ever looked there would promise them a few minutes'
+    // wait on every launch they ever made.
+    let elsewhere = front.dir.join("shared-target");
+    std::fs::create_dir_all(elsewhere.join("release")).unwrap();
+    std::fs::copy(front.binary(), elsewhere.join("release/keeler-top")).unwrap();
+    std::fs::remove_file(front.binary()).unwrap();
+    let shared = front.top_with_env(
+        &["specs/01-foo.md", "--once"],
+        &[("CARGO_TARGET_DIR", elsewhere.to_str().unwrap())],
+    );
+    assert!(shared.status.success(), "{}", both(&shared));
+    assert!(
+        !stderr(&shared).contains(FIRST_BUILD),
+        "the probe looked past the target directory cargo was given:\n{}",
+        stderr(&shared)
     );
 }

@@ -1001,14 +1001,20 @@ keeler-status SPEC:
 # The probe is {{justfile_directory()}}/target/release/keeler-top and not
 # the crate's own directory: a workspace member's artifacts land in the
 # workspace's target/, and a probe pointed at keeler-top/target/ would
-# print the first-build notice before every launch it ever made.
+# print the first-build notice before every launch it ever made. It asks
+# CARGO_TARGET_DIR first for the same reason — an adopter who builds
+# everything into one shared directory has no board under the plugin at
+# all, and a probe that only ever looked there would promise them minutes
+# of compiling every time they opened the board.
 #
 # $ARGS unquoted, which is what carries several arguments as several: just
 # joins a variadic parameter into one string, and the alternative — leaving
 # it quoted — would hand the binary `--once specs/01-foo.md` as a single
-# word. Expansion is not re-evaluated, so a spec whose name holds $( … )
-# still reaches the binary as text; a path holding a space is the one thing
-# a variadic cannot carry through.
+# word. `set -f` because word splitting is all that is wanted: the plugin
+# is a repository with a specs/ of its own and cargo is started inside it,
+# so an unguarded `specs/*.md` would reach the board answered with the
+# plugin's file names. A path holding a space is the one thing a variadic
+# cannot carry through.
 #
 # Graph mode: the live board — `keeler keeler-top specs/01-foo.md`.
 keeler-top *ARGS:
@@ -1016,14 +1022,15 @@ keeler-top *ARGS:
     set -euo pipefail
     plugin="{{justfile_directory()}}"
     root="$(pwd -P)"
-    if [ ! -x "$plugin/target/release/keeler-top" ]; then
+    if [ ! -x "${CARGO_TARGET_DIR:-$plugin/target}/release/keeler-top" ]; then
         echo "keeler-top: building the board for the first time — this compiles ratatui and its tree, and takes a few minutes. Every launch after it is instant." >&2
         echo "keeler-top: the plugin pins its compiler in rust-toolchain.toml, so rustup may fetch a toolchain before cargo starts." >&2
     fi
     # exec: the board owns the terminal it draws on, and a shell left
     # sitting between it and the tty is one more process for a Ctrl-C to
-    # reach first.
+    # reach first. Last, because nothing after it in this recipe would run.
     cd "$plugin"
+    set -f
     exec cargo run --release --manifest-path "$plugin/keeler-top/Cargo.toml" -- \
         --plugin-root "$plugin" --root "$root" $ARGS
 
