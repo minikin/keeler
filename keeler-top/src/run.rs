@@ -370,14 +370,29 @@ impl RunView {
             .map_or_else(String::new, |at| format_elapsed(now.seconds_since(at)))
     }
 
+    /// The share of its window the run has used, as a number — which is
+    /// what the board's bar is drawn from, where the column below is what
+    /// `--once` prints.
+    ///
+    /// Nothing rather than a zero for a run whose stream has carried no
+    /// usage yet: a window nobody has reported on and a window nobody has
+    /// touched are different answers, and only one of them is a bar.
+    #[must_use]
+    pub fn context_percent(&self) -> Option<u8> {
+        let used = self.context_used?;
+        Some(percent(
+            used,
+            window_for(self.model.as_deref().unwrap_or_default()),
+        ))
+    }
+
     /// The context column: the share of its window the run has used, marked
     /// once it is close enough to the end to matter.
     #[must_use]
     pub fn context_column(&self) -> String {
-        let Some(used) = self.context_used else {
+        let Some(share) = self.context_percent() else {
             return DASH.to_string();
         };
-        let share = percent(used, window_for(self.model.as_deref().unwrap_or_default()));
         if share >= CONTEXT_ALARM {
             format!("{share}%!")
         } else {
@@ -971,6 +986,29 @@ mod tests {
             view.context_used = Some(used);
             assert_eq!(view.context_column(), shown);
         }
+    }
+
+    #[test]
+    fn the_context_is_a_number_before_it_is_a_column() {
+        // The board draws a bar and `--once` prints a column, and the two
+        // are one reading: the number is where they part company, so it is
+        // the number the column is composed from rather than the other way
+        // round.
+        let mut view = RunView {
+            model: Some("claude-opus-5[1m]".to_string()),
+            ..RunView::default()
+        };
+        assert_eq!(view.context_percent(), None);
+
+        view.context_used = Some(500_000);
+        assert_eq!(view.context_percent(), Some(50));
+        assert_eq!(view.context_column(), "50%");
+
+        // The window is the model's, here as it is in the column: an
+        // unnamed model is the ordinary 200k, which this has filled.
+        view.model = None;
+        assert_eq!(view.context_percent(), Some(100));
+        assert_eq!(view.context_column(), "100%!");
     }
 
     #[test]

@@ -35,6 +35,7 @@ use crate::dispatch::Dispatch;
 use crate::graph::GraphLine;
 use crate::status::Status;
 use crate::terminal::{Guard, Screen};
+use crate::theme::Theme;
 
 /// How long the board waits for a keypress before re-reading the streams.
 ///
@@ -80,6 +81,11 @@ pub enum Action {
 pub struct App {
     /// The board as the last pass left it.
     pub board: Board,
+    /// The colours and glyphs this terminal asked for, read once in `main`
+    /// and carried here because this is what the loop draws from — a theme
+    /// re-read per frame would be the process's environment answering a
+    /// question the renderer is meant to be handed the answer to.
+    pub theme: Theme,
     /// The streams, one reader per task, kept between ticks.
     runs: Runs,
     /// The last report `keeler-status` gave.
@@ -125,11 +131,13 @@ impl App {
         status: Status,
         graph: Vec<GraphLine>,
         answered: Timestamp,
+        theme: Theme,
     ) -> Self {
         let mut runs = Runs::default();
         let board = Board::assemble(&status, &graph, &mut runs, answered);
         Self {
             board,
+            theme,
             runs,
             status,
             graph,
@@ -789,6 +797,7 @@ mod tests {
     use crate::clock::Timestamp;
     use crate::dispatch::Dispatch;
     use crate::terminal::{Guard, Screen};
+    use crate::theme::Theme;
     use ratatui::Terminal;
     use ratatui::backend::Backend as _;
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -877,6 +886,11 @@ mod tests {
             status,
             Vec::new(),
             Timestamp::from_epoch_seconds(1_000),
+            // Said outright rather than read from the process: the suite
+            // runs its tests in threads of one process, and a theme taken
+            // from the environment would be whatever the machine running
+            // them happens to export.
+            Theme::new(true, false),
         )
     }
 

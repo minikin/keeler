@@ -8,6 +8,15 @@
 use keeler_top::clock::Timestamp;
 use keeler_top::run::{RunView, Stage, fold, format_tokens};
 use keeler_top::stream::{Batch, Record, StreamReader};
+use keeler_top::theme::Theme;
+
+/// The theme every board below is built through.
+///
+/// Said outright and never read from the process: the theme is a value so
+/// that a test names the board it wants, and a suite that took the
+/// environment's answer would draw a different board on a machine that
+/// exports `NO_COLOR`.
+const THEME: Theme = Theme::new(true, false);
 
 // ── T1
 
@@ -2554,6 +2563,7 @@ fn app_over(reads: &Arc<Reads>, report: &str) -> App {
         status,
         Vec::new(),
         now(NOON),
+        THEME,
     )
 }
 
@@ -2901,6 +2911,7 @@ fn a_tick_that_could_read_the_graph_takes_its_word_and_its_refusal_back() {
         status,
         Vec::new(),
         now(NOON),
+        THEME,
     );
     // A refusal to be taken away: the first tick reads a ref the project
     // does not have, and the second reads the one it does.
@@ -2910,6 +2921,7 @@ fn a_tick_that_could_read_the_graph_takes_its_word_and_its_refusal_back() {
         keeler_top::status::parse(&report(&["T1     not spawned".to_string()])).expect("a report"),
         Vec::new(),
         now(NOON),
+        THEME,
     );
     lost.tick(now(NOON));
     assert!(
@@ -3142,6 +3154,7 @@ fn board_over(levers: &Arc<Levers>) -> (App, StatusFeed) {
         status,
         Vec::new(),
         now(NOON),
+        THEME,
     );
     let feed = StatusFeed::new(Arc::clone(levers) as Arc<dyn Dispatch>, now(NOON));
     (app, feed)

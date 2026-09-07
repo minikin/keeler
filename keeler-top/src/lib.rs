@@ -16,6 +16,7 @@ pub mod run;
 pub mod status;
 pub mod stream;
 pub mod terminal;
+pub mod theme;
 
 /// A directory of one test's own, under whatever the machine calls
 /// temporary.
