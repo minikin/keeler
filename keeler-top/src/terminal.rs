@@ -132,6 +132,31 @@ impl<S: Screen> Guard<S> {
         IN_SCREEN.store(true, Ordering::SeqCst);
         Ok(Self { screen })
     }
+
+    /// Gives the screen back for as long as `body` runs, and takes it again
+    /// after.
+    ///
+    /// What `Enter` is made of: `tmux attach` is a program the watcher is
+    /// *in*, and it wants the terminal the board is holding — raw mode and
+    /// the alternate screen both. Dropping the guard and building another
+    /// would give the screen back and take it again, but the flag is the
+    /// point: the panic hook and the guard agree by way of it about which
+    /// of them restores, and a board that left it saying `true` while tmux
+    /// had the terminal would give a screen back that was already gone.
+    ///
+    /// # Errors
+    ///
+    /// A screen that would not be given back — and then `body` does not
+    /// run, because whatever it is would run onto the board's own screen —
+    /// or one that would not be taken again.
+    pub fn away(&mut self, body: &mut dyn FnMut()) -> std::io::Result<()> {
+        IN_SCREEN.store(false, Ordering::SeqCst);
+        self.screen.leave()?;
+        body();
+        self.screen.enter()?;
+        IN_SCREEN.store(true, Ordering::SeqCst);
+        Ok(())
+    }
 }
 
 impl<S: Screen> Drop for Guard<S> {
@@ -210,6 +235,58 @@ mod tests {
             *done.lock().expect("the recorder"),
             ["enter", "leave"],
             "the screen was not given back",
+        );
+    }
+
+    #[test]
+    fn a_screen_handed_over_and_taken_back_is_still_the_guards_to_give_back() {
+        let done = Arc::new(Mutex::new(Vec::new()));
+
+        {
+            let mut guard = Guard::new(Recorder {
+                done: Arc::clone(&done),
+                refuses: false,
+            })
+            .expect("the recorder entered");
+            let mut ran = false;
+            guard.away(&mut || ran = true).expect("the recorder");
+            assert!(ran, "the body never ran between the two");
+            assert_eq!(
+                *done.lock().expect("the recorder"),
+                ["enter", "leave", "enter"]
+            );
+        }
+
+        assert_eq!(
+            *done.lock().expect("the recorder"),
+            ["enter", "leave", "enter", "leave"],
+            "the screen taken back at the end was not given back again",
+        );
+    }
+
+    #[test]
+    fn a_body_that_fell_over_leaves_the_screen_where_it_was_handed_to_it() {
+        // tmux crashing, or a `q` that ends the board from inside the
+        // attach: the screen is already the reader's, and a guard unwinding
+        // past would send `ESC[?1049l` at a terminal that is not in the
+        // alternate screen — which restores the cursor to where the last
+        // entry saved it, over whatever has been printed since.
+        let done = Arc::new(Mutex::new(Vec::new()));
+
+        let ended = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut guard = Guard::new(Recorder {
+                done: Arc::clone(&done),
+                refuses: false,
+            })
+            .expect("the recorder entered");
+            guard.away(&mut || panic!("tmux fell over"))
+        }));
+
+        assert!(ended.is_err(), "the fixture did not panic");
+        assert_eq!(
+            *done.lock().expect("the recorder"),
+            ["enter", "leave"],
+            "a screen the board had already given back was given back twice",
         );
     }
 

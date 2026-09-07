@@ -2423,6 +2423,26 @@ impl Dispatch for Reads {
     fn graph(&self, _spec: &Path) -> Result<String, String> {
         Ok(self.graph.clone())
     }
+
+    // T6's scenarios are the two reads and the loop's cadences, and none of
+    // the keys they press is a lever. A fixture that answered one would be
+    // hiding a pass that pulled it; the levers are T7's, and `Levers` below
+    // is what answers them.
+    fn kill(&self, session: &str) -> Result<(), String> {
+        panic!("a board about the cadences killed {session}")
+    }
+
+    fn resume(&self, task: &str) -> Result<String, String> {
+        panic!("a board about the cadences resumed {task}")
+    }
+
+    fn in_tmux(&self) -> bool {
+        false
+    }
+
+    fn attach(&self, session: &str, _inside: bool) -> Result<(), String> {
+        panic!("a board about the cadences attached to {session}")
+    }
 }
 
 /// A keyboard with a script: each pass takes the next entry, and a script
@@ -2994,4 +3014,585 @@ fn a_panic_restores_the_terminal_before_the_message_is_printed() {
     // And the guard unwinding past does not give the same screen back a
     // second time: `ESC[?1049l` twice restores the cursor to where the entry
     // saved it, which is above the message the first one made room for.
+}
+
+// ── T7
+
+use keeler_top::app::Live;
+use keeler_top::dispatch::{attach_command, handed, kill_command};
+
+/// What the board asked the world for, in the order it asked.
+///
+/// One list for the levers and the screen together, because half of these
+/// scenarios are about that order: the screen is given back *before* tmux
+/// takes the terminal and taken again after, and the kill is made *before*
+/// the marker that claims it.
+#[derive(Debug, Clone, Default)]
+struct Tally(Arc<Mutex<Vec<String>>>);
+
+impl Tally {
+    fn note(&self, what: &str) {
+        self.0.lock().expect("the tally").push(what.to_string());
+    }
+
+    fn seen(&self) -> Vec<String> {
+        self.0.lock().expect("the tally").clone()
+    }
+}
+
+impl Screen for Tally {
+    fn enter(&mut self) -> std::io::Result<()> {
+        self.note("enter");
+        Ok(())
+    }
+
+    fn leave(&mut self) -> std::io::Result<()> {
+        self.note("leave");
+        Ok(())
+    }
+}
+
+/// The three levers, recorded rather than run.
+///
+/// A pause is a `tmux kill-session`, a resume is a `just`, and an attach is
+/// a program that takes the terminal away from the suite running it — none
+/// of which a test may actually do. What is watched here is which lever the
+/// board pulled and what it did with the answer; the argv each one composes
+/// is `Shell`'s, and the scenarios below read that from [`kill_command`],
+/// [`attach_command`] and `Shell::resume_command` rather than describing it.
+struct Levers {
+    tally: Tally,
+    /// What `keeler-status` would print now — a closure rather than a
+    /// string, because two of these scenarios are about a report that
+    /// changes: the recipe reads the marker every time it runs, and so does
+    /// this.
+    report: Box<dyn Fn() -> String + Send + Sync>,
+    kill: Result<(), String>,
+    resume: Result<String, String>,
+    attach: Result<(), String>,
+    /// Whether the board is itself drawing inside tmux.
+    inside: bool,
+    /// What happens while the board is away, in tmux's place: the run it
+    /// attached to goes on writing to its stream, and what it wrote is what
+    /// the frame after the attach has to carry.
+    meanwhile: Option<Box<dyn Fn() + Send + Sync>>,
+}
+
+impl Levers {
+    /// Levers that all succeed, over a report that does not change.
+    fn answering(tally: &Tally, report: String) -> Self {
+        Self {
+            tally: tally.clone(),
+            report: Box::new(move || report.clone()),
+            kill: Ok(()),
+            resume: Ok(String::new()),
+            attach: Ok(()),
+            inside: false,
+            meanwhile: None,
+        }
+    }
+}
+
+impl Dispatch for Levers {
+    fn status(&self) -> Result<String, String> {
+        Ok((self.report)())
+    }
+
+    fn graph(&self, _spec: &Path) -> Result<String, String> {
+        Ok(String::new())
+    }
+
+    fn kill(&self, session: &str) -> Result<(), String> {
+        self.tally.note(&format!("kill {session}"));
+        self.kill.clone()
+    }
+
+    fn resume(&self, task: &str) -> Result<String, String> {
+        self.tally.note(&format!("resume {task}"));
+        self.resume.clone()
+    }
+
+    fn in_tmux(&self) -> bool {
+        self.inside
+    }
+
+    fn attach(&self, session: &str, inside: bool) -> Result<(), String> {
+        self.tally
+            .note(&format!("attach {session} inside={inside}"));
+        if let Some(meanwhile) = &self.meanwhile {
+            meanwhile();
+        }
+        self.attach.clone()
+    }
+}
+
+/// One task's line of the report, in whatever state the scenario wants it —
+/// the recipe's own `printf`, with the paths every state but two carries.
+fn state_line(id: &str, state: &str, log: &str) -> String {
+    format!("{id:<6} {state:<16} log {log}  worktree /nowhere")
+}
+
+/// The board over one set of answers, and the feed beside it.
+fn board_over(levers: &Arc<Levers>) -> (App, StatusFeed) {
+    let report = levers.status().expect("the fixture answers");
+    let status = keeler_top::status::parse(&report).expect("the fixture's report has a header");
+    let app = App::new(
+        Arc::clone(levers) as Arc<dyn Dispatch>,
+        PathBuf::from("/nowhere"),
+        status,
+        Vec::new(),
+        now(NOON),
+    );
+    let feed = StatusFeed::new(Arc::clone(levers) as Arc<dyn Dispatch>, now(NOON));
+    (app, feed)
+}
+
+/// The screen the board holds while these scenarios run: the terminal T5's
+/// frames go through, and a guard over a screen that records.
+fn held(tally: &Tally) -> Live<Tally, TestBackend> {
+    Live::new(
+        surface(),
+        Guard::new(tally.clone()).expect("the tally entered"),
+    )
+}
+
+/// One pass of the loop with one key pressed — which is what carries an
+/// action out, the key deciding only what it is.
+fn pressed(
+    screen: &mut Live<Tally, TestBackend>,
+    app: &mut App,
+    feed: &mut StatusFeed,
+    code: KeyCode,
+) {
+    step(screen, &mut Script::of(&[code]), app, feed, now(NOON)).expect("a pass");
+}
+
+/// The board after another read of `keeler-status`: what `r` asks for, and
+/// what the cadence asks for by itself five seconds later.
+fn refreshed(screen: &mut Live<Tally, TestBackend>, app: &mut App, feed: &mut StatusFeed) {
+    pressed(screen, app, feed, KeyCode::Char('r'));
+    settle(app, feed, now(NOON));
+}
+
+/// Every marker in a run directory, which is what "no file is written"
+/// asks about.
+fn markers(runfiles: &Runfiles) -> Vec<String> {
+    std::fs::read_dir(&runfiles.0)
+        .expect("the run directory")
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.ends_with(".paused"))
+        .collect()
+}
+
+/// The report `keeler-status` prints for a run whose session is gone with
+/// no verdict: `died`, or `paused` when the marker is beside the log.
+///
+/// The recipe's own reading, mirrored — that it reads the file is T8's
+/// scenario, pinned against the shipped recipe in `tests/top_recipes.rs`.
+/// What these scenarios are about is the board writing the file the recipe
+/// reads, and the row that follows from it.
+fn as_the_marker_has_it(log: &str) -> Box<dyn Fn() -> String + Send + Sync> {
+    let marker = PathBuf::from(log).with_extension("paused");
+    let log = log.to_string();
+    Box::new(move || {
+        let state = if marker.exists() { "paused" } else { "died" };
+        report(&[state_line("T1", state, &log)])
+    })
+}
+
+#[test]
+fn p_kills_the_selected_running_task_then_marks_it() {
+    // Given T1 is running in tmux session keeler-01-foo-t1 and its row is
+    // selected
+    let runfiles = Runfiles::new("t7-pause");
+    let log = runfiles.stream("t1", &[INIT.to_string()]);
+    let marker = PathBuf::from(&log).with_extension("paused");
+    let tally = Tally::default();
+    let gone = as_the_marker_has_it(&log);
+    let running = report(&[state_line("T1", "running", &log)]);
+    let levers = Arc::new(Levers {
+        // The recipe's answer, before and after: a session that is up is
+        // `running` whatever is on disk, and the marker is only read once
+        // the session is gone — which is what the kill makes it.
+        report: Box::new(move || {
+            if marker.exists() {
+                gone()
+            } else {
+                running.clone()
+            }
+        }),
+        ..Levers::answering(&tally, String::new())
+    });
+    let (mut app, mut feed) = board_over(&levers);
+    let mut screen = held(&tally);
+    assert_eq!(app.board.rows[0].state, "running");
+
+    // When the user presses p
+    pressed(&mut screen, &mut app, &mut feed, KeyCode::Char('p'));
+
+    // Then `tmux kill-session -t =keeler-01-foo-t1` runs
+    assert_eq!(tally.seen(), ["enter", "kill keeler-01-foo-t1"]);
+    let command = kill_command("keeler-01-foo-t1");
+    assert_eq!(command.get_program(), "tmux");
+    assert_eq!(
+        command.get_args().collect::<Vec<_>>(),
+        ["kill-session", "-t", "=keeler-01-foo-t1"],
+        "the session is named loosely — `=` is what keeps t1 from matching t10",
+    );
+
+    // And .keeler/runs/01-foo/t1.paused is written after it succeeds
+    let marker = PathBuf::from(&log).with_extension("paused");
+    assert!(
+        marker.exists(),
+        "the marker keeler-status reads is not beside the log it names",
+    );
+
+    // And T1's row reads "paused" on the next refresh
+    refreshed(&mut screen, &mut app, &mut feed);
+    assert_eq!(app.board.rows[0].state, "paused");
+}
+
+#[test]
+fn a_kill_that_fails_writes_no_marker() {
+    // Given T1's row is selected and the tmux stub fails on kill-session
+    let runfiles = Runfiles::new("t7-kill-fails");
+    let log = runfiles.stream("t1", &[INIT.to_string()]);
+    let tally = Tally::default();
+    let levers = Arc::new(Levers {
+        kill: Err("can't find session: =keeler-01-foo-t1".to_string()),
+        ..Levers::answering(&tally, report(&[state_line("T1", "running", &log)]))
+    });
+    let (mut app, mut feed) = board_over(&levers);
+    let mut screen = held(&tally);
+
+    // When the user presses p
+    pressed(&mut screen, &mut app, &mut feed, KeyCode::Char('p'));
+
+    // Then no marker is written and the status line carries tmux's reason
+    assert_eq!(
+        markers(&runfiles),
+        Vec::<String>::new(),
+        "the board claimed a pause its kill did not make",
+    );
+    assert_eq!(app.board.message, "can't find session: =keeler-01-foo-t1");
+}
+
+#[test]
+fn p_on_a_task_that_is_not_running_does_nothing() {
+    // Given T2's row is selected and T2 is not spawned
+    let runfiles = Runfiles::new("t7-not-running");
+    let log = runfiles.stream("t1", &[INIT.to_string()]);
+    let tally = Tally::default();
+    let levers = Arc::new(Levers::answering(
+        &tally,
+        report(&[
+            state_line("T1", "running", &log),
+            "T2     not spawned".to_string(),
+        ]),
+    ));
+    let (mut app, mut feed) = board_over(&levers);
+    let mut screen = held(&tally);
+    pressed(&mut screen, &mut app, &mut feed, KeyCode::Char('j'));
+    assert_eq!(app.board.selected, 1, "the fixture is about the wrong row");
+
+    // When the user presses p
+    pressed(&mut screen, &mut app, &mut feed, KeyCode::Char('p'));
+
+    // Then no file is written and the status line says T2 is not running
+    assert_eq!(
+        tally.seen(),
+        ["enter"],
+        "a task with no session was killed anyway",
+    );
+    assert_eq!(markers(&runfiles), Vec::<String>::new());
+    assert!(
+        app.board.message.contains("T2") && app.board.message.contains("not running"),
+        "the status line does not say why nothing happened: {}",
+        app.board.message,
+    );
+}
+
+#[test]
+fn a_session_killed_without_the_marker_is_still_died() {
+    // Given T1's tmux session is gone, no .exit file and no .paused marker
+    let runfiles = Runfiles::new("t7-died");
+    let log = runfiles.stream("t1", &[INIT.to_string()]);
+    let tally = Tally::default();
+    let levers = Arc::new(Levers {
+        report: as_the_marker_has_it(&log),
+        ..Levers::answering(&tally, String::new())
+    });
+    let (app, _feed) = board_over(&levers);
+
+    // When the board renders
+    // Then T1's state is "died"
+    assert_eq!(
+        app.board.rows[0].state, "died",
+        "a kill that bypassed the board was read as one the board made",
+    );
+    assert_eq!(markers(&runfiles), Vec::<String>::new());
+    assert!(row_of(&drawn(&app.board, 140, 20), "T1").contains("died"));
+}
+
+#[test]
+fn r_resumes_a_paused_or_died_task() {
+    // Given T1 is paused with its marker on disk and its row selected
+    let runfiles = Runfiles::new("t7-resume");
+    let log = runfiles.stream("t1", &[INIT.to_string()]);
+    std::fs::write(PathBuf::from(&log).with_extension("paused"), "").unwrap();
+    let tally = Tally::default();
+    let watching = tally.clone();
+    let paused = log.clone();
+    let levers = Arc::new(Levers {
+        // The recipe starts the session before it answers, so a report read
+        // after the resume is a report about a task that is running.
+        report: Box::new(move || {
+            let state = if watching.seen().iter().any(|call| call == "resume T1") {
+                "running"
+            } else {
+                "paused"
+            };
+            report(&[state_line("T1", state, &paused)])
+        }),
+        resume: Ok(
+            "keeler-resume: re-running T1 in the worktree and branch it already has\n  \
+             worktree: /w/repo-01-foo-t1\n"
+                .to_string(),
+        ),
+        ..Levers::answering(&tally, String::new())
+    });
+    let (mut app, mut feed) = board_over(&levers);
+    let mut screen = held(&tally);
+    assert_eq!(app.board.rows[0].state, "paused");
+
+    // When the user presses R
+    pressed(&mut screen, &mut app, &mut feed, KeyCode::Char('R'));
+
+    // Then `keeler-resume specs/01-foo.md T1` runs through the plugin's
+    // Justfile
+    assert_eq!(tally.seen(), ["enter", "resume T1"]);
+    let shell = Shell::new("/p", "/r", "specs/01-foo.md");
+    let command = shell.resume_command("T1");
+    assert_eq!(command.get_program(), "just");
+    assert_eq!(
+        command.get_args().collect::<Vec<_>>(),
+        [
+            "--justfile".as_ref(),
+            Path::new("/p/Justfile").as_os_str(),
+            "--working-directory".as_ref(),
+            Path::new("/r").as_os_str(),
+            "-q".as_ref(),
+            "keeler-resume".as_ref(),
+            "specs/01-foo.md".as_ref(),
+            "T1".as_ref(),
+        ],
+    );
+    // And the recipe's own first sentence is what the watcher is told.
+    assert_eq!(
+        app.board.message,
+        "keeler-resume: re-running T1 in the worktree and branch it already has",
+    );
+
+    // And T1's row reads "running" on the next refresh
+    refreshed(&mut screen, &mut app, &mut feed);
+    assert_eq!(app.board.rows[0].state, "running");
+}
+
+#[test]
+fn r_on_a_task_that_is_not_resumable_shows_keeler_resumes_refusal() {
+    // Given T1 is running and its row selected
+    let runfiles = Runfiles::new("t7-not-resumable");
+    let log = runfiles.stream("t1", &[INIT.to_string()]);
+    let tally = Tally::default();
+    let refusal = "keeler-resume: T1 is still running — attach with tmux attach -t \
+                   '=keeler-01-foo-t1', or let it finish";
+    let levers = Arc::new(Levers {
+        resume: Err(refusal.to_string()),
+        ..Levers::answering(&tally, report(&[state_line("T1", "running", &log)]))
+    });
+    let (mut app, mut feed) = board_over(&levers);
+    let mut screen = held(&tally);
+
+    // When the user presses R
+    pressed(&mut screen, &mut app, &mut feed, KeyCode::Char('R'));
+
+    // Then the status line shows keeler-resume's reason and nothing is
+    // spawned
+    assert_eq!(app.board.message, refusal);
+    assert_eq!(
+        tally.seen(),
+        ["enter", "resume T1"],
+        "the board decided for itself what was resumable",
+    );
+    assert_eq!(app.board.rows[0].state, "running");
+}
+
+#[test]
+fn enter_attaches_to_the_selected_running_task_and_returns_on_detach() {
+    // Given T1 is running, its row selected, and $TMUX is unset
+    let runfiles = Runfiles::new("t7-attach");
+    let log = runfiles.stream("t1", &[INIT.to_string()]);
+    let tally = Tally::default();
+    let writing = runfiles.0.join("t1.stream");
+    let levers = Arc::new(Levers {
+        inside: false,
+        // The run goes on working while nobody is reading the board.
+        meanwhile: Some(Box::new(move || {
+            use std::io::Write as _;
+            let mut stream = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&writing)
+                .expect("the fixture's stream");
+            writeln!(
+                stream,
+                "{}",
+                stamped_tool_use(
+                    "toolu_1",
+                    "Bash",
+                    serde_json::json!({"command": "just dev"})
+                ),
+            )
+            .expect("the fixture's stream");
+        })),
+        ..Levers::answering(&tally, report(&[state_line("T1", "running", &log)]))
+    });
+    let (mut app, mut feed) = board_over(&levers);
+    let mut screen = held(&tally);
+    assert_eq!(app.board.rows[0].stage_column(), "reading");
+
+    // When the user presses Enter
+    pressed(&mut screen, &mut app, &mut feed, KeyCode::Enter);
+
+    // Then the board leaves the alternate screen and runs
+    // `tmux attach -t =keeler-01-foo-t1`
+    assert_eq!(
+        tally.seen(),
+        [
+            "enter",
+            "leave",
+            "attach keeler-01-foo-t1 inside=false",
+            "enter",
+        ],
+        "tmux was handed a terminal the board was still drawing on",
+    );
+    let command = attach_command("keeler-01-foo-t1", false);
+    assert_eq!(command.get_program(), "tmux");
+    assert_eq!(
+        command.get_args().collect::<Vec<_>>(),
+        ["attach", "-t", "=keeler-01-foo-t1"],
+    );
+
+    // And when tmux exits the board redraws in the alternate screen with its
+    // state refreshed
+    assert_eq!(
+        app.board.rows[0].stage_column(),
+        "qa",
+        "the board came back showing what the run was doing before it left",
+    );
+    assert!(row_of(&drawn(&app.board, 140, 20), "T1").contains("just dev"));
+}
+
+#[test]
+fn inside_tmux_enter_switches_the_client_instead() {
+    // Given $TMUX is set and T1 is running with its row selected
+    let runfiles = Runfiles::new("t7-switch");
+    let log = runfiles.stream("t1", &[INIT.to_string()]);
+    let tally = Tally::default();
+    let levers = Arc::new(Levers {
+        inside: true,
+        ..Levers::answering(&tally, report(&[state_line("T1", "running", &log)]))
+    });
+    let (mut app, mut feed) = board_over(&levers);
+    let mut screen = held(&tally);
+
+    // When the user presses Enter
+    pressed(&mut screen, &mut app, &mut feed, KeyCode::Enter);
+
+    // Then the board runs `tmux switch-client -t =keeler-01-foo-t1` and
+    // stays up
+    assert_eq!(
+        tally.seen(),
+        ["enter", "attach keeler-01-foo-t1 inside=true"],
+        "the board gave away a screen tmux was not going to take",
+    );
+    let command = attach_command("keeler-01-foo-t1", true);
+    assert_eq!(command.get_program(), "tmux");
+    assert_eq!(
+        command.get_args().collect::<Vec<_>>(),
+        ["switch-client", "-t", "=keeler-01-foo-t1"],
+    );
+}
+
+#[test]
+fn enter_without_tmux_says_so_in_the_status_line() {
+    // Given tmux is not on PATH and T1's row is selected
+    //
+    // The sentence is not the fixture's: it is what the board's own way of
+    // running a program on its terminal gives back when there is no such
+    // program. What this scenario is about is that it reaches the status
+    // line rather than ending the board.
+    let missing = handed(std::process::Command::new("keeler-top-no-such-tmux"))
+        .expect_err("there is no such program");
+    assert!(
+        missing.contains("keeler-top-no-such-tmux") && missing.contains("not installed"),
+        "the refusal does not say the program is missing: {missing}",
+    );
+    let runfiles = Runfiles::new("t7-no-tmux");
+    let log = runfiles.stream("t1", &[INIT.to_string()]);
+    let tally = Tally::default();
+    let levers = Arc::new(Levers {
+        attach: Err(missing.replace("keeler-top-no-such-tmux", "tmux")),
+        ..Levers::answering(&tally, report(&[state_line("T1", "running", &log)]))
+    });
+    let (mut app, mut feed) = board_over(&levers);
+    let mut screen = held(&tally);
+
+    // When the user presses Enter
+    pressed(&mut screen, &mut app, &mut feed, KeyCode::Enter);
+
+    // Then the status line says tmux is not installed and the board stays up
+    assert!(
+        app.board.message.contains("tmux") && app.board.message.contains("not installed"),
+        "the status line does not name what is missing: {}",
+        app.board.message,
+    );
+    assert_eq!(
+        tally.seen().last().map(String::as_str),
+        Some("enter"),
+        "the board did not take its screen back from a tmux that never ran",
+    );
+}
+
+#[test]
+fn enter_on_a_task_with_no_session_says_so() {
+    // Given T2 is not spawned and its row selected
+    let runfiles = Runfiles::new("t7-no-session");
+    let log = runfiles.stream("t1", &[INIT.to_string()]);
+    let tally = Tally::default();
+    let levers = Arc::new(Levers::answering(
+        &tally,
+        report(&[
+            state_line("T1", "running", &log),
+            "T2     not spawned".to_string(),
+        ]),
+    ));
+    let (mut app, mut feed) = board_over(&levers);
+    let mut screen = held(&tally);
+    pressed(&mut screen, &mut app, &mut feed, KeyCode::Char('j'));
+
+    // When the user presses Enter
+    pressed(&mut screen, &mut app, &mut feed, KeyCode::Enter);
+
+    // Then the status line says T2 has no session to attach
+    assert!(
+        app.board.message.contains("T2") && app.board.message.contains("no session"),
+        "the status line does not say why nothing happened: {}",
+        app.board.message,
+    );
+    assert_eq!(
+        tally.seen(),
+        ["enter"],
+        "the board handed the terminal to a session that is not there",
+    );
 }
