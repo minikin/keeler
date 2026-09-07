@@ -1,0 +1,23 @@
+# The live board: the one workspace member that ships to adopters. `keeler
+# keeler-top <spec>` builds it from the plugin's own tree, so its
+# dependencies are paid for by whoever runs the board and by nobody else.
+#
+# A library holding every decision and a thin binary, as xtask is laid out:
+# keeler-top/tests/ can reach the core that way, and the terminal surface
+# that no test can drive stays small enough to see.
+[package]
+name = "keeler-top"
+version = "0.4.1"
+edition = "2024"
+rust-version = "1.88"
+publish = false
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+proptest = "1"
+
+[lints]
+workspace = true
