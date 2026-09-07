@@ -579,7 +579,12 @@ _write-runner SPEC TASK BRANCH WORKTREE RUNNER EXIT_FILE LOG_FILE STREAM_FILE:
     # Everything the session prints is teed to the log as it goes —
     # '--verbose', because without it claude -p prints nothing until its
     # final answer, and four minutes of honest work looks exactly like a
-    # hang to anyone watching.
+    # hang to anyone watching. The agent's stderr goes into the log by
+    # name rather than through this block's pipe: a node process marks
+    # every pipe it writes non-blocking, the flag lives on the file
+    # description every later writer shares, and 'cargo crap' printing
+    # its table into that pipe died with EAGAIN mid-row on five of spec
+    # 10's nine gates — green work, a red verdict.
     {
         # stream-json, because the exit code cannot answer the question
         # that matters. A session that hits its limit mid-work prints its
@@ -591,7 +596,7 @@ _write-runner SPEC TASK BRANCH WORKTREE RUNNER EXIT_FILE LOG_FILE STREAM_FILE:
         claude -p "\$prompt" --verbose --output-format stream-json \
             --plugin-dir "$plugin_root" \
             --permission-mode acceptEdits --allowedTools '$tools' --disallowedTools '$blocked' \
-            | tee "$stream_file"
+            2>>"$log_file" | tee "$stream_file"
         if ! grep -q '"type":"result"' "$stream_file" 2>/dev/null; then
             # The missing record says the process stopped. It does not say
             # the work did. So ask before giving up: a run killed

@@ -2408,3 +2408,35 @@ proptest::proptest! {
         );
     }
 }
+
+// ── the agent's stderr and the gate's pipe ──────────────────────────────
+
+#[test]
+fn the_agents_stderr_never_shares_the_gates_pipe() {
+    // Given a spawn, and the runner it wrote
+    let project = Project::new("eagain");
+    let output = project.spawn(SLUG, "T3");
+    assert!(output.status.success(), "{}", both(&output));
+    let runner = std::fs::read_to_string(project.runs(SLUG).join("t3.sh")).unwrap();
+    let log = project.runs(SLUG).join("t3.log");
+
+    // When the claude invocation is read
+    let start = runner
+        .find("claude -p")
+        .expect("the runner never invokes the agent");
+    let rest = &runner[start..];
+    let end = rest.find("| tee").expect("the agent's stream is not teed");
+    let invocation = &rest[..end];
+
+    // Then its stderr is sent into the log by name, not left on the
+    // block's shared pipe. A node process puts O_NONBLOCK on every pipe
+    // it writes, the flag lives on the file description every later
+    // writer inherits, and `cargo crap` printing its table into that
+    // same pipe died with "Resource temporarily unavailable (os error
+    // 35)" mid-row on five of spec 10's nine gates — green work, a red
+    // verdict, and a worktree keeler-land refused to remove.
+    assert!(
+        invocation.contains(&format!("2>>\"{}\"", log.display())),
+        "the agent's stderr shares the gate's pipe:\n{invocation}"
+    );
+}
