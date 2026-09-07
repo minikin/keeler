@@ -97,16 +97,76 @@ struct State {
 /// The word is the state's first, which is all the board matches on —
 /// `not spawned` is `not`, and no other state begins with it.
 const STATES: [State; 10] = [
-    State { word: "failed", glyph: "✗", ascii: "x", colour: RED, group: 0 },
-    State { word: "died", glyph: "⊘", ascii: "X", colour: RED, group: 0 },
-    State { word: "incomplete", glyph: "◔", ascii: "o", colour: YELLOW, group: 0 },
-    State { word: "paused", glyph: "‖", ascii: "=", colour: VIOLET, group: 1 },
-    State { word: "running", glyph: "●", ascii: "*", colour: ORANGE, group: 2 },
-    State { word: "passed", glyph: "◐", ascii: "+", colour: GREEN, group: 3 },
-    State { word: "ready", glyph: "◇", ascii: "<", colour: BLUE, group: 4 },
-    State { word: "blocked", glyph: "○", ascii: "-", colour: DIM, group: 5 },
-    State { word: "not", glyph: "·", ascii: ".", colour: DIM, group: 6 },
-    State { word: "done", glyph: "✓", ascii: "v", colour: DIM, group: 7 },
+    State {
+        word: "failed",
+        glyph: "✗",
+        ascii: "x",
+        colour: RED,
+        group: 0,
+    },
+    State {
+        word: "died",
+        glyph: "⊘",
+        ascii: "X",
+        colour: RED,
+        group: 0,
+    },
+    State {
+        word: "incomplete",
+        glyph: "◔",
+        ascii: "o",
+        colour: YELLOW,
+        group: 0,
+    },
+    State {
+        word: "paused",
+        glyph: "‖",
+        ascii: "=",
+        colour: VIOLET,
+        group: 1,
+    },
+    State {
+        word: "running",
+        glyph: "●",
+        ascii: "*",
+        colour: ORANGE,
+        group: 2,
+    },
+    State {
+        word: "passed",
+        glyph: "◐",
+        ascii: "+",
+        colour: GREEN,
+        group: 3,
+    },
+    State {
+        word: "ready",
+        glyph: "◇",
+        ascii: "<",
+        colour: BLUE,
+        group: 4,
+    },
+    State {
+        word: "blocked",
+        glyph: "○",
+        ascii: "-",
+        colour: DIM,
+        group: 5,
+    },
+    State {
+        word: "not",
+        glyph: "·",
+        ascii: ".",
+        colour: DIM,
+        group: 6,
+    },
+    State {
+        word: "done",
+        glyph: "✓",
+        ascii: "v",
+        colour: DIM,
+        group: 7,
+    },
 ];
 
 /// A word the table has no row for.
@@ -284,7 +344,11 @@ impl Theme {
     /// The panels' box.
     #[must_use]
     pub fn border(&self) -> border::Set<'static> {
-        if self.ascii { ASCII_BORDER } else { border::PLAIN }
+        if self.ascii {
+            ASCII_BORDER
+        } else {
+            border::PLAIN
+        }
     }
 
     /// What marks the selected row. U+25B8 and never U+25B6, which some
@@ -326,7 +390,7 @@ impl Theme {
     }
 
     /// The glyph set this terminal can draw.
-    const fn pick(&self, unicode: &'static str, ascii: &'static str) -> &'static str {
+    const fn pick(self, unicode: &'static str, ascii: &'static str) -> &'static str {
         if self.ascii { ascii } else { unicode }
     }
 }
@@ -413,7 +477,10 @@ mod tests {
         let glyphs = looks.map(|look| look.glyph);
         let styles = looks.map(|look| look.style);
 
-        assert_eq!(glyphs, ["✗", "⊘", "◔", "‖", "●", "◐", "◇", "○", "·", "✓", "?"]);
+        assert_eq!(
+            glyphs,
+            ["✗", "⊘", "◔", "‖", "●", "◐", "◇", "○", "·", "✓", "?"]
+        );
         assert_eq!(
             styles,
             [
@@ -431,7 +498,10 @@ mod tests {
             ]
             .map(|colour| Style::new().fg(colour)),
         );
-        assert_eq!(VOCABULARY.map(Theme::group), [0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 2]);
+        assert_eq!(
+            VOCABULARY.map(Theme::group),
+            [0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 2]
+        );
     }
 
     #[test]
@@ -440,7 +510,10 @@ mod tests {
         // wave still running has done rows in the background, and a
         // feature that is finished has nothing else to say.
         assert_eq!(COLOURED.look("done", true).style, Style::new().fg(GREEN));
-        assert_eq!(COLOURED.look("done", false).style, Style::new().fg(super::DIM));
+        assert_eq!(
+            COLOURED.look("done", false).style,
+            Style::new().fg(super::DIM)
+        );
         assert_eq!(
             COLOURED.look("running", true).style,
             Style::new().fg(super::ORANGE),
@@ -603,7 +676,10 @@ mod tests {
     #[test]
     fn the_selection_is_a_background_and_the_borders_a_colour_of_their_own() {
         assert_eq!(COLOURED.selection(), Style::new().bg(super::SELECTED_BG));
-        assert_eq!(COLOURED.style(super::BORDER), Style::new().fg(super::BORDER));
+        assert_eq!(
+            COLOURED.style(super::BORDER),
+            Style::new().fg(super::BORDER)
+        );
     }
 
     #[test]
@@ -630,10 +706,18 @@ mod tests {
         // And a locale that cannot draw the glyphs asks for the ASCII set
         // without anybody having to know the variable's name.
         for utf8 in ["en_US.UTF-8", "en_US.utf8", "C.UTF-8"] {
-            assert_eq!(chosen(None, None, Some(utf8)), Theme::new(true, false), "{utf8}");
+            assert_eq!(
+                chosen(None, None, Some(utf8)),
+                Theme::new(true, false),
+                "{utf8}"
+            );
         }
         for ascii in ["C", "POSIX", "en_US.ISO8859-1"] {
-            assert_eq!(chosen(None, None, Some(ascii)), Theme::new(true, true), "{ascii}");
+            assert_eq!(
+                chosen(None, None, Some(ascii)),
+                Theme::new(true, true),
+                "{ascii}"
+            );
         }
         // The two are independent: a terminal with no colours still draws
         // the glyphs, and one with no glyphs still has its colours.
@@ -718,8 +802,18 @@ mod tests {
     fn vocabulary() -> impl proptest::prelude::Strategy<Value = String> {
         proptest::prelude::Strategy::prop_map(
             proptest::sample::select(vec![
-                "failed", "died", "incomplete", "paused", "running", "passed", "ready", "blocked",
-                "not spawned", "done", "sulking", "",
+                "failed",
+                "died",
+                "incomplete",
+                "paused",
+                "running",
+                "passed",
+                "ready",
+                "blocked",
+                "not spawned",
+                "done",
+                "sulking",
+                "",
             ]),
             str::to_string,
         )

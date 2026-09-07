@@ -106,7 +106,14 @@ pub fn main(args: impl IntoIterator<Item = String>, theme: Theme) -> Result<(), 
         .ok_or_else(|| format!("keeler-top: keeler-status printed no board to read:\n{report}"))?;
     let graph = crate::graph::read(shell.as_ref(), &args.root, &status.git_ref, &status.rel)?;
     let now = Timestamp::now();
-    let mut app = App::new(Arc::clone(&shell), args.root.clone(), status, graph, now, theme);
+    let mut app = App::new(
+        Arc::clone(&shell),
+        args.root.clone(),
+        status,
+        graph,
+        now,
+        theme,
+    );
     match shown(&app.board, now, args.once, std::io::stdout().is_terminal())? {
         Show::Frame(frame) => written(std::io::stdout().write_all(frame.as_bytes())),
         Show::Live => crate::app::run(&mut app, shell),
