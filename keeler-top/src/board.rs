@@ -419,6 +419,121 @@ mod tests {
         assert_eq!(Runs::default().refresh(&task), None);
     }
 
+    /// A run directory of its own, removed on drop, with the log path a
+    /// report would name — the board finds the stream and the exit file
+    /// from that path, so the fixture is built the same way round.
+    struct Runfiles(std::path::PathBuf);
+
+    impl Runfiles {
+        fn new(name: &str) -> Self {
+            let dir =
+                std::env::temp_dir().join(format!("keeler-top-unit-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            Self(dir)
+        }
+
+        fn task(&self) -> StatusLine {
+            StatusLine {
+                id: "T1".to_string(),
+                state: "running".to_string(),
+                log: Some(self.0.join("t1.log")),
+                worktree: Some(std::path::PathBuf::from("/w/repo-01-foo-t1")),
+            }
+        }
+
+        fn write(&self, name: &str, body: &str) {
+            std::fs::write(self.0.join(name), body).unwrap();
+        }
+    }
+
+    impl Drop for Runfiles {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// One assistant record carrying one tool call, in the shape the CLI
+    /// writes it.
+    fn edit(path: &str) -> String {
+        serde_json::json!({
+            "type": "assistant",
+            "parent_tool_use_id": null,
+            "message": { "id": "m1", "content": [
+                { "type": "tool_use", "id": "toolu_1", "name": "Edit", "input": { "file_path": path } },
+            ]},
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn a_stream_the_runner_replaced_takes_the_view_with_it() {
+        // Every resume truncates the file — the runner tees, it does not
+        // append — and a board that folded the new run onto the old one
+        // would show a stage the new run has not reached.
+        let runfiles = Runfiles::new("replaced");
+        let task = runfiles.task();
+        runfiles.write(
+            "t1.stream",
+            &format!("{}\n", edit("/w/repo-01-foo-t1/src/x.rs")),
+        );
+        let mut runs = Runs::default();
+        assert_eq!(
+            runs.refresh(&task).expect("the stream is there").stage,
+            crate::run::Stage::Tdd,
+        );
+
+        runfiles.write("t1.stream", "{\"type\":\"result\"}\n");
+
+        assert_eq!(
+            runs.refresh(&task).expect("the stream is there").stage,
+            crate::run::Stage::Reading,
+            "the run that ended is still in the view",
+        );
+    }
+
+    #[test]
+    fn the_exit_file_beside_the_log_ends_the_run() {
+        // The runner writes it after the stream is closed, so it reaches
+        // the view from here and from nowhere else.
+        let runfiles = Runfiles::new("exit-file");
+        let task = runfiles.task();
+        runfiles.write(
+            "t1.stream",
+            &format!("{}\n", edit("/w/repo-01-foo-t1/src/x.rs")),
+        );
+        assert_eq!(
+            Runs::default().refresh(&task).expect("a stream").stage,
+            crate::run::Stage::Tdd,
+        );
+
+        runfiles.write("t1.exit", "1\n");
+
+        assert_eq!(
+            Runs::default().refresh(&task).expect("a stream").stage,
+            crate::run::Stage::Ended,
+        );
+    }
+
+    #[test]
+    fn a_report_line_that_lost_its_worktree_reads_no_edit_as_this_tasks_work() {
+        // The empty path is a prefix of every absolute path there is —
+        // `strip_prefix("")` succeeds on all of them — so a board that fell
+        // back to it would read a scratch file in /tmp as this task's tdd.
+        let runfiles = Runfiles::new("no-worktree");
+        let task = StatusLine {
+            worktree: None,
+            ..runfiles.task()
+        };
+        runfiles.write("t1.stream", &format!("{}\n", edit("/tmp/probe/src/lib.rs")));
+
+        let view = Runs::default().refresh(&task).expect("the stream is there");
+
+        assert_eq!(view.stage, crate::run::Stage::Reading);
+        // And the rest of the stream is read as it always is.
+        assert_eq!(view.tool_column(), "Edit: /tmp/probe/src/lib.rs");
+    }
+
     #[test]
     fn the_header_names_the_spec_the_ref_and_the_age_of_the_answer() {
         let status = parse("graph: specs/01-foo.md on feat/01-foo\n").expect("a report");
