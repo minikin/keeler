@@ -882,8 +882,8 @@ keeler-status SPEC:
         log_file="$runs/$tid.log"
         # A session killed by hand and a session that crashed leave the
         # same nothing behind: no tmux session, no verdict. The marker is
-        # the one thing that tells them apart, and only `keeler-top`'s `p`
-        # and this recipe know the name.
+        # the one thing that tells them apart — written by `keeler-top`'s
+        # `p`, removed by `keeler-resume`, and read here.
         paused_file="$runs/$tid.paused"
         branch="keeler/$slug/$tid"
         record="reviews/$slug/$tid.md"

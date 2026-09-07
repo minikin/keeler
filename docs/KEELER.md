@@ -169,8 +169,8 @@ either way, and the **yes** it asks for is yours.
 | `/keeler:graph` — `just keeler-graph <spec>` | Ready / blocked / done, read from the spec on the feature's branch **`feat/<spec-slug>`**; a cycle or a dangling `Needs:` is refused by the parser                               |
 | `just keeler-fan-out <spec>`                 | The wave: every ready task named, and one **yes** spawns them all through `keeler-spawn` — nothing starts that was not said yes to                                               |
 | `just keeler-spawn <spec> <task>`            | Worktree + branch `keeler/<spec-slug>/<task-id>` + a headless agent in a detached tmux session                                                                                   |
-| `just keeler-status <spec>`                  | The board: running, passed, incomplete, failed, died mid-pipeline, done, never spawned                                                                                           |
-| `just keeler-resume <spec> <task>`           | Re-runs a task whose session died, in the worktree and branch it already has                                                                                                     |
+| `just keeler-status <spec>`                  | The board: running, passed, incomplete, failed, died mid-pipeline, paused, done, never spawned                                                                                   |
+| `just keeler-resume <spec> <task>`           | Re-runs a task whose session died or was paused, in the worktree and branch it already has                                                                                       |
 | `just keeler-branch`                         | The gate a task branch runs instead of `just dev`: dev, then the CRAP delta vs the committed baseline, then mutants on the diff                                                  |
 | `just keeler-land`                           | Fan-in, twice: gates first at both levels; on `feat/<spec-slug>` it then removes landed worktrees, on main the baseline and `Status: Implemented` — staged for a human to commit |
 

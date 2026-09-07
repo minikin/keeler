@@ -139,8 +139,15 @@ impl Project {
 
     /// Runs a recipe with the stub tmux first on PATH.
     fn just(&self, args: &[&str]) -> Output {
+        self.just_with_env(args, &[])
+    }
+
+    /// The one place a recipe is run, so a caller that needs one more
+    /// variable cannot quietly lose the fixture's own.
+    fn just_with_env(&self, args: &[&str], extra: &[(&str, &str)]) -> Output {
         let path = std::env::var("PATH").unwrap();
-        Command::new(real_just())
+        let mut command = Command::new(real_just());
+        command
             .args(args)
             .current_dir(&self.dir)
             .env("PATH", format!("{}:{path}", self.dir.join("bin").display()))
@@ -149,9 +156,11 @@ impl Project {
                 if self.tmux_fails { "1" } else { "0" },
             )
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_SYSTEM", "/dev/null")
-            .output()
-            .expect("failed to run just")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null");
+        for (key, value) in extra {
+            command.env(key, value);
+        }
+        command.output().expect("failed to run just")
     }
 
     fn spawn(&self, task: &str) -> Output {
@@ -166,16 +175,10 @@ impl Project {
     /// because what is under test is which tasks it offers and not what
     /// spawning them does.
     fn fan_out_answering_no(&self) -> Output {
-        let path = std::env::var("PATH").unwrap();
-        Command::new(real_just())
-            .args(["keeler-fan-out", &spec_path()])
-            .current_dir(&self.dir)
-            .env("PATH", format!("{}:{path}", self.dir.join("bin").display()))
-            .env("KEELER_FAN_OUT_YES", "no")
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_SYSTEM", "/dev/null")
-            .output()
-            .expect("failed to run just")
+        self.just_with_env(
+            &["keeler-fan-out", &spec_path()],
+            &[("KEELER_FAN_OUT_YES", "no")],
+        )
     }
 
     fn runs(&self) -> PathBuf {
