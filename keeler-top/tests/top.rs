@@ -2317,6 +2317,10 @@ fn a_narrow_terminal_drops_the_detail_pane_before_it_drops_columns() {
             row.contains("running") && row.contains("qa") && row.contains("Bash: just dev"),
             "T{task}'s row lost a column: {row:?}",
         );
+        assert!(
+            row.chars().count() <= 100,
+            "the row runs past the window and is clipped where it stands: {row:?}",
+        );
     }
 
     // And the detail pane is absent

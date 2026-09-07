@@ -24,6 +24,11 @@ ratatui = { version = "0.30.2", default-features = false, features = [
 ] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# The table is composed as text and padded by hand, so the columns line up
+# only if what is measured is what the terminal draws. ratatui already
+# builds this crate for its own layout, so naming it here costs nothing
+# beyond the line.
+unicode-width = "0.2"
 
 [dev-dependencies]
 proptest = "1"

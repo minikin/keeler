@@ -11,7 +11,7 @@
 //! have been given the first time is two round trips through a recipe that
 //! takes seconds to answer.
 
-use std::io::IsTerminal as _;
+use std::io::{IsTerminal as _, Write as _};
 use std::path::PathBuf;
 
 use crate::board::{Board, Runs};
@@ -104,11 +104,24 @@ pub fn main(args: impl IntoIterator<Item = String>) -> Result<(), String> {
     let graph = crate::graph::read(&shell, &args.root, &status.git_ref, &status.rel)?;
     let now = Timestamp::now();
     let board = Board::assemble(&status, &graph, &mut Runs::default(), now);
-    print!(
-        "{}",
-        shown(&board, now, args.once, std::io::stdout().is_terminal())?
-    );
-    Ok(())
+    let frame = shown(&board, now, args.once, std::io::stdout().is_terminal())?;
+    written(std::io::stdout().write_all(frame.as_bytes()))
+}
+
+/// What a write to stdout means.
+///
+/// A pipe that closed under the write is not a failure. `keeler keeler-top
+/// --once <spec> | head -3` closes it the moment it has the three lines it
+/// asked for, and Rust ignores `SIGPIPE`, so the write returns an error
+/// where a shell tool would simply have ended — and a `panic!` from
+/// `print!` would report a reader who got exactly what they asked for as a
+/// board that crashed. Every other write error is the board's to report.
+fn written(wrote: std::io::Result<()>) -> Result<(), String> {
+    match wrote {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+        Err(err) => Err(format!("keeler-top: stdout: {err}")),
+    }
 }
 
 /// What the board has to show, once it has read one.
@@ -236,6 +249,25 @@ mod tests {
         );
         assert_ne!(piped, attached);
         assert!(attached.starts_with("keeler-top: "));
+    }
+
+    #[test]
+    fn a_pipe_that_closed_under_the_frame_is_not_a_failure() {
+        use std::io::{Error, ErrorKind};
+
+        assert_eq!(super::written(Ok(())), Ok(()));
+        assert_eq!(
+            super::written(Err(Error::from(ErrorKind::BrokenPipe))),
+            Ok(()),
+            "`--once | head -3` was reported as a board that crashed",
+        );
+
+        let refused = super::written(Err(Error::from(ErrorKind::StorageFull)))
+            .expect_err("a full disk is the board's to report");
+        assert!(
+            refused.starts_with("keeler-top: stdout: "),
+            "the refusal does not say where the frame did not go: {refused}",
+        );
     }
 
     #[test]

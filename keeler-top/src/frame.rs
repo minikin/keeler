@@ -35,6 +35,13 @@ const NARROWEST: [u16; COLUMNS] = [4, 5, 7, 10, 7, 5, 6, 9, 10];
 /// table's width.
 const TOOL: usize = 3;
 
+/// The columns a table keeps whatever the terminal: which task, what state
+/// it is in, which stage it is on, and what it is running. They are the
+/// four the narrow-terminal scenario names, and they are the ones a watcher
+/// came for — everything after the tool is a number that can wait for a
+/// wider window.
+const KEPT: usize = 4;
+
 /// One space between each pair of columns.
 const GAP: u16 = 1;
 
@@ -72,6 +79,9 @@ pub struct Grid {
     pub rows: Vec<[String; COLUMNS]>,
     /// How wide each column is on this terminal.
     pub widths: [u16; COLUMNS],
+    /// How many of the columns this terminal has room for, counted from
+    /// the left.
+    pub shown: usize,
 }
 
 impl Grid {
@@ -79,8 +89,12 @@ impl Grid {
     #[must_use]
     pub fn new(board: &Board, now: Timestamp, width: u16) -> Self {
         let rows: Vec<[String; COLUMNS]> = board.rows.iter().map(|row| cells(row, now)).collect();
-        let widths = widths(&rows, width);
-        Self { rows, widths }
+        let (shown, widths) = columns(&rows, width);
+        Self {
+            rows,
+            widths,
+            shown,
+        }
     }
 
     /// The table as lines: the headings, then one line per row.
@@ -89,20 +103,29 @@ impl Grid {
         let headings = HEADINGS.map(str::to_string);
         std::iter::once(&headings)
             .chain(self.rows.iter())
-            .map(|cells| line(cells, &self.widths))
+            .map(|cells| line(cells, &self.widths, self.shown))
             .collect()
     }
 }
 
-/// How wide each column is on a terminal `width` across.
+/// How many columns a terminal `width` across has room for, and how wide
+/// each of them is.
 ///
 /// Every column but the tool's is as wide as the widest thing in it, and
 /// never narrower than the shape it exists to hold. The state is the reason
 /// this is measured rather than fixed: `incomplete (no review record, box
 /// not ticked)` names the two things a task still lacks, and a column that
 /// cut it would drop the very words that say what to do.
+///
+/// Which is also why the table can end up wider than the window, and what
+/// this does about it. The columns go from the right, whole, until the tool
+/// has its own minimum — never clipped where they stand. The difference is
+/// the whole point: a column that is gone is visibly gone, while `f5064` in
+/// a clipped COMMIT reads as a commit that begins `f5064`. That is the
+/// failure the detail pane is dropped first to avoid, and dropping the pane
+/// alone did not avoid it.
 #[must_use]
-pub fn widths(rows: &[[String; COLUMNS]], width: u16) -> [u16; COLUMNS] {
+pub fn columns(rows: &[[String; COLUMNS]], width: u16) -> (usize, [u16; COLUMNS]) {
     let mut widths = NARROWEST;
     for (column, heading) in HEADINGS.iter().enumerate() {
         widths[column] = widths[column].max(wide(heading));
@@ -110,54 +133,89 @@ pub fn widths(rows: &[[String; COLUMNS]], width: u16) -> [u16; COLUMNS] {
             widths[column] = widths[column].max(wide(&row[column]));
         }
     }
-    // A gap for each column that is not the tool's, which is exactly the
-    // eight that sit between the nine.
-    let others = widths
+    let shown = (KEPT..=COLUMNS)
+        .rev()
+        .find(|shown| width.saturating_sub(fixed(&widths, *shown)) >= NARROWEST[TOOL])
+        // Four columns is the floor, and on a window too narrow even for
+        // those the table overflows rather than disappearing: a board
+        // nobody can read is still better than no board at all.
+        .unwrap_or(KEPT);
+    widths[TOOL] = width
+        .saturating_sub(fixed(&widths, shown))
+        .max(NARROWEST[TOOL]);
+    (shown, widths)
+}
+
+/// What everything but the tool takes up when `shown` columns are drawn,
+/// the spaces between them included.
+///
+/// A gap is added for each column that is not the tool's, which is exactly
+/// the `shown - 1` that sit between them: the tool is always among the ones
+/// drawn, since it comes before the last column any terminal keeps.
+fn fixed(widths: &[u16; COLUMNS], shown: usize) -> u16 {
+    widths[..shown]
         .iter()
         .enumerate()
         .filter(|(column, _)| *column != TOOL)
         .fold(0_u16, |total, (_, width)| {
             total.saturating_add(*width).saturating_add(GAP)
-        });
-    widths[TOOL] = width.saturating_sub(others).max(NARROWEST[TOOL]);
-    widths
+        })
 }
 
 /// One line of the table: each cell padded or cut to its column, a space
 /// between them, and nothing after the last.
-fn line(cells: &[String; COLUMNS], widths: &[u16; COLUMNS]) -> String {
+fn line(cells: &[String; COLUMNS], widths: &[u16; COLUMNS], shown: usize) -> String {
     let mut line = String::new();
-    for (column, (cell, width)) in cells.iter().zip(widths).enumerate() {
+    for (column, (cell, width)) in cells.iter().zip(widths).take(shown).enumerate() {
         if column > 0 {
             line.push(' ');
         }
         let cut = truncate(cell, *width);
-        let padding = usize::from(*width).saturating_sub(cut.chars().count());
+        let padding = usize::from(*width).saturating_sub(usize::from(wide(&cut)));
         line.push_str(&cut);
         line.push_str(&" ".repeat(padding));
     }
     line.trim_end().to_string()
 }
 
-/// A string's width in the terminal's columns.
+/// How many of the terminal's columns a string takes up.
+///
+/// Not its characters: the table is composed as text and padded by hand, so
+/// a cell measured in characters and drawn in columns puts every column
+/// after it out by one for each double-width character in it. The only cell
+/// that can hold one is the command, which is whatever the agent typed.
 fn wide(text: &str) -> u16 {
-    u16::try_from(text.chars().count()).unwrap_or(u16::MAX)
+    u16::try_from(unicode_width::UnicodeWidthStr::width(text)).unwrap_or(u16::MAX)
 }
 
 /// `text` cut to `width` columns, the last of them an ellipsis saying that
 /// something was cut. The detail pane is where the whole of it is.
+///
+/// Cut by column and not by character, for the reason [`wide`] gives — and
+/// a character that would straddle the edge is left out rather than half
+/// drawn, so the result can be a column short of its budget. The padding
+/// that follows it in [`line`] closes that up.
 #[must_use]
 pub fn truncate(text: &str, width: u16) -> String {
-    let width = usize::from(width);
-    if text.chars().count() <= width {
+    if wide(text) <= width {
         return text.to_string();
     }
     // A column with no room for the ellipsis has no room for a head to put
     // it after either.
-    let mut cut: String = text.chars().take(width.saturating_sub(1)).collect();
-    if width > 0 {
-        cut.push('…');
+    let Some(budget) = usize::from(width).checked_sub(1) else {
+        return String::new();
+    };
+    let mut cut = String::new();
+    let mut used = 0;
+    for character in text.chars() {
+        let next = used + unicode_width::UnicodeWidthChar::width(character).unwrap_or(0);
+        if next > budget {
+            break;
+        }
+        cut.push(character);
+        used = next;
     }
+    cut.push('…');
     cut
 }
 
@@ -274,7 +332,7 @@ fn table(board: &Board, now: Timestamp, width: u16) -> Paragraph<'static> {
 
 #[cfg(test)]
 mod tests {
-    use super::{COLUMNS, Grid, HEADINGS, NARROWEST, TOOL, layout, truncate, widths};
+    use super::{COLUMNS, Grid, HEADINGS, KEPT, NARROWEST, TOOL, columns, layout, truncate};
     use crate::board::{Board, Row, Runs};
     use crate::clock::Timestamp;
     use crate::status::parse;
@@ -288,16 +346,27 @@ mod tests {
         cells
     }
 
+    /// The grid a terminal of this width composes, so a test can read the
+    /// lines rather than the arithmetic behind them.
+    fn grid(rows: Vec<[String; COLUMNS]>, width: u16) -> Grid {
+        let (shown, widths) = columns(&rows, width);
+        Grid {
+            rows,
+            widths,
+            shown,
+        }
+    }
+
     #[test]
     fn a_column_is_as_wide_as_the_widest_thing_in_it_and_never_narrower_than_its_shape() {
-        let narrow = widths(&[cells("running", "Bash: just dev")], 120);
+        let (_, narrow) = columns(&[cells("running", "Bash: just dev")], 120);
         assert_eq!(narrow[1], 7, "the state column did not fit its value");
         assert_eq!(
             narrow[2], NARROWEST[2],
             "an empty column shrank below its shape"
         );
 
-        let wide = widths(
+        let (_, wide) = columns(
             &[cells("incomplete (no review record, box not ticked)", "x")],
             120,
         );
@@ -312,7 +381,7 @@ mod tests {
         // `ELAPSED` and `TOKENS` are both wider than anything they hold,
         // and a table whose headings ran into each other would read as one
         // column with a long name.
-        let widths = widths(&[], 120);
+        let (_, widths) = columns(&[], 120);
         for (column, heading) in HEADINGS.iter().enumerate() {
             assert!(
                 widths[column] >= super::wide(heading),
@@ -324,16 +393,20 @@ mod tests {
     #[test]
     fn the_tool_takes_what_is_left_and_never_less_than_its_own_minimum() {
         let rows = [cells("running", &"x".repeat(400))];
-        let roomy = widths(&rows, 200);
-        let cramped = widths(&rows, 40);
+        let (_, roomy) = columns(&rows, 200);
+        let (_, cramped) = columns(&rows, 40);
 
         assert!(
             roomy[TOOL] > cramped[TOOL],
             "the tool column did not follow the terminal's width",
         );
+        // Its own minimum is a floor and not a target: the columns to the
+        // right of it go first, so the tool keeps whatever they leave.
+        assert!(cramped[TOOL] >= NARROWEST[TOOL]);
         assert_eq!(
-            cramped[TOOL], NARROWEST[TOOL],
-            "a narrow terminal squeezed the tool column out of existence",
+            columns(&rows, 0).1[TOOL],
+            NARROWEST[TOOL],
+            "a window with nothing in it squeezed the tool column out of existence",
         );
         // And a command four hundred characters long must not be what sets
         // the table's width: every other column was measured against its
@@ -342,12 +415,52 @@ mod tests {
     }
 
     #[test]
+    fn a_table_wider_than_the_window_drops_columns_whole_rather_than_clipping_them() {
+        // The state that fills a column: at a hundred columns the other
+        // eight and their gaps come to more than the window, and a table
+        // that only floored the tool column would have run off the right
+        // edge with COMMIT half drawn.
+        let rows = vec![cells(
+            "incomplete (no review record, box not ticked)",
+            "just dev",
+        )];
+
+        let grid = grid(rows, 100);
+
+        assert_eq!(grid.shown, 8, "the table kept a column it had no room for");
+        for line in grid.lines() {
+            assert!(
+                super::wide(&line) <= 100,
+                "the line runs past the window: {line:?}",
+            );
+        }
+        // And what it kept is what a watcher came for.
+        assert!(grid.lines()[1].contains("incomplete (no review record, box not ticked)"));
+        assert!(grid.lines()[1].contains("just dev"));
+        assert!(!grid.lines()[0].contains("COMMIT"));
+    }
+
+    #[test]
+    fn four_columns_is_the_floor_and_a_window_below_it_is_not_an_empty_board() {
+        let rows = vec![cells("running", "Bash: just dev")];
+
+        for width in [0, 1, 20] {
+            let grid = grid(rows.clone(), width);
+            assert_eq!(grid.shown, KEPT, "at {width} columns");
+            assert!(
+                grid.lines()[1].starts_with("T1 "),
+                "the row lost the task it is about at {width} columns",
+            );
+        }
+        // The columns come back one at a time as the window widens, and all
+        // nine are there when there is room for them.
+        assert_eq!(grid(rows.clone(), 40).shown, 5);
+        assert_eq!(grid(rows, 200).shown, COLUMNS);
+    }
+
+    #[test]
     fn a_cell_is_padded_to_its_column_and_the_line_ends_where_the_last_one_does() {
-        let grid = Grid {
-            rows: vec![cells("running", "Bash: just dev")],
-            widths: widths(&[cells("running", "Bash: just dev")], 120),
-        };
-        let lines = grid.lines();
+        let lines = grid(vec![cells("running", "Bash: just dev")], 120).lines();
 
         assert!(lines[0].starts_with("TASK "), "{:?}", lines[0]);
         assert!(lines[1].starts_with("T1   running"), "{:?}", lines[1]);
@@ -360,6 +473,39 @@ mod tests {
     }
 
     #[test]
+    fn a_double_width_character_is_two_columns_and_the_padding_knows_it() {
+        // The command is the one cell that holds whatever the agent typed,
+        // and a cell measured in characters and drawn in columns puts every
+        // column after it out by one for each of these. The two commands
+        // below are the same width and different lengths, which is the
+        // whole difference between the two ways of measuring.
+        let ascii = commit_row("Bash: xxxx");
+        let doubled = commit_row("Bash: 更新");
+
+        let ascii_line = grid(vec![ascii], 120).lines().remove(1);
+        let doubled_line = grid(vec![doubled], 120).lines().remove(1);
+
+        assert_eq!(
+            super::wide(&ascii_line),
+            super::wide(&doubled_line),
+            "the two rows do not end in the same column:\n{ascii_line}\n{doubled_line}",
+        );
+        assert_ne!(
+            ascii_line.chars().count(),
+            doubled_line.chars().count(),
+            "the fixture does not tell the two measurements apart",
+        );
+    }
+
+    /// A row whose last column is not empty, so the trailing space a line
+    /// is trimmed of cannot hide a padding mistake behind it.
+    fn commit_row(tool: &str) -> [String; COLUMNS] {
+        let mut cells = cells("running", tool);
+        cells[COLUMNS - 1] = "f5064b1 +3".to_string();
+        cells
+    }
+
+    #[test]
     fn a_value_wider_than_its_column_is_cut_with_an_ellipsis() {
         assert_eq!(truncate("just dev", 8), "just dev");
         assert_eq!(truncate("just dev", 9), "just dev");
@@ -368,9 +514,17 @@ mod tests {
         // A column with no room for the ellipsis has no room for anything.
         assert_eq!(truncate("just dev", 0), "");
         assert_eq!(truncate("", 0), "");
-        // Characters, not bytes: the dash and the ellipsis are three bytes
+        // Columns, not bytes: the dash and the ellipsis are three bytes
         // each, and a cut counted in bytes would slice one in half.
         assert_eq!(truncate("————", 3), "——…");
+        // And columns, not characters: two of these fill four of them, so
+        // three columns hold one and the ellipsis.
+        assert_eq!(truncate("更新", 3), "更…");
+        assert_eq!(truncate("更新", 4), "更新");
+        // A character that would straddle the edge is left out rather than
+        // half drawn — which leaves the answer a column short, and the
+        // padding that follows it closes that up.
+        assert_eq!(super::wide(&truncate("更新更", 4)), 3);
     }
 
     #[test]
