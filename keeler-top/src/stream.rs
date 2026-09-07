@@ -387,6 +387,32 @@ mod tests {
     }
 
     #[test]
+    fn a_record_a_subagent_made_is_one_the_board_does_not_read() {
+        // A run spawns subagents, and their records share the stream with
+        // `parent_tool_use_id` set. Dropping them here rather than in the
+        // fold is what makes "only the main session counts" true of every
+        // column at once — the stage, the tool, the texts and the usage —
+        // instead of a rule each of them has to remember separately.
+        assert_eq!(
+            super::parse_line(
+                br#"{"type":"assistant","parent_tool_use_id":"toolu_1","message":{"id":"m1"}}"#
+            ),
+            Some(Record::Other),
+        );
+        assert_eq!(
+            super::parse_line(
+                br#"{"type":"user","parent_tool_use_id":"toolu_1","message":{"content":[]}}"#
+            ),
+            Some(Record::Other),
+        );
+        assert_eq!(
+            super::parse_line(br#"{"type":"assistant","parent_tool_use_id":null,"message":{}}"#),
+            Some(Record::Assistant(serde_json::json!({}))),
+            "an explicit null parent is the main session, not a subagent",
+        );
+    }
+
+    #[test]
     fn a_line_that_is_neither_utf8_nor_json_nor_a_record_is_skipped() {
         assert_eq!(super::parse_line(&[0xff, 0xfe]), None);
         assert_eq!(super::parse_line(b"not json at all"), None);

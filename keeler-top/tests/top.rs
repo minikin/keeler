@@ -5,6 +5,7 @@
 //! door drives shell — `tests/top_recipes.rs` is where the recipe scenarios
 //! of this spec live.
 
+use keeler_top::run::{RunView, Stage, fold};
 use keeler_top::stream::{Batch, Record, StreamReader};
 
 // ── T1
@@ -292,5 +293,377 @@ fn stream_line() -> impl proptest::prelude::Strategy<Value = String> {
         Just(r#"{"type":"user","message":{"content":[{"type":"tool_result"}]}}"#.to_string()),
         Just(r#"{"type":"result","subtype":"success"}"#.to_string()),
         "[^\n]{0,12}",
+    ]
+}
+
+// ── T2
+
+/// The worktree `keeler-status` reports for T1 of `specs/01-foo.md`. Every
+/// path in a `Write`/`Edit` input is absolute, so this prefix is what says
+/// whether an edit was this task's work or something else the agent
+/// touched. Nothing here is on disk: stripping a prefix asks the
+/// filesystem nothing.
+const WORKTREE: &str = "/Users/k/GitHub/keeler-01-foo-t1";
+
+/// One assistant record carrying one `tool_use` block, as the CLI writes
+/// it: one record per content block, `parent_tool_use_id` null for the
+/// session the board is watching.
+fn tool_use(name: &str, input: serde_json::Value) -> String {
+    tool_use_under(serde_json::Value::Null, name, input)
+}
+
+/// The same call made by a subagent. The one thing telling it from the
+/// main session's is `parent_tool_use_id`, which names the `Task` call that
+/// started it — and which sits at the top level of the record, not inside
+/// its message.
+fn subagent_tool_use(name: &str, input: serde_json::Value) -> String {
+    tool_use_under(serde_json::json!("toolu_the_task_call"), name, input)
+}
+
+fn tool_use_under(parent: serde_json::Value, name: &str, input: serde_json::Value) -> String {
+    serde_json::json!({
+        "type": "assistant",
+        "parent_tool_use_id": parent,
+        "message": {
+            "id": "m1",
+            "content": [{ "type": "tool_use", "id": "toolu_1", "name": name, "input": input }],
+        },
+    })
+    .to_string()
+}
+
+/// An absolute path inside T1's worktree, the way the stream spells one.
+fn in_worktree(relative: &str) -> String {
+    format!("{WORKTREE}/{relative}")
+}
+
+/// Every line through the reader and the fold, the way the board does it.
+///
+/// The parser is part of the answer, not a step before it: a subagent's
+/// record is told from the main session's at the top level of the record,
+/// so a test that folded hand-built records would be asking a different
+/// question from the one the board asks.
+fn fold_stream(name: &str, lines: &[String]) -> RunView {
+    let stream = Stream::new(name);
+    let mut body = lines.join("\n");
+    body.push('\n');
+    stream.write(body.as_bytes());
+
+    let mut view = RunView::default();
+    for record in stream.reader().poll().records {
+        fold(&mut view, record, std::path::Path::new(WORKTREE));
+    }
+    view
+}
+
+/// The stage a stream leaves the board on, as the word the column shows.
+fn stage_of_stream(name: &str, lines: &[String]) -> String {
+    fold_stream(name, lines).stage.to_string()
+}
+
+#[test]
+fn before_any_signal_the_stage_is_reading() {
+    // Given T1's stream holds an init record and Read tool calls only
+    let lines = vec![
+        INIT.to_string(),
+        tool_use("Read", serde_json::json!({ "file_path": in_worktree("keeler.md") })),
+        tool_use("Read", serde_json::json!({ "file_path": in_worktree("tests/top.rs") })),
+    ];
+
+    // When the board renders
+    // Then T1's stage is "reading" — reading a file in the worktree is the
+    // one thing the row is named after, and it is not an edit.
+    assert_eq!(stage_of_stream("stage-reading", &lines), "reading");
+}
+
+#[test]
+fn an_edit_under_tests_moves_the_stage_to_tdd() {
+    // Given T1's stream holds an Edit tool_use on tests/top.rs
+    let lines = vec![
+        INIT.to_string(),
+        tool_use("Edit", serde_json::json!({ "file_path": in_worktree("tests/top.rs") })),
+    ];
+
+    // When the board renders
+    // Then T1's stage is "tdd"
+    assert_eq!(stage_of_stream("stage-tdd", &lines), "tdd");
+}
+
+#[test]
+fn a_gate_recipe_moves_the_stage_to_qa() {
+    // Given T1's stream holds a Bash tool_use with command "just dev 2>&1 | tail -35"
+    let lines = vec![
+        INIT.to_string(),
+        tool_use("Bash", serde_json::json!({ "command": "just dev 2>&1 | tail -35" })),
+    ];
+
+    // When the board renders
+    // Then T1's stage is "qa"
+    assert_eq!(stage_of_stream("stage-qa", &lines), "qa");
+}
+
+#[test]
+fn the_code_review_skill_or_a_write_to_the_review_record_means_review() {
+    // Given T1's stream holds a Skill tool_use with skill "code-review"
+    let skill = vec![
+        INIT.to_string(),
+        tool_use("Skill", serde_json::json!({ "skill": "code-review" })),
+    ];
+
+    // When the board renders
+    // Then T1's stage is "review"
+    assert_eq!(stage_of_stream("stage-review-skill", &skill), "review");
+
+    // And a Write tool_use on reviews/01-foo/t1.md alone gives the same answer
+    let record = vec![
+        INIT.to_string(),
+        tool_use(
+            "Write",
+            serde_json::json!({ "file_path": in_worktree("reviews/01-foo/t1.md") }),
+        ),
+    ];
+    assert_eq!(stage_of_stream("stage-review-record", &record), "review");
+}
+
+#[test]
+fn a_mutants_command_means_mutants() {
+    // Given T1's stream holds a Bash tool_use with command "just mutants-diff main"
+    let lines = vec![
+        INIT.to_string(),
+        tool_use("Bash", serde_json::json!({ "command": "just mutants-diff main" })),
+    ];
+
+    // When the board renders
+    // Then T1's stage is "mutants"
+    assert_eq!(stage_of_stream("stage-mutants", &lines), "mutants");
+}
+
+#[test]
+fn a_keeler_branch_command_sets_the_stage_to_gate() {
+    // Given T1's stream holds a Bash tool_use whose command starts with "just keeler-branch"
+    let lines = vec![
+        INIT.to_string(),
+        tool_use("Bash", serde_json::json!({ "command": "just keeler-branch 2>&1 | tail -40" })),
+    ];
+
+    // When the board renders
+    // Then T1's stage is "gate"
+    assert_eq!(stage_of_stream("stage-gate", &lines), "gate");
+}
+
+#[test]
+fn the_stage_does_not_move_backwards() {
+    // Given T1's stream holds a Skill code-review followed by a Bash "just dev"
+    let lines = vec![
+        INIT.to_string(),
+        tool_use("Skill", serde_json::json!({ "skill": "code-review" })),
+        tool_use("Bash", serde_json::json!({ "command": "just dev" })),
+    ];
+
+    // When the board renders
+    // Then T1's stage is still "review"
+    assert_eq!(stage_of_stream("stage-monotone", &lines), "review");
+}
+
+#[test]
+fn a_keeler_skill_call_if_one_appears_names_its_stage() {
+    // Given T1's stream holds a Skill tool_use with skill "keeler:mutants"
+    let lines = vec![
+        INIT.to_string(),
+        tool_use("Skill", serde_json::json!({ "skill": "keeler:mutants" })),
+    ];
+
+    // When the board renders
+    // Then T1's stage is "mutants"
+    assert_eq!(stage_of_stream("stage-keeler-skill", &lines), "mutants");
+}
+
+#[test]
+fn a_subagents_tool_calls_do_not_move_the_stage() {
+    // Given T1's stream holds a Bash "just dev" whose record has
+    // parent_tool_use_id set, and nothing else
+    let lines = vec![
+        INIT.to_string(),
+        subagent_tool_use("Bash", serde_json::json!({ "command": "just dev" })),
+    ];
+
+    // When the board renders
+    // Then T1's stage is "reading"
+    assert_eq!(stage_of_stream("stage-subagent", &lines), "reading");
+}
+
+#[test]
+fn a_task_with_an_exit_file_shows_ended_as_its_stage() {
+    // Given T1's .exit file holds 0 and keeler-status says passed — a run
+    // that reached its gate and came back green.
+    let mut passed = fold_stream(
+        "stage-ended-passed",
+        &[
+            INIT.to_string(),
+            tool_use("Bash", serde_json::json!({ "command": "just keeler-branch" })),
+        ],
+    );
+    passed.ended();
+
+    // And T2's .exit file holds 1 and keeler-status says failed (exit 1).
+    // What the file holds never reaches the board: `ended` takes no
+    // argument, so 0 and 1 cannot answer differently.
+    let mut failed = fold_stream(
+        "stage-ended-failed",
+        &[
+            INIT.to_string(),
+            tool_use("Edit", serde_json::json!({ "file_path": in_worktree("src/lib.rs") })),
+        ],
+    );
+    failed.ended();
+
+    // When the board renders
+    // Then both stages read "ended"
+    assert_eq!(passed.stage.to_string(), "ended");
+    assert_eq!(failed.stage.to_string(), "ended");
+}
+
+#[test]
+fn an_edit_outside_the_worktree_is_not_tdd() {
+    // Given T1's stream holds a Write tool_use on /tmp/probe/src/lib.rs and nothing else
+    let lines = vec![
+        INIT.to_string(),
+        tool_use("Write", serde_json::json!({ "file_path": "/tmp/probe/src/lib.rs" })),
+    ];
+
+    // When the board renders
+    // Then T1's stage is "reading"
+    assert_eq!(stage_of_stream("stage-outside", &lines), "reading");
+}
+
+#[test]
+fn an_edit_to_the_worktrees_justfile_is_tdd() {
+    // Given T1's stream holds an Edit tool_use on <worktree>/Justfile —
+    // t10 of spec 09 spent its whole red-green cycle here, and a rule that
+    // knew only src/ and tests/ would have shown "reading" throughout.
+    let lines = vec![
+        INIT.to_string(),
+        tool_use("Edit", serde_json::json!({ "file_path": in_worktree("Justfile") })),
+    ];
+
+    // When the board renders
+    // Then T1's stage is "tdd"
+    assert_eq!(stage_of_stream("stage-justfile", &lines), "tdd");
+}
+
+#[test]
+fn a_command_that_merely_mentions_mutants_is_not_the_mutants_stage() {
+    // Given T1's stream holds a Bash tool_use with command "grep -c mutants mutants.out"
+    let lines = vec![
+        INIT.to_string(),
+        tool_use("Bash", serde_json::json!({ "command": "grep -c mutants mutants.out" })),
+    ];
+
+    // When the board renders
+    // Then T1's stage is "reading"
+    assert_eq!(stage_of_stream("stage-mentions-mutants", &lines), "reading");
+}
+
+#[test]
+fn crap_delta_is_qa() {
+    // Given T1's stream holds a Bash tool_use with command "keeler crap-delta"
+    let lines = vec![
+        INIT.to_string(),
+        tool_use("Bash", serde_json::json!({ "command": "keeler crap-delta" })),
+    ];
+
+    // When the board renders
+    // Then T1's stage is "qa" — half of keeler-branch, run on its own, is
+    // the qa stage and not the gate.
+    assert_eq!(stage_of_stream("stage-crap-delta", &lines), "qa");
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::prelude::ProptestConfig {
+        cases: 256,
+        failure_persistence: Some(Box::new(
+            proptest::test_runner::FileFailurePersistence::WithSource("proptest-regressions"),
+        )),
+        ..proptest::prelude::ProptestConfig::default()
+    })]
+
+    /// Given any sequence of stage signals, when they are folded, every
+    /// intermediate stage is no earlier than the one before it.
+    ///
+    /// And, since a fold that never moved at all would satisfy that on its
+    /// own, the stage the sequence ends on is the furthest signal in it —
+    /// which is the same rule stated from the other side.
+    #[test]
+    fn any_stage_sequence_never_moves_backwards(
+        signals in proptest::collection::vec(stage_signal(), 0..12),
+    ) {
+        let stream = Stream::new("stage-sequence");
+        let mut body = format!("{INIT}\n");
+        for (line, _) in &signals {
+            body.push_str(line);
+            body.push('\n');
+        }
+        stream.write(body.as_bytes());
+
+        let mut view = RunView::default();
+        let mut previous = Stage::default();
+        for record in stream.reader().poll().records {
+            fold(&mut view, record, std::path::Path::new(WORKTREE));
+            proptest::prop_assert!(
+                view.stage >= previous,
+                "the stage went from {previous} back to {}",
+                view.stage,
+            );
+            previous = view.stage;
+        }
+
+        let furthest = signals
+            .iter()
+            .map(|(_, stage)| *stage)
+            .max()
+            .unwrap_or_default();
+        proptest::prop_assert_eq!(view.stage, furthest);
+    }
+}
+
+/// One stage signal and the stage it stands for: the five a tool call can
+/// name, and the four that name none — a read, an edit somewhere else, a
+/// subagent's gate run, and a line that is not a record at all.
+fn stage_signal() -> impl proptest::prelude::Strategy<Value = (String, Stage)> {
+    use proptest::prelude::{Just, prop_oneof};
+    prop_oneof![
+        Just((
+            tool_use("Edit", serde_json::json!({ "file_path": in_worktree("src/run.rs") })),
+            Stage::Tdd,
+        )),
+        Just((
+            tool_use("Bash", serde_json::json!({ "command": "keeler dev" })),
+            Stage::Qa,
+        )),
+        Just((
+            tool_use("Skill", serde_json::json!({ "skill": "code-review" })),
+            Stage::Review,
+        )),
+        Just((
+            tool_use("Bash", serde_json::json!({ "command": "just mutants-diff main" })),
+            Stage::Mutants,
+        )),
+        Just((
+            tool_use("Bash", serde_json::json!({ "command": "just keeler-branch" })),
+            Stage::Gate,
+        )),
+        Just((
+            tool_use("Read", serde_json::json!({ "file_path": in_worktree("keeler.md") })),
+            Stage::Reading,
+        )),
+        Just((
+            tool_use("Write", serde_json::json!({ "file_path": "/tmp/probe/src/lib.rs" })),
+            Stage::Reading,
+        )),
+        Just((
+            subagent_tool_use("Bash", serde_json::json!({ "command": "just keeler-branch" })),
+            Stage::Reading,
+        )),
+        Just(("not a record at all".to_string(), Stage::Reading)),
     ]
 }
