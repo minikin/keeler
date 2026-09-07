@@ -3,6 +3,1383 @@
   "version": "0.4.3",
   "entries": [
     {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/app.rs",
+      "function": "App::adopt",
+      "line": 237,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/app.rs",
+      "function": "App::attach",
+      "line": 329,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/app.rs",
+      "function": "App::new",
+      "line": 122,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/app.rs",
+      "function": "App::pause",
+      "line": 262,
+      "cyclomatic": 6.0,
+      "coverage": 100.0,
+      "crap": 6.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/app.rs",
+      "function": "App::receive",
+      "line": 188,
+      "cyclomatic": 5.0,
+      "coverage": 100.0,
+      "crap": 5.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/app.rs",
+      "function": "App::resume",
+      "line": 303,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/app.rs",
+      "function": "App::said",
+      "line": 213,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/app.rs",
+      "function": "App::says",
+      "line": 225,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/app.rs",
+      "function": "App::select",
+      "line": 248,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/app.rs",
+      "function": "App::tick",
+      "line": 158,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/app.rs",
+      "function": "Keys::next",
+      "line": 637,
+      "cyclomatic": 1.0,
+      "coverage": 0.0,
+      "crap": 2.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/app.rs",
+      "function": "Live::away",
+      "line": 581,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/app.rs",
+      "function": "Live::draw",
+      "line": 577,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/app.rs",
+      "function": "Live::new",
+      "line": 571,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/app.rs",
+      "function": "StatusFeed::ask",
+      "line": 477,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/app.rs",
+      "function": "StatusFeed::due",
+      "line": 472,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/app.rs",
+      "function": "StatusFeed::new",
+      "line": 462,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/app.rs",
+      "function": "StatusFeed::pending",
+      "line": 494,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/app.rs",
+      "function": "StatusFeed::take",
+      "line": 503,
+      "cyclomatic": 5.0,
+      "coverage": 100.0,
+      "crap": 5.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/app.rs",
+      "function": "Terminal::away",
+      "line": 549,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/app.rs",
+      "function": "Terminal::draw",
+      "line": 541,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/app.rs",
+      "function": "keyboard",
+      "line": 652,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/app.rs",
+      "function": "looping",
+      "line": 741,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/app.rs",
+      "function": "on_key",
+      "line": 391,
+      "cyclomatic": 10.0,
+      "coverage": 100.0,
+      "crap": 10.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/app.rs",
+      "function": "plain",
+      "line": 426,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/app.rs",
+      "function": "redrawn",
+      "line": 593,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/app.rs",
+      "function": "refusal",
+      "line": 382,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/app.rs",
+      "function": "run",
+      "line": 769,
+      "cyclomatic": 3.0,
+      "coverage": 0.0,
+      "crap": 12.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/app.rs",
+      "function": "screen",
+      "line": 781,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/app.rs",
+      "function": "sentence",
+      "line": 369,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/app.rs",
+      "function": "status_due",
+      "line": 437,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/app.rs",
+      "function": "step",
+      "line": 699,
+      "cyclomatic": 12.0,
+      "coverage": 100.0,
+      "crap": 12.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/app.rs",
+      "function": "tick_due",
+      "line": 681,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/app.rs",
+      "function": "waited",
+      "line": 644,
+      "cyclomatic": 3.0,
+      "coverage": 0.0,
+      "crap": 12.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/app.rs",
+      "function": "woke_of",
+      "line": 664,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/board.rs",
+      "function": "Board::assemble",
+      "line": 259,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/board.rs",
+      "function": "Board::header",
+      "line": 308,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/board.rs",
+      "function": "Board::selected_row",
+      "line": 320,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/board.rs",
+      "function": "Board::slug",
+      "line": 299,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/board.rs",
+      "function": "Row::commit_column",
+      "line": 141,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/board.rs",
+      "function": "Row::context_column",
+      "line": 111,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/board.rs",
+      "function": "Row::elapsed_column",
+      "line": 103,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/board.rs",
+      "function": "Row::marker",
+      "line": 77,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/board.rs",
+      "function": "Row::model_column",
+      "line": 127,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/board.rs",
+      "function": "Row::running",
+      "line": 57,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/board.rs",
+      "function": "Row::session",
+      "line": 65,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/board.rs",
+      "function": "Row::stage_column",
+      "line": 83,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/board.rs",
+      "function": "Row::tokens_column",
+      "line": 119,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/board.rs",
+      "function": "Row::tool_column",
+      "line": 91,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/board.rs",
+      "function": "Runs::refresh",
+      "line": 201,
+      "cyclomatic": 6.0,
+      "coverage": 100.0,
+      "crap": 6.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/board.rs",
+      "function": "state_column",
+      "line": 163,
+      "cyclomatic": 5.0,
+      "coverage": 100.0,
+      "crap": 5.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/cli.rs",
+      "function": "Args::parse",
+      "line": 48,
+      "cyclomatic": 11.0,
+      "coverage": 100.0,
+      "crap": 11.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/cli.rs",
+      "function": "main",
+      "line": 100,
+      "cyclomatic": 8.0,
+      "coverage": 92.3076923076923,
+      "crap": 8.029130632680928,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/cli.rs",
+      "function": "shown",
+      "line": 147,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/cli.rs",
+      "function": "value",
+      "line": 86,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/cli.rs",
+      "function": "written",
+      "line": 123,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/clock.rs",
+      "function": "Timestamp::from_epoch_seconds",
+      "line": 24,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/clock.rs",
+      "function": "Timestamp::now",
+      "line": 34,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/clock.rs",
+      "function": "Timestamp::parse",
+      "line": 51,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/clock.rs",
+      "function": "Timestamp::seconds_since",
+      "line": 65,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/clock.rs",
+      "function": "days_from_civil",
+      "line": 120,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/clock.rs",
+      "function": "format_elapsed",
+      "line": 135,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/clock.rs",
+      "function": "in_range",
+      "line": 103,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/clock.rs",
+      "function": "parse_date",
+      "line": 78,
+      "cyclomatic": 7.0,
+      "coverage": 100.0,
+      "crap": 7.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/clock.rs",
+      "function": "parse_time",
+      "line": 87,
+      "cyclomatic": 8.0,
+      "coverage": 100.0,
+      "crap": 8.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/dispatch.rs",
+      "function": "Shell::attach",
+      "line": 235,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/dispatch.rs",
+      "function": "Shell::graph",
+      "line": 212,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/dispatch.rs",
+      "function": "Shell::graph_command",
+      "line": 153,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/dispatch.rs",
+      "function": "Shell::in_tmux",
+      "line": 231,
+      "cyclomatic": 1.0,
+      "coverage": 0.0,
+      "crap": 2.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/dispatch.rs",
+      "function": "Shell::kill",
+      "line": 216,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/dispatch.rs",
+      "function": "Shell::new",
+      "line": 92,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/dispatch.rs",
+      "function": "Shell::recipe",
+      "line": 107,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/dispatch.rs",
+      "function": "Shell::resume",
+      "line": 220,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/dispatch.rs",
+      "function": "Shell::resume_command",
+      "line": 145,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/dispatch.rs",
+      "function": "Shell::status",
+      "line": 208,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/dispatch.rs",
+      "function": "Shell::status_command",
+      "line": 133,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/dispatch.rs",
+      "function": "attach_command",
+      "line": 186,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/dispatch.rs",
+      "function": "handed",
+      "line": 258,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/dispatch.rs",
+      "function": "inside_tmux",
+      "line": 203,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/dispatch.rs",
+      "function": "kill_command",
+      "line": 169,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/dispatch.rs",
+      "function": "run",
+      "line": 274,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/dispatch.rs",
+      "function": "unstarted",
+      "line": 294,
+      "cyclomatic": 2.0,
+      "coverage": 66.66666666666666,
+      "crap": 2.1481481481481484,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/frame.rs",
+      "function": "Grid::lines",
+      "line": 102,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/frame.rs",
+      "function": "Grid::new",
+      "line": 90,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/frame.rs",
+      "function": "cells",
+      "line": 61,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/frame.rs",
+      "function": "columns",
+      "line": 128,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/frame.rs",
+      "function": "detail",
+      "line": 264,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/frame.rs",
+      "function": "fixed",
+      "line": 155,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/frame.rs",
+      "function": "layout",
+      "line": 240,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/frame.rs",
+      "function": "line",
+      "line": 167,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/frame.rs",
+      "function": "marked",
+      "line": 323,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/frame.rs",
+      "function": "once",
+      "line": 294,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/frame.rs",
+      "function": "render",
+      "line": 301,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/frame.rs",
+      "function": "table",
+      "line": 314,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/frame.rs",
+      "function": "truncate",
+      "line": 199,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/frame.rs",
+      "function": "wide",
+      "line": 187,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/git.rs",
+      "function": "SpecCopy::drop",
+      "line": 33,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/git.rs",
+      "function": "SpecCopy::path",
+      "line": 27,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/git.rs",
+      "function": "branch_facts",
+      "line": 124,
+      "cyclomatic": 6.0,
+      "coverage": 96.66666666666667,
+      "crap": 6.001333333333333,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/git.rs",
+      "function": "git",
+      "line": 162,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/git.rs",
+      "function": "next_serial",
+      "line": 89,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/git.rs",
+      "function": "spec_from_ref",
+      "line": 49,
+      "cyclomatic": 6.0,
+      "coverage": 100.0,
+      "crap": 6.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/graph.rs",
+      "function": "line_of",
+      "line": 81,
+      "cyclomatic": 7.0,
+      "coverage": 100.0,
+      "crap": 7.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/graph.rs",
+      "function": "parse",
+      "line": 77,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/graph.rs",
+      "function": "read",
+      "line": 60,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/lib.rs",
+      "function": "fixture_dir",
+      "line": 35,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/main.rs",
+      "function": "main",
+      "line": 8,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/run.rs",
+      "function": "RunView::absorb",
+      "line": 399,
+      "cyclomatic": 5.0,
+      "coverage": 100.0,
+      "crap": 5.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/run.rs",
+      "function": "RunView::absorb_tool_result",
+      "line": 441,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/run.rs",
+      "function": "RunView::absorb_usage",
+      "line": 420,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/run.rs",
+      "function": "RunView::advance",
+      "line": 476,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/run.rs",
+      "function": "RunView::context_column",
+      "line": 376,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/run.rs",
+      "function": "RunView::elapsed_column",
+      "line": 363,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/run.rs",
+      "function": "RunView::ended",
+      "line": 329,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/run.rs",
+      "function": "RunView::model_column",
+      "line": 340,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/run.rs",
+      "function": "RunView::remember",
+      "line": 465,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/run.rs",
+      "function": "RunView::tokens_column",
+      "line": 391,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/run.rs",
+      "function": "RunView::tool_column",
+      "line": 349,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/run.rs",
+      "function": "Stage::as_str",
+      "line": 141,
+      "cyclomatic": 8.0,
+      "coverage": 100.0,
+      "crap": 8.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/run.rs",
+      "function": "Stage::fmt",
+      "line": 155,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/run.rs",
+      "function": "ToolCall::column",
+      "line": 215,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/run.rs",
+      "function": "ToolCall::from_block",
+      "line": 180,
+      "cyclomatic": 10.0,
+      "coverage": 100.0,
+      "crap": 10.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/run.rs",
+      "function": "field",
+      "line": 482,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/run.rs",
+      "function": "fold",
+      "line": 502,
+      "cyclomatic": 5.0,
+      "coverage": 100.0,
+      "crap": 5.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/run.rs",
+      "function": "format_tokens",
+      "line": 75,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/run.rs",
+      "function": "percent",
+      "line": 56,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/run.rs",
+      "function": "recipe_of",
+      "line": 246,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/run.rs",
+      "function": "short_model",
+      "line": 105,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/run.rs",
+      "function": "stage_of",
+      "line": 230,
+      "cyclomatic": 5.0,
+      "coverage": 100.0,
+      "crap": 5.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/run.rs",
+      "function": "stage_of_edit",
+      "line": 272,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/run.rs",
+      "function": "stage_of_recipe",
+      "line": 256,
+      "cyclomatic": 5.0,
+      "coverage": 100.0,
+      "crap": 5.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/run.rs",
+      "function": "stage_of_skill",
+      "line": 284,
+      "cyclomatic": 6.0,
+      "coverage": 100.0,
+      "crap": 6.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/run.rs",
+      "function": "text_of",
+      "line": 490,
+      "cyclomatic": 5.0,
+      "coverage": 100.0,
+      "crap": 5.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/run.rs",
+      "function": "to_one_decimal",
+      "line": 98,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/run.rs",
+      "function": "window_for",
+      "line": 41,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/status.rs",
+      "function": "header_of",
+      "line": 93,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/status.rs",
+      "function": "parse",
+      "line": 74,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/status.rs",
+      "function": "task_of",
+      "line": 100,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/stream.rs",
+      "function": "Record::from",
+      "line": 105,
+      "cyclomatic": 5.0,
+      "coverage": 100.0,
+      "crap": 5.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/stream.rs",
+      "function": "Record::is_init",
+      "line": 56,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/stream.rs",
+      "function": "StreamReader::consume",
+      "line": 228,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/stream.rs",
+      "function": "StreamReader::new",
+      "line": 169,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/stream.rs",
+      "function": "StreamReader::poll",
+      "line": 184,
+      "cyclomatic": 4.0,
+      "coverage": 100.0,
+      "crap": 4.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/stream.rs",
+      "function": "StreamReader::rewind",
+      "line": 220,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/stream.rs",
+      "function": "parse_line",
+      "line": 268,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/terminal.rs",
+      "function": "Guard::away",
+      "line": 152,
+      "cyclomatic": 3.0,
+      "coverage": 100.0,
+      "crap": 3.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/terminal.rs",
+      "function": "Guard::drop",
+      "line": 172,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/terminal.rs",
+      "function": "Guard::new",
+      "line": 130,
+      "cyclomatic": 2.0,
+      "coverage": 100.0,
+      "crap": 2.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/terminal.rs",
+      "function": "Tty::enter",
+      "line": 75,
+      "cyclomatic": 2.0,
+      "coverage": 0.0,
+      "crap": 6.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/terminal.rs",
+      "function": "Tty::leave",
+      "line": 81,
+      "cyclomatic": 1.0,
+      "coverage": 0.0,
+      "crap": 2.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/terminal.rs",
+      "function": "claimed",
+      "line": 38,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/terminal.rs",
+      "function": "restore",
+      "line": 106,
+      "cyclomatic": 1.0,
+      "coverage": 0.0,
+      "crap": 2.0,
+      "crate": "keeler-top"
+    },
+    {
+      "file": "/Users/mnkn/GitHub/keeler/keeler-top/src/terminal.rs",
+      "function": "restore_on_panic",
+      "line": 192,
+      "cyclomatic": 1.0,
+      "coverage": 100.0,
+      "crap": 1.0,
+      "crate": "keeler-top"
+    },
+    {
       "file": "/Users/mnkn/GitHub/keeler/xtask/src/changelog.rs",
       "function": "NotesError::fmt",
       "line": 22,
@@ -643,9 +2020,9 @@
     }
   ],
   "diagnostics": {
-    "analyzed_files": 10,
-    "lcov_files": 10,
-    "matched_files": 10,
+    "analyzed_files": 24,
+    "lcov_files": 24,
+    "matched_files": 24,
     "source_only": {
       "count": 0,
       "examples": []

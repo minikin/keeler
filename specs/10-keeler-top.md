@@ -1,6 +1,6 @@
 # Spec 10 — keeler-top: the live board
 
-**Status:** Approved
+**Status:** Implemented
 **Effort:** Large
 **Module:** `keeler-top/` (new workspace crate, with `keeler-top/tests/top.rs`), `Cargo.toml` (`members`), `Justfile` (`keeler-top`, `keeler-status`, `keeler-resume`), `CLAUDE.md` (the gates paragraph), `crap-baseline.json` (refreshed at fan-in), `tests/top_recipes.rs`
 
