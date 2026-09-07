@@ -15,6 +15,8 @@
 use std::io::{Read as _, Seek as _, SeekFrom};
 use std::path::PathBuf;
 
+use crate::clock::Timestamp;
+
 /// One record of a run's stream, in the four shapes the board tells apart.
 ///
 /// The payloads of the middle two are the records' `message` objects,
@@ -30,7 +32,15 @@ pub enum Record {
         model: String,
     },
     /// One content block of one assistant message.
-    Assistant(serde_json::Value),
+    Assistant {
+        /// The record's `message`: its id, its usage and the one content
+        /// block this record is.
+        message: serde_json::Value,
+        /// When the record was written, from the record itself rather than
+        /// from its message — the CLI stamps the envelope, and the API's
+        /// message object has no such field.
+        at: Option<Timestamp>,
+    },
     /// A tool's answer coming back. `claude -p` has nobody to type at it,
     /// so every `user` record in the stream is one of these.
     ToolResult(serde_json::Value),
@@ -75,6 +85,11 @@ enum Wire {
         // record that belongs to a `Task` call, not the message.
         #[serde(default)]
         parent_tool_use_id: Option<String>,
+        // Kept as it was written and parsed on the way out: a record whose
+        // stamp is missing or in some shape this does not read is a record
+        // with no clock, not a record to throw away.
+        #[serde(default)]
+        timestamp: Option<String>,
     },
     #[serde(rename = "user")]
     User {
@@ -105,7 +120,11 @@ impl From<Wire> for Record {
             Wire::Assistant {
                 message,
                 parent_tool_use_id: None,
-            } => Self::Assistant(message),
+                timestamp,
+            } => Self::Assistant {
+                message,
+                at: timestamp.as_deref().and_then(Timestamp::parse),
+            },
             Wire::User {
                 message,
                 parent_tool_use_id: None,
@@ -350,7 +369,10 @@ mod tests {
             vec![
                 init(),
                 init(),
-                Record::Assistant(serde_json::json!({"id": "m1"})),
+                Record::Assistant {
+                    message: serde_json::json!({"id": "m1"}),
+                    at: None,
+                },
             ],
             "the file was read on from the offset rather than from the start",
         );
@@ -403,7 +425,28 @@ mod tests {
         assert_eq!(super::parse_line(INIT.as_bytes()), Some(init()));
         assert_eq!(
             super::parse_line(br#"{"type":"assistant","message":{"id":"m1"}}"#),
-            Some(Record::Assistant(serde_json::json!({"id": "m1"}))),
+            Some(Record::Assistant {
+                message: serde_json::json!({"id": "m1"}),
+                at: None,
+            }),
+        );
+        assert_eq!(
+            super::parse_line(
+                br#"{"type":"assistant","timestamp":"2026-09-07T12:00:00.000Z","message":{}}"#
+            ),
+            Some(Record::Assistant {
+                message: serde_json::json!({}),
+                at: crate::clock::Timestamp::parse("2026-09-07T12:00:00.000Z"),
+            }),
+            "the record's stamp is read from the record, not from its message",
+        );
+        assert_eq!(
+            super::parse_line(br#"{"type":"assistant","timestamp":"noon","message":{}}"#),
+            Some(Record::Assistant {
+                message: serde_json::json!({}),
+                at: None,
+            }),
+            "a stamp the clock cannot read cost the whole record",
         );
         assert_eq!(
             super::parse_line(br#"{"type":"user","message":{"content":[]}}"#),
@@ -441,7 +484,10 @@ mod tests {
         );
         assert_eq!(
             super::parse_line(br#"{"type":"assistant","parent_tool_use_id":null,"message":{}}"#),
-            Some(Record::Assistant(serde_json::json!({}))),
+            Some(Record::Assistant {
+                message: serde_json::json!({}),
+                at: None,
+            }),
             "an explicit null parent is the main session, not a subagent",
         );
         // The init record most of all. One per run is what makes a second

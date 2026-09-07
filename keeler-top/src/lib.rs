@@ -4,6 +4,7 @@
 //! unit tests, property tests and cargo-mutants can reach them without a
 //! terminal and without an agent.
 
+pub mod clock;
 pub mod dispatch;
 pub mod git;
 pub mod graph;

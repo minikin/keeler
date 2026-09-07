@@ -5,7 +5,8 @@
 //! door drives shell — `tests/top_recipes.rs` is where the recipe scenarios
 //! of this spec live.
 
-use keeler_top::run::{RunView, Stage, fold};
+use keeler_top::clock::Timestamp;
+use keeler_top::run::{RunView, Stage, fold, format_tokens};
 use keeler_top::stream::{Batch, Record, StreamReader};
 
 // ── T1
@@ -102,7 +103,10 @@ fn a_malformed_stream_line_is_skipped() {
             Record::Init {
                 model: "claude-opus-5[1m]".to_string()
             },
-            Record::Assistant(serde_json::json!({"id": "m1"})),
+            Record::Assistant {
+                message: serde_json::json!({"id": "m1"}),
+                at: None,
+            },
         ],
     );
     assert!(!batch.restarted, "a malformed line was read as a new run");
@@ -132,7 +136,10 @@ fn a_half_written_last_line_waits_for_its_rest() {
     stream.append(format!("{rest}\n").as_bytes());
     assert_eq!(
         reader.poll().records,
-        vec![Record::Assistant(serde_json::json!({"id": "m1"}))],
+        vec![Record::Assistant {
+            message: serde_json::json!({"id": "m1"}),
+            at: None,
+        }],
     );
 }
 
@@ -167,7 +174,10 @@ fn only_the_streams_new_bytes_are_read_on_refresh() {
     let batch = reader.poll();
     assert_eq!(
         batch.records,
-        vec![Record::Assistant(serde_json::json!({"id": "arrival"}))],
+        vec![Record::Assistant {
+            message: serde_json::json!({"id": "arrival"}),
+            at: None,
+        }],
     );
     assert!(!batch.restarted, "an append was read as a new run");
 }
@@ -208,8 +218,13 @@ fn a_resumed_tasks_stream_is_read_from_the_start() {
         }),
     );
     assert!(
-        view.iter()
-            .all(|record| *record != Record::Assistant(serde_json::json!({"id": "old"}))),
+        view.iter().all(|record| {
+            *record
+                != Record::Assistant {
+                    message: serde_json::json!({"id": "old"}),
+                    at: None,
+                }
+        }),
         "the run that ended is still in the view",
     );
     // And the row shows the new run's stage and tool — every record of the
@@ -1082,4 +1097,568 @@ fn stage_signal() -> impl proptest::prelude::Strategy<Value = (String, Stage)> {
         )),
         Just(("not a record at all".to_string(), Stage::Reading)),
     ]
+}
+
+// ── T3
+
+/// The stamp the fixtures' records carry. T2's helpers had no need of one:
+/// the stage is read from what a call is, the clock from when it was made.
+const STAMP: &str = "2026-09-07T12:00:00.000Z";
+
+/// The board's clock, spelled the way the stream spells a record's.
+fn now(stamp: &str) -> Timestamp {
+    Timestamp::parse(stamp).expect("the fixture's own timestamp did not parse")
+}
+
+/// One assistant record in the shape the CLI writes it: the record carries
+/// the stamp and the parent, the message carries its id, its usage and the
+/// one content block that record is.
+fn record(
+    parent: Option<&str>,
+    message_id: &str,
+    usage: Option<serde_json::Value>,
+    block: serde_json::Value,
+) -> String {
+    let mut record = serde_json::json!({
+        "type": "assistant",
+        "parent_tool_use_id": parent,
+        "timestamp": STAMP,
+        "message": { "id": message_id },
+    });
+    // Placed rather than written into the literal above: `json!` borrows
+    // every value handed to it, and both of these are owned here to be spent.
+    record["message"]["content"] = serde_json::Value::Array(vec![block]);
+    if let Some(usage) = usage {
+        record["message"]["usage"] = usage;
+    }
+    record.to_string()
+}
+
+/// A `tool_use` block with an id, so the `tool_result` that closes the call
+/// has something to name.
+fn call(id: &str, name: &str, input: serde_json::Value) -> serde_json::Value {
+    let mut block = serde_json::json!({ "type": "tool_use", "id": id, "name": name });
+    block["input"] = input;
+    block
+}
+
+/// One main-session tool call, stamped [`STAMP`].
+fn stamped_tool_use(id: &str, name: &str, input: serde_json::Value) -> String {
+    record(None, "m1", None, call(id, name, input))
+}
+
+/// The record a tool's answer comes back in. `claude -p` has nobody to type
+/// at it, so every `user` record in a run's stream is one of these.
+fn tool_result(tool_use_id: &str) -> String {
+    serde_json::json!({
+        "type": "user",
+        "parent_tool_use_id": null,
+        "message": { "content": [{ "type": "tool_result", "tool_use_id": tool_use_id }] },
+    })
+    .to_string()
+}
+
+/// A usage whose input side sums to `total`, spread over the three fields
+/// the sum is taken from — a board that read only `input_tokens` would show
+/// 0% for a session that has been running for an hour.
+fn input_usage(total: u64) -> serde_json::Value {
+    serde_json::json!({
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 270,
+        "cache_read_input_tokens": total - 272,
+        "output_tokens": 0,
+    })
+}
+
+#[test]
+fn the_tool_column_shows_the_last_main_session_tool_call_and_its_command() {
+    // Given T1's stream's last main-session tool_use is Bash with command
+    // "just dev 2>&1 | tail -35"
+    let lines = vec![
+        INIT.to_string(),
+        stamped_tool_use(
+            "toolu_1",
+            "Read",
+            serde_json::json!({ "file_path": in_worktree("keeler.md") }),
+        ),
+        stamped_tool_use(
+            "toolu_2",
+            "Bash",
+            serde_json::json!({ "command": "just dev 2>&1 | tail -35" }),
+        ),
+    ];
+
+    // When the board renders
+    // Then T1's tool column reads "Bash: just dev 2>&1 | tail -35"
+    assert_eq!(
+        fold_stream("tool-last", &lines).tool_column(),
+        "Bash: just dev 2>&1 | tail -35",
+    );
+}
+
+#[test]
+fn a_subagents_tool_call_does_not_become_the_rows_tool() {
+    // Given T1's main session's last tool_use is Task, and a later tool_use
+    // with parent_tool_use_id set is Bash "cargo test"
+    let lines = vec![
+        INIT.to_string(),
+        stamped_tool_use(
+            "toolu_1",
+            "Task",
+            serde_json::json!({ "description": "Explore the crate", "prompt": "…" }),
+        ),
+        record(
+            Some("toolu_1"),
+            "m2",
+            None,
+            call(
+                "toolu_2",
+                "Bash",
+                serde_json::json!({ "command": "cargo test" }),
+            ),
+        ),
+    ];
+
+    // When the board renders
+    // Then T1's tool column reads "Task" and its description
+    assert_eq!(
+        fold_stream("tool-subagent", &lines).tool_column(),
+        "Task: Explore the crate",
+    );
+}
+
+#[test]
+fn elapsed_counts_from_the_last_tool_calls_timestamp() {
+    // Given T1's last tool_use assistant record is stamped 02:14 before now
+    // And no tool_result for its tool_use_id has arrived
+    let lines = vec![
+        INIT.to_string(),
+        stamped_tool_use(
+            "toolu_1",
+            "Bash",
+            serde_json::json!({ "command": "just dev" }),
+        ),
+    ];
+
+    // When the board renders
+    // Then T1's elapsed column reads "02:14"
+    assert_eq!(
+        fold_stream("elapsed-minutes", &lines).elapsed_column(now("2026-09-07T12:02:14.000Z")),
+        "02:14",
+    );
+}
+
+#[test]
+fn elapsed_over_an_hour_shows_hours() {
+    // Given T1's last tool_use is stamped 1 hour 2 minutes 5 seconds before
+    // now and has not returned
+    let lines = vec![
+        INIT.to_string(),
+        stamped_tool_use(
+            "toolu_1",
+            "Bash",
+            serde_json::json!({ "command": "just mutants-diff" }),
+        ),
+    ];
+
+    // When the board renders
+    // Then T1's elapsed column reads "1:02:05"
+    assert_eq!(
+        fold_stream("elapsed-hours", &lines).elapsed_column(now("2026-09-07T13:02:05.000Z")),
+        "1:02:05",
+    );
+}
+
+#[test]
+fn a_tool_that_returned_shows_no_elapsed_time() {
+    // Given T1's last tool_use has a tool_result carrying its tool_use_id
+    // later in the stream
+    let lines = vec![
+        INIT.to_string(),
+        stamped_tool_use(
+            "toolu_1",
+            "Bash",
+            serde_json::json!({ "command": "just dev" }),
+        ),
+        tool_result("toolu_1"),
+    ];
+
+    // When the board renders
+    // Then T1's elapsed column is empty
+    assert_eq!(
+        fold_stream("elapsed-returned", &lines).elapsed_column(now("2026-09-07T12:02:14.000Z")),
+        "",
+    );
+}
+
+#[test]
+fn a_skill_call_shows_as_skill_and_the_skills_name() {
+    // Given the last tool_use is Skill with skill "code-review"
+    let lines = vec![
+        INIT.to_string(),
+        stamped_tool_use(
+            "toolu_1",
+            "Skill",
+            serde_json::json!({ "skill": "code-review" }),
+        ),
+    ];
+
+    // When the board renders
+    // Then the tool column reads "Skill: code-review"
+    assert_eq!(
+        fold_stream("tool-skill", &lines).tool_column(),
+        "Skill: code-review",
+    );
+}
+
+#[test]
+fn the_model_comes_from_the_init_record() {
+    // Given T1's stream's init record says model "claude-opus-5[1m]"
+    let lines = vec![INIT.to_string()];
+
+    // When the board renders
+    // Then T1's model column reads "opus5[1m]"
+    assert_eq!(fold_stream("model", &lines).model_column(), "opus5[1m]");
+}
+
+#[test]
+fn context_is_the_last_main_session_assistant_records_input_over_the_models_window() {
+    // Given the model is "claude-opus-5[1m]"
+    // And the last main-session assistant record's usage has input_tokens 2,
+    // cache_read_input_tokens 121691 and cache_creation_input_tokens 270
+    let lines = vec![
+        INIT.to_string(),
+        record(
+            None,
+            "m1",
+            Some(serde_json::json!({ "input_tokens": 9, "output_tokens": 1 })),
+            serde_json::json!({ "type": "text", "text": "an earlier record, long since overtaken" }),
+        ),
+        record(
+            None,
+            "m2",
+            Some(serde_json::json!({
+                "input_tokens": 2,
+                "cache_read_input_tokens": 121_691,
+                "cache_creation_input_tokens": 270,
+                "output_tokens": 4,
+            })),
+            serde_json::json!({ "type": "text", "text": "the last word" }),
+        ),
+    ];
+
+    // When the board renders
+    // Then T1's context column reads "12%"
+    assert_eq!(fold_stream("context", &lines).context_column(), "12%");
+}
+
+#[test]
+fn a_half_is_rounded_up() {
+    // Given the model is "claude-opus-5[1m]" and the usage sums to 115003
+    let lines = vec![
+        INIT.to_string(),
+        record(None, "m1", Some(input_usage(115_003)), text("…")),
+    ];
+
+    // When the board renders
+    // Then T1's context column reads "12%"
+    assert_eq!(fold_stream("round-up", &lines).context_column(), "12%");
+
+    // And a sum of 114999 reads "11%"
+    let below = vec![
+        INIT.to_string(),
+        record(None, "m1", Some(input_usage(114_999)), text("…")),
+    ];
+    assert_eq!(fold_stream("round-down", &below).context_column(), "11%");
+}
+
+#[test]
+fn a_subagents_usage_is_not_the_rows_context() {
+    // Given the last main-session assistant record sums to 120000, window
+    // 1,000,000 — and the last assistant record in the stream has
+    // parent_tool_use_id set and a usage sum of 900000
+    let lines = vec![
+        INIT.to_string(),
+        record(None, "m1", Some(input_usage(120_000)), text("mine")),
+        record(
+            Some("toolu_1"),
+            "m2",
+            Some(input_usage(900_000)),
+            text("the subagent's"),
+        ),
+    ];
+
+    // When the board renders
+    // Then T1's context column reads "12%"
+    assert_eq!(
+        fold_stream("context-subagent", &lines).context_column(),
+        "12%",
+    );
+}
+
+#[test]
+fn a_model_without_the_1m_suffix_has_a_200k_window() {
+    // Given the model is "claude-sonnet-5"
+    // And the last main-session assistant usage sums to 100000 input-side tokens
+    let lines = vec![
+        r#"{"type":"system","subtype":"init","model":"claude-sonnet-5"}"#.to_string(),
+        record(None, "m1", Some(input_usage(100_000)), text("…")),
+    ];
+
+    // When the board renders
+    // Then T1's context column reads "50%"
+    assert_eq!(fold_stream("window-200k", &lines).context_column(), "50%");
+}
+
+#[test]
+fn context_at_80_percent_or_more_is_marked() {
+    // Given the last main-session assistant usage puts context at 79% of the window
+    let below = vec![
+        INIT.to_string(),
+        record(None, "m1", Some(input_usage(790_000)), text("…")),
+    ];
+
+    // When the board renders
+    // Then T1's context column reads "79%"
+    assert_eq!(fold_stream("context-79", &below).context_column(), "79%");
+
+    // And at 80% it reads "80%!"
+    let at_the_mark = vec![
+        INIT.to_string(),
+        record(None, "m1", Some(input_usage(800_000)), text("…")),
+    ];
+    assert_eq!(
+        fold_stream("context-80", &at_the_mark).context_column(),
+        "80%!",
+    );
+}
+
+#[test]
+fn tokens_is_the_runs_output_summed_once_per_message() {
+    // Given T1's stream holds three records of one message id with
+    // output_tokens 300, and one record of another with 1200 — one message
+    // arrives as one record per content block, each carrying the whole
+    // message's usage.
+    let mut lines = vec![INIT.to_string()];
+    for block in 0..3 {
+        lines.push(record(
+            None,
+            "m1",
+            Some(serde_json::json!({ "input_tokens": 1, "output_tokens": 300 })),
+            text(&format!("block {block}")),
+        ));
+    }
+    lines.push(record(
+        None,
+        "m2",
+        Some(serde_json::json!({ "input_tokens": 1, "output_tokens": 1200 })),
+        text("the other message"),
+    ));
+
+    // When the board renders
+    // Then T1's tokens column reads "1.5k"
+    assert_eq!(fold_stream("tokens-dedupe", &lines).tokens_column(), "1.5k");
+}
+
+#[test]
+fn token_counts_print_in_the_stated_form() {
+    // Given output sums of 999, 1000, 12100, 999999 and 12100000
+    // When each is formatted
+    // Then they read "999", "1.0k", "12.1k", "1.0M" and "12.1M" — the fourth
+    // because a value that would round to "1000.0k" prints as "1.0M".
+    assert_eq!(format_tokens(999), "999");
+    assert_eq!(format_tokens(1_000), "1.0k");
+    assert_eq!(format_tokens(12_100), "12.1k");
+    assert_eq!(format_tokens(999_999), "1.0M");
+    assert_eq!(format_tokens(12_100_000), "12.1M");
+}
+
+#[test]
+fn a_stream_with_no_assistant_record_yet_shows_dashes() {
+    // Given T1's stream holds only the init record
+    let view = fold_stream("no-assistant", &[INIT.to_string()]);
+
+    // When the board renders
+    // Then T1's context and tokens columns show "—"
+    assert_eq!(view.context_column(), "—");
+    assert_eq!(view.tokens_column(), "—");
+
+    // And its model column shows the init record's model
+    assert_eq!(view.model_column(), "opus5[1m]");
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::prelude::ProptestConfig {
+        cases: 256,
+        failure_persistence: Some(Box::new(
+            proptest::test_runner::FileFailurePersistence::WithSource("proptest-regressions"),
+        )),
+        ..proptest::prelude::ProptestConfig::default()
+    })]
+
+    /// Given any sequence of stream records, valid or malformed, when they
+    /// are folded all at once, and separately in two halves at any split,
+    /// neither run panics and both produce the same view.
+    ///
+    /// The split is a byte index into the file, as T1's is: the fold is fed
+    /// by the reader, so a split that cuts a record in half is the one the
+    /// board actually has to survive.
+    #[test]
+    fn any_record_sequence_folds_without_panic_and_in_pieces_as_in_one(
+        lines in proptest::collection::vec(fold_line(), 0..10),
+        cut in proptest::prelude::any::<usize>(),
+    ) {
+        let mut bytes = lines.join("\n").into_bytes();
+        bytes.push(b'\n');
+        let cut = cut % (bytes.len() + 1);
+
+        let whole = Stream::new(&format!("fold-whole-{cut}"));
+        whole.write(&bytes);
+        let mut whole_view = RunView::default();
+        fold_batch(whole.reader().poll(), &mut whole_view);
+
+        let split = Stream::new(&format!("fold-parts-{cut}"));
+        split.write(&bytes[..cut]);
+        let mut reader = split.reader();
+        let mut split_view = RunView::default();
+        fold_batch(reader.poll(), &mut split_view);
+        split.append(&bytes[cut..]);
+        fold_batch(reader.poll(), &mut split_view);
+
+        proptest::prop_assert_eq!(whole_view, split_view);
+    }
+
+    /// Given any two usages a and b with a's sum no greater than b's, and
+    /// any window, when each is turned into a percentage, both lie in
+    /// 0..=100 and a's is no greater than b's.
+    #[test]
+    fn any_usage_yields_a_context_percentage_within_bounds_and_monotone(
+        first in proptest::prelude::any::<u64>(),
+        second in proptest::prelude::any::<u64>(),
+        window in proptest::prelude::any::<u64>(),
+    ) {
+        let (lower, upper) = (first.min(second), first.max(second));
+
+        let low = keeler_top::run::percent(lower, window);
+        let high = keeler_top::run::percent(upper, window);
+
+        proptest::prop_assert!(low <= 100, "{low} is not a percentage");
+        proptest::prop_assert!(high <= 100, "{high} is not a percentage");
+        proptest::prop_assert!(
+            low <= high,
+            "{lower} read {low}% and the larger {upper} read {high}%",
+        );
+    }
+
+    /// Given any count, when it is formatted, it is at most six characters,
+    /// and the number it shows is within half a unit of its last digit from
+    /// the count.
+    #[test]
+    fn any_token_count_formats_within_the_stated_shape(count in proptest::prelude::any::<u64>()) {
+        let shown = format_tokens(count);
+
+        proptest::prop_assert!(
+            shown.chars().count() <= 6,
+            "{count} formatted as {shown}, which is wider than the column",
+        );
+
+        let (number, unit) = shown.split_at(
+            shown.find(|c: char| c.is_ascii_alphabetic()).unwrap_or(shown.len()),
+        );
+        let multiplier = match unit {
+            "" => 1.0_f64,
+            "k" => 1e3,
+            "M" => 1e6,
+            "G" => 1e9,
+            "T" => 1e12,
+            "P" => 1e15,
+            _ => 1e18,
+        };
+        let meant = number.parse::<f64>().expect("the number shown does not parse") * multiplier;
+        // Half a unit of the last digit: the number carries one decimal
+        // above a thousand, so that half-unit is a twentieth of the unit,
+        // and below a thousand the count is shown whole.
+        let tolerance = if unit.is_empty() { 0.0 } else { multiplier / 20.0 };
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "the comparison is about the printed value, which is a rounded float already"
+        )]
+        let count = count as f64;
+        proptest::prop_assert!(
+            (meant - count).abs() <= tolerance,
+            "{count} formatted as {shown}, which means {meant}",
+        );
+    }
+}
+
+/// One text block, the shape the detail pane's ring is filled from.
+fn text(body: &str) -> serde_json::Value {
+    serde_json::json!({ "type": "text", "text": body })
+}
+
+/// The board's use of a batch, folded: a restart throws away everything the
+/// run that ended left behind, and the new run's records are folded onto a
+/// fresh view.
+fn fold_batch(batch: Batch, into: &mut RunView) {
+    if batch.restarted {
+        *into = RunView::default();
+    }
+    for record in batch.records {
+        fold(into, record, std::path::Path::new(WORKTREE));
+    }
+}
+
+/// One line of a stream, in the shapes the fold reads: the init record, a
+/// tool call, a tool's answer, a text block, a message's usage, a
+/// subagent's record — and junk, which is a line the board must survive.
+fn fold_line() -> impl proptest::prelude::Strategy<Value = String> {
+    use proptest::prelude::{Just, Strategy as _, prop_oneof};
+    prop_oneof![
+        Just(INIT.to_string()),
+        ("toolu_[0-9]", "[a-z]{1,4}").prop_map(|(id, command)| stamped_tool_use(
+            &id,
+            "Bash",
+            serde_json::json!({ "command": format!("just {command}") }),
+        )),
+        "toolu_[0-9]".prop_map(|id| stamped_tool_use(
+            &id,
+            "Edit",
+            serde_json::json!({ "file_path": in_worktree("src/run.rs") }),
+        )),
+        "toolu_[0-9]".prop_map(|id| tool_result(&id)),
+        ("m[0-9]", proptest::prelude::any::<u32>()).prop_map(|(id, tokens)| record(
+            None,
+            &id,
+            Some(serde_json::json!({
+                "input_tokens": tokens,
+                "cache_read_input_tokens": tokens,
+                "output_tokens": tokens,
+            })),
+            text("…"),
+        )),
+        "m[0-9]".prop_map(|id| record(Some("toolu_1"), &id, Some(input_usage(900_000)), text("…"))),
+        // A record stamped with whatever a garbled stream might hold. The
+        // clock has to answer for those too: a year of twenty digits
+        // multiplied into seconds is the shape that took the board down
+        // before the ranges went in.
+        "[0-9]{0,20}(-[0-9]{0,4}){0,3}[T ]?[0-9]{0,20}(:[0-9]{0,20}){0,3}Z?".prop_map(|stamp| {
+            restamped(
+                &stamp,
+                &stamped_tool_use(
+                    "toolu_1",
+                    "Bash",
+                    serde_json::json!({ "command": "just dev" }),
+                ),
+            )
+        }),
+        "[^\n]{0,12}",
+    ]
+}
+
+/// The same record with some other stamp.
+fn restamped(stamp: &str, line: &str) -> String {
+    let mut record: serde_json::Value =
+        serde_json::from_str(line).expect("the fixture's own record is not JSON");
+    record["timestamp"] = serde_json::Value::String(stamp.to_string());
+    record.to_string()
 }
