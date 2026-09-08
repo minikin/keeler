@@ -10,6 +10,11 @@ you approved, no bugfix without a failing test first, and no change is done
 until it passes a set of gates that check each other. It doesn't ask the
 agent to be careful — it makes carelessness fail the build.
 
+[![The keeler-top board watching a wave of ten agents](docs/images/keeler-top.png)](#the-board)
+
+A feature's tasks can run as a wave of agents, one per task, each on its
+own branch. [The board](#the-board) above is how you watch them.
+
 > Named after [Leonarde Keeler](https://en.wikipedia.org/wiki/Leonarde_Keeler),
 > who built the first practical polygraph. A polygraph does not detect lies;
 > it records several independent channels at once, on the theory that you can
@@ -217,8 +222,6 @@ start to finish.
 ```bash
 keeler keeler-top specs/01-the-espresso-machine.md
 ```
-
-![The keeler-top board watching a wave of ten tasks](docs/images/keeler-top.png)
 
 Nobody watches an agent work, but somebody has to know which of ten needs
 them. The board reads what graph mode already writes — the same report
