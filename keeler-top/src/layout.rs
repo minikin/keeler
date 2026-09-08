@@ -32,12 +32,8 @@ pub enum Field {
     State,
     /// How far the run has got.
     Stage,
-    /// What the run was started with.
-    Model,
     /// The bar, the percentage and the flag slot.
     Context,
-    /// Everything the run has written.
-    Tokens,
     /// The branch's head, its distance and its dirt.
     Commit,
     /// What the spec calls the task — or, on a finished board, what landed.
@@ -59,9 +55,6 @@ const GLYPH: u16 = 2;
 /// The stage: `mutants` is the longest of the seven.
 const STAGE: u16 = 7;
 
-/// The model: `opus5[1m]`.
-const MODEL: u16 = 9;
-
 /// Eight bar cells, a space, the percentage right-aligned in four, and the
 /// flag slot.
 ///
@@ -74,9 +67,6 @@ pub const CONTEXT: u16 = 14;
 /// The same column once the bar has gone: ` NN% `, the percentage and its
 /// flag slot alone.
 const PERCENTAGE: u16 = 5;
-
-/// The tokens, right-aligned: `999.9k`.
-const TOKENS: u16 = 6;
 
 /// `<hash> +<ahead> ~<dirty>`.
 const COMMIT: u16 = 13;
@@ -110,9 +100,6 @@ enum Given {
     Title,
     /// The bar, leaving the percentage it was drawn from.
     Bar,
-    /// The model and the tokens together: two numbers about the run, and a
-    /// row that kept one of them would be a row that kept neither reading.
-    Numbers,
     /// The percentage that was left when the bar went.
     Context,
     /// The branch's head, its distance and its dirt.
@@ -121,13 +108,7 @@ enum Given {
 
 /// The rungs, widest first. Cumulative: rung `n` has given up everything the
 /// rungs above it gave up.
-const LADDER: [Given; 5] = [
-    Given::Title,
-    Given::Bar,
-    Given::Numbers,
-    Given::Context,
-    Given::Commit,
-];
+const LADDER: [Given; 4] = [Given::Title, Given::Bar, Given::Context, Given::Commit];
 
 /// One rung of that ladder: the columns before the title, and whether the
 /// title is among them.
@@ -146,9 +127,6 @@ impl Band {
             (Field::State, state),
             (Field::Stage, STAGE),
         ];
-        if !gone(Given::Numbers) {
-            fixed.push((Field::Model, MODEL));
-        }
         if !gone(Given::Context) {
             fixed.push((
                 Field::Context,
@@ -158,9 +136,6 @@ impl Band {
                     CONTEXT
                 },
             ));
-        }
-        if !gone(Given::Numbers) {
-            fixed.push((Field::Tokens, TOKENS));
         }
         if !gone(Given::Commit) {
             fixed.push((Field::Commit, COMMIT));
@@ -323,11 +298,7 @@ impl Columns {
         let mut header = String::new();
         for (field, place) in &self.places {
             let heading = self.heading(*field, place.width);
-            let cell = if matches!(field, Field::Tokens) {
-                right(&heading, place.width, ellipsis)
-            } else {
-                left(&heading, place.width, ellipsis)
-            };
+            let cell = left(&heading, place.width, ellipsis);
             header.push_str(&cell);
             if !matches!(field, Field::Mark) {
                 for _ in 0..GAP {
@@ -345,12 +316,10 @@ impl Columns {
             Field::Task => "TASK".to_string(),
             Field::State => "STATE".to_string(),
             Field::Stage => "STAGE".to_string(),
-            Field::Model => "MODEL".to_string(),
             // The heading follows the column: a `CONTEXT` cut to `CON` over
             // five cells of percentage would name a bar that is not there.
             Field::Context if width < CONTEXT => "CTX".to_string(),
             Field::Context => "CONTEXT".to_string(),
-            Field::Tokens => "TOKENS".to_string(),
             // The two counts the column carries beside the hash, in the
             // shape they are written: `+4 ~2`.
             Field::Commit => "COMMIT +~".to_string(),
@@ -496,15 +465,6 @@ pub fn left(text: &str, width: u16, ellipsis: &str) -> String {
     format!("{cell}{}", " ".repeat(padding))
 }
 
-/// The same, against the column's right edge — which is how a number is
-/// read beside another number.
-#[must_use]
-pub fn right(text: &str, width: u16, ellipsis: &str) -> String {
-    let cell = cut(text, width, ellipsis);
-    let padding = usize::from(width).saturating_sub(usize::from(wide(&cell)));
-    format!("{}{cell}", " ".repeat(padding))
-}
-
 #[cfg(test)]
 mod tests {
     use super::{Columns, Field, Place, cut, state_cells, widest_state};
@@ -532,11 +492,9 @@ mod tests {
                 (Field::Task, 2, 4),
                 (Field::State, 8, 17),
                 (Field::Stage, 27, 7),
-                (Field::Model, 36, 9),
-                (Field::Context, 47, 14),
-                (Field::Tokens, 63, 6),
-                (Field::Commit, 71, 13),
-                (Field::Title, 86, 32),
+                (Field::Context, 36, 14),
+                (Field::Commit, 52, 13),
+                (Field::Title, 67, 51),
             ],
         );
         assert_eq!(columns.width(), 118);
@@ -561,11 +519,9 @@ mod tests {
         );
         for (field, start) in [
             (Field::Stage, 57),
-            (Field::Model, 66),
-            (Field::Context, 77),
-            (Field::Tokens, 93),
-            (Field::Commit, 101),
-            (Field::Title, 116),
+            (Field::Context, 66),
+            (Field::Commit, 82),
+            (Field::Title, 97),
         ] {
             assert_eq!(
                 columns.place(field).map(|place| place.start),
@@ -604,15 +560,13 @@ mod tests {
         let header = Columns::live(118, 17).header("…");
         assert_eq!(
             header,
-            "  TASK  STATE              STAGE    MODEL      CONTEXT         TOKENS  COMMIT +~      TITLE",
+            "  TASK  STATE              STAGE    CONTEXT         COMMIT +~      TITLE",
         );
         for (field, heading) in [
             (Field::Task, "TASK"),
             (Field::State, "STATE"),
             (Field::Stage, "STAGE"),
-            (Field::Model, "MODEL"),
             (Field::Context, "CONTEXT"),
-            (Field::Tokens, "TOKENS"),
             (Field::Commit, "COMMIT +~"),
             (Field::Title, "TITLE"),
         ] {
@@ -660,12 +614,14 @@ mod tests {
         assert_eq!(super::wide(&cut("更新更", 4, "…")), 3);
     }
 
+    /// Every column is read from its left edge — the two that were read
+    /// from the right were the tokens and their heading, and both have left
+    /// the row.
     #[test]
-    fn a_cell_is_padded_to_its_column_from_whichever_side_it_is_read() {
+    fn a_cell_is_padded_to_the_width_of_the_column_it_is_read_in() {
         let place = Place { start: 0, width: 6 };
 
         assert_eq!(super::left("12.1M", place.width, "…"), "12.1M ");
-        assert_eq!(super::right("12.1M", place.width, "…"), " 12.1M");
         assert_eq!(super::left("", place.width, "…"), "      ");
     }
 
@@ -696,56 +652,39 @@ mod tests {
     }
 
     /// Everything a live row can hold, in the order it is drawn.
-    const EVERYTHING: [Field; 9] = [
+    const EVERYTHING: [Field; 7] = [
         Field::Mark,
         Field::Task,
         Field::State,
         Field::Stage,
-        Field::Model,
         Field::Context,
-        Field::Tokens,
         Field::Commit,
         Field::Title,
     ];
 
     #[test]
     fn the_row_gives_up_a_column_at_a_time_as_the_window_narrows() {
-        // The bands the spec's table works out to, each named by the
+        // The bands the column table works out to, each named by the
         // narrowest window that still has it.
-        assert_eq!(drawn_at(100, 17), EVERYTHING);
+        assert_eq!(drawn_at(81, 17), EVERYTHING);
         assert_eq!(drawn_at(200, 17), EVERYTHING);
-        // From 77 the row is whole without a title, and from 83 its bar is
+        // From 58 the row is whole without a title, and from 65 its bar is
         // the percentage alone.
-        assert_eq!(drawn_at(99, 17), EVERYTHING[..8]);
-        assert_eq!(drawn_at(77, 17), EVERYTHING[..8]);
-
-        assert_eq!(drawn_at(84, 17), EVERYTHING[..8]);
-        assert_eq!(drawn_at(83, 17), EVERYTHING[..8]);
-        // From 76 the model and the tokens are gone, and from 57 the
-        // percentage that was left, and from 50 the commit facts. What is
-        // left is which task is in what trouble and how far it got.
+        assert_eq!(drawn_at(80, 17), EVERYTHING[..6]);
+        assert_eq!(drawn_at(58, 17), EVERYTHING[..6]);
+        // From 51 the percentage goes, and from 50 the commit facts. What
+        // is left is which task is in what trouble and how far it got.
         assert_eq!(
-            drawn_at(76, 17),
+            drawn_at(57, 17),
             [
                 Field::Mark,
                 Field::Task,
                 Field::State,
                 Field::Stage,
-                Field::Context,
-                Field::Commit,
+                Field::Commit
             ],
         );
-        assert_eq!(
-            drawn_at(56, 17),
-            [
-                Field::Mark,
-                Field::Task,
-                Field::State,
-                Field::Stage,
-                Field::Commit,
-            ],
-        );
-        assert_eq!(drawn_at(49, 17), EVERYTHING[..4]);
+        assert_eq!(drawn_at(50, 17), EVERYTHING[..4]);
         // And a window too narrow even for those overflows rather than
         // dropping them: a row nobody can read whole still says which task
         // is in what trouble.
@@ -762,14 +701,14 @@ mod tests {
                 .map(|(_, cells)| cells)
         };
 
-        assert_eq!(context(86), Some(super::CONTEXT));
-        assert_eq!(context(85), Some(super::PERCENTAGE));
+        assert_eq!(context(67), Some(super::CONTEXT));
+        assert_eq!(context(66), Some(super::PERCENTAGE));
         assert_eq!(context(58), Some(super::PERCENTAGE));
         assert_eq!(context(57), None);
         // And the heading follows the column it is over.
         assert_eq!(
-            Columns::live(80, 17).header("…"),
-            "  TASK  STATE              STAGE    MODEL      CTX    TOKENS  COMMIT +~",
+            Columns::live(60, 17).header("…"),
+            "  TASK  STATE              STAGE    CTX    COMMIT +~",
         );
     }
 

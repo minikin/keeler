@@ -29,7 +29,7 @@ use ratatui::text::{Line, Span};
 use crate::board::{Board, Row};
 use crate::clock::Timestamp;
 use crate::layout::{Columns, wide};
-use crate::theme::{BLUE, DIM, GREEN, NEEDS_YOU, TEXT, Theme};
+use crate::theme::{BLUE, DIM, GREEN, NEEDS_YOU, TEXT, Theme, YELLOW};
 
 /// What stands between two readings on a header line.
 ///
@@ -128,7 +128,7 @@ pub fn wave(
     let inner = width.saturating_sub(4);
     let mut panel = vec![indent(first(board, theme, now, inner))];
     if lines > 1 {
-        panel.push(indent(second(board, theme, inner)));
+        panel.push(indent(second(board, theme)));
     }
     panel
 }
@@ -388,6 +388,11 @@ fn first(board: &Board, theme: Theme, now: Timestamp, width: u16) -> Line<'stati
         counted.push(vec![Span::styled(FINISHED, theme.style(GREEN))]);
     }
     let age = Span::styled(board.age(now), theme.style(DIM));
+    // The model the wave shares, said once here rather than on every row: a
+    // column of it is a column saying the same word ten times, and the row
+    // needs the width for what the task is called. A wave running two models
+    // says neither, and the pane says which a task is on.
+    let shared = shared_model(&board.rows).map(|model| Span::styled(model, theme.style(DIM)));
     // The names give up their end of the list rather than their front: they
     // are in the state table's order, most urgent first, so the last of them
     // is the least of what a human is needed for.
@@ -399,6 +404,10 @@ fn first(board: &Board, theme: Theme, now: Timestamp, width: u16) -> Line<'stati
         Given::Last,
     );
     if !right.is_empty() {
+        right.push(Span::raw(GAP));
+    }
+    if let Some(model) = shared {
+        right.push(model);
         right.push(Span::raw(GAP));
     }
     right.push(age);
@@ -459,28 +468,31 @@ fn joined(groups: &[Vec<Span<'static>>], between: &Span<'static>) -> Vec<Span<'s
     spans
 }
 
-/// The second: the strip, and the hints against the right edge — when there
-/// is room for both.
-fn second(board: &Board, theme: Theme, width: u16) -> Line<'static> {
-    let strip = strip(&board.rows, theme, board.finished());
-    // The hint names what the *next press* does, so it reads the same
-    // answer the key does and not how the panel below happened to draw the
-    // rows. A hint taken from the drawing would offer "z expand" on a board
-    // the panel collapsed by itself — where the press expands nothing and
-    // takes the watched row's second line instead — and on a board of
-    // closed rows, which have no second line for either word to be about.
-    let hinted = hinted(theme, board.finished(), board.compact == Some(true));
-    // The strip is one cell a task and the hints are the same seven on
-    // every board there is: a wave too wide for both keeps the half that is
-    // about the wave, and the keys are on the second line of the README.
-    if measured(&strip)
-        .saturating_add(wide(GAP))
-        .saturating_add(measured(&hinted))
-        > width
-    {
-        return Line::from(strip);
-    }
-    spread(strip, hinted, width)
+/// The second: the outcome strip, and nothing else on the line.
+///
+/// The keys used to share it and now sit on the frame's last line, where
+/// they read as the window's own caption rather than as part of the wave.
+/// That left this line to the strip, which is one cell a task and had been
+/// giving up its tail on any board with more tasks than room — so a wave of
+/// thirty now says all thirty.
+fn second(board: &Board, theme: Theme) -> Line<'static> {
+    Line::from(strip(&board.rows, theme, board.finished()))
+}
+
+/// The model every run on the board was started with, when they agree.
+///
+/// `None` when they do not, and when no row has a run to have been started
+/// with at all: a header that named one model on a wave running two would be
+/// a header that lies, and the pane names the model of the task somebody is
+/// reading.
+fn shared_model(rows: &[Row]) -> Option<String> {
+    let mut models = rows
+        .iter()
+        .filter_map(|row| row.run.as_ref())
+        .map(crate::run::RunView::model_column)
+        .filter(|model| model != crate::run::DASH);
+    let first = models.next()?;
+    models.all(|model| model == first).then_some(first)
 }
 
 /// The counts, as they are drawn: the glyph in the state's colour, and how
@@ -535,6 +547,32 @@ fn hinted(theme: Theme, finished: bool, compact: bool) -> Vec<Span<'static>> {
         spans.push(Span::styled(format!(" {does}"), theme.style(DIM)));
     }
     spans
+}
+
+/// The frame's last line: the keys on the left, and what the last press
+/// refused on the right.
+///
+/// The keys are here rather than in the wave panel because they are about
+/// the window and not about the wave, and because the line they were on is
+/// the strip's — a board of thirty tasks needs all of it. The message keeps
+/// the right, where the eye lands last and where an empty one costs nothing.
+///
+/// **A message that will not fit beside the keys takes the line.** The keys
+/// are the same every frame and the watcher has read them; the message is
+/// why they looked down here at all, and half of `T2 is not running — there
+/// is` is worse than none of the keys.
+#[must_use]
+pub fn footer(board: &Board, theme: Theme, width: u16) -> Line<'static> {
+    let mut said = Vec::new();
+    if !board.message.is_empty() {
+        said.push(Span::styled(board.message.clone(), theme.style(YELLOW)));
+    }
+    let mut line = vec![Span::raw("  ")];
+    line.extend(hinted(theme, board.finished(), board.compact == Some(true)));
+    if measured(&line).saturating_add(measured(&said)) >= width {
+        line.truncate(1);
+    }
+    spread(line, said, width)
 }
 
 /// One line of the panel: what is read from the left, and what sits against

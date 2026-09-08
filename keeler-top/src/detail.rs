@@ -182,6 +182,16 @@ fn facts_of(row: &Row, reason: Option<&str>, now: Timestamp) -> Vec<String> {
         row.spawned_at
             .map(|at| format!("{} since spawn", format_age(now.seconds_since(at)))),
     );
+    // The tokens and the model left the row for the pane and the header:
+    // one number the wave shares and one that is read about a task rather
+    // than across the board, and the row's width is better spent on what
+    // the task is called.
+    said.extend(
+        row.run
+            .as_ref()
+            .map(|run| format!("{} written", run.tokens_column()))
+            .filter(|said| !said.starts_with(crate::run::DASH)),
+    );
     said
 }
 
