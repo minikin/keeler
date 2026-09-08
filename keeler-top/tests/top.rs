@@ -4008,8 +4008,8 @@ fn a_running_tasks_row() {
     let row = inside(row_of(&frame, "T3"));
     assert_eq!(
         row,
-        "▸ T3   ● running         review  opus5[1m] ███░░░░░  41%   12.1M b33e05f +4 ~2 \
-         The fold reads the tool, the clock, th…",
+        "▸ T3    ● running          review   opus5[1m]  ███░░░░░  41%    12.1M  b33e05f +4 ~2  \
+         The fold reads the tool, the cl…",
     );
     // And it is exactly 118 cells wide — the terminal's 120, less the two
     // the panel's borders take.
@@ -4112,10 +4112,10 @@ fn closed_and_waiting_tasks_take_one_line() {
             frame.join("\n"),
         );
     }
-    // And the table is the heading and one line per task, nothing more: the
-    // wave panel takes four lines and the tasks panel's border and heading
-    // two more, so the last row of eight is the frame's fourteenth line.
-    assert_eq!(row_at(&frame, "T1"), 13, "the rows are not eight lines");
+    // And the table is the heading, one line per task and a blank line
+    // between them: the wave panel takes four lines and the tasks panel's
+    // border and heading two more.
+    assert_eq!(row_at(&frame, "T1"), 20, "the rows are not eight lines");
 }
 
 #[test]
@@ -4137,14 +4137,14 @@ fn a_states_reason_is_never_cut() {
     // Then T2's STATE column reads it whole
     assert!(
         inside(row_of(&frame, "T2"))
-            .starts_with("▸ T2   ◔ incomplete (no review record, box not ticked)"),
+            .starts_with("▸ T2    ◔ incomplete (no review record, box not ticked)"),
         "the reason was cut: {:?}",
         row_of(&frame, "T2"),
     );
     // And every later column in every row starts 30 cells further right
     // than the table says — 47 cells of state where the table has 17.
     let header = heading_of(&frame);
-    for (heading, start) in [("STAGE", 55), ("MODEL", 63), ("TOKENS", 88), ("TITLE", 109)] {
+    for (heading, start) in [("STAGE", 57), ("MODEL", 66), ("TOKENS", 93), ("TITLE", 116)] {
         assert_eq!(
             header.find(heading),
             Some(start),
@@ -4176,20 +4176,20 @@ fn a_done_row_in_a_live_view_is_the_id_the_word_and_the_title() {
     // When the board renders
     let frame = drawn(&board, 120, 24);
 
-    // Then T1's row reads "  T1   ✓ done" followed by spaces and then the
+    // Then T1's row reads "  T1    ✓ done" followed by spaces and then the
     // title at cell 79
     let row = inside(row_of(&frame, "T1"));
-    assert!(row.starts_with("  T1   ✓ done"), "{row:?}");
-    // The title starts at cell 79, and at 120 columns it has 39 cells to
+    assert!(row.starts_with("  T1    ✓ done"), "{row:?}");
+    // The title starts at cell 86, and at 120 columns it has 32 cells to
     // finish in — so what stands there is its head and the mark that says
     // the rest was cut.
     // Counted in cells and not in bytes: the state's glyph is one cell and
     // three bytes, so `find` would answer 81 about a column at 79.
     assert!(
         row.chars()
-            .skip(79)
+            .skip(86)
             .collect::<String>()
-            .starts_with("The crate exists and reads a stream in"),
+            .starts_with("The crate exists and reads a s"),
         "the title is not in the title column: {row:?}",
     );
     assert!(row.ends_with('…'), "{row:?}");
@@ -4214,7 +4214,7 @@ fn a_title_the_spec_does_not_give_is_blank() {
     let frame = drawn(&board, 120, 24);
 
     // Then T4's TITLE column is blank and the board shows no error
-    assert_eq!(inside(row_of(&frame, "T4")).trim_end(), "▸ T4   ⊘ died");
+    assert_eq!(inside(row_of(&frame, "T4")).trim_end(), "▸ T4    ⊘ died");
     assert_eq!(board.rows[0].title, None);
     assert!(
         board.message.is_empty(),
@@ -4239,16 +4239,16 @@ fn the_finished_view_lists_each_tasks_title() {
     let terminal = painted(&board, 120, 24);
     let frame = lines_of(&terminal, 120, 24);
 
-    // Then the tasks header reads "  TASK STATE  LANDED"
-    assert_eq!(heading_of(&frame), "  TASK STATE  LANDED");
-    // And T1's row reads "  T1   ✓ done <title>" with "✓ done" green
+    // Then the tasks header reads "  TASK  STATE   LANDED"
+    assert_eq!(heading_of(&frame), "  TASK  STATE   LANDED");
+    // And T1's row reads "  T1    ✓ done <title>" with "✓ done" green
     assert_eq!(
         inside(row_of(&frame, "T1")),
-        "  T1   ✓ done The crate exists and reads a stream incrementally",
+        "  T1    ✓ done  The crate exists and reads a stream incrementally",
     );
     let y = u16::try_from(row_at(&frame, "T1")).expect("a frame is not that tall");
     assert_eq!(
-        cell_at(&terminal, 8, y),
+        cell_at(&terminal, 9, y),
         ("✓".to_string(), keeler_top::theme::GREEN),
     );
 }
@@ -4569,7 +4569,7 @@ fn the_first_header_line_is_the_healthy_counts_and_the_status_age() {
 
     // Then the wave panel's first line begins with the counts
     assert!(
-        first.starts_with("● 2 running   ◐ 1 passed   ✓ 3 done"),
+        first.starts_with("  ● 2 running     ◐ 1 passed     ✓ 3 done"),
         "{first:?}",
     );
     // And ends with "status 1s ago"
@@ -4606,7 +4606,7 @@ fn the_first_lines_right_half_names_what_needs_a_human() {
     // Then the first line's right half names them in the state table's
     // order, before "status 1s ago"
     assert!(
-        first.ends_with("✗ T9 exit 2 · ⊘ T4 died · ◔ T2 incomplete · ‖ T8 paused   status 1s ago",),
+        first.ends_with("✗ T9 exit 2 · ⊘ T4 died · ◔ T2 incomplete · ‖ T8 paused     status 1s ago",),
         "{first:?}",
     );
     // And each item is in its state's colour
@@ -4643,7 +4643,7 @@ fn with_nothing_to_act_on_the_right_half_is_empty() {
     let first = inside(&frame[WAVE_TOP + 1]);
 
     // Then nothing stands between the counts and "status 1s ago"
-    let counts = "● 1 running   ◐ 1 passed   ○ 1 blocked   ✓ 1 done";
+    let counts = "  ● 1 running     ◐ 1 passed     ○ 1 blocked     ✓ 1 done";
     assert!(first.starts_with(counts), "{first:?}");
     assert_eq!(
         first[counts.len()..].trim(),
@@ -4677,26 +4677,30 @@ fn the_second_line_is_an_outcome_strip_one_glyph_per_task_in_fives() {
     let terminal = painted(&board, WIDE.0, WIDE.1);
     let frame = lines_of(&terminal, WIDE.0, WIDE.1);
 
-    // Then the second line begins "✓✓●⊘◐ ‖○·◇✗" — the report's order, with
+    // Then the second line begins "  ✓ ✓ ● ⊘ ◐  ‖ ○ · ◇ ✗" — the report's order, with
     // a space after every fifth glyph and none after the last
     assert!(
-        inside(&frame[WAVE_TOP + 2]).starts_with("✓✓●⊘◐ ‖○·◇✗"),
+        inside(&frame[WAVE_TOP + 2]).starts_with("  ✓ ✓ ● ⊘ ◐  ‖ ○ · ◇ ✗"),
         "{:?}",
         frame[WAVE_TOP + 2],
     );
     // And each glyph is in its state's colour
-    for (x, colour) in [
-        (1, keeler_top::theme::DIM),
-        (3, ORANGE),
-        (4, RED),
-        (5, GREEN),
-        (7, VIOLET),
-        (10, BLUE),
-        (11, RED),
+    let glyphs: Vec<(u16, (String, ratatui::style::Color))> = (0..120)
+        .map(|x| (x, cell_at(&terminal, x, 2)))
+        .filter(|(_, (ch, _))| !ch.trim().is_empty() && ch != "│")
+        .collect();
+    for (nth, colour) in [
+        (0, keeler_top::theme::DIM),
+        (2, ORANGE),
+        (3, RED),
+        (4, GREEN),
+        (5, VIOLET),
+        (8, BLUE),
+        (9, RED),
     ] {
+        let (x, cell) = glyphs[nth].clone();
         assert_eq!(
-            cell_at(&terminal, x, 2).1,
-            colour,
+            cell.1, colour,
             "the glyph at {x} is not in its state's colour",
         );
     }
@@ -4749,17 +4753,16 @@ fn hints_go_before_the_strip_is_cut() {
         "the hints crowded the strip out: {second:?}",
     );
 
-    // And they go at the width they no longer fit on, not before it. Nine
-    // glyphs and the space after the fifth are ten cells; the three between
-    // and the hints' seventy-seven make ninety, which is exactly the room
-    // inside a 92-column terminal. One task more is one cell over.
-    let fitting = drawn(&assemble(&running_report(9), "", NOON), 92, WIDE.1);
+    // And they go at the width they no longer fit on, not before it: nine
+    // glyphs two cells apart and the gap after the fifth make twenty, the
+    // gap between them and the hints' seventy-seven the rest.
+    let fitting = drawn(&assemble(&running_report(9), "", NOON), 108, WIDE.1);
     let fits = inside(&fitting[WAVE_TOP + 2]);
     assert!(
         fits.ends_with(KEYS),
         "the hints went while they still fitted: {fits:?}",
     );
-    let crowded = drawn(&assemble(&running_report(10), "", NOON), 92, WIDE.1);
+    let crowded = drawn(&assemble(&running_report(10), "", NOON), 100, WIDE.1);
     let over = inside(&crowded[WAVE_TOP + 2]);
     assert!(
         !over.contains("q quit"),
@@ -4779,7 +4782,7 @@ fn a_finished_specs_header_says_so() {
     // Then the first line begins with the count and what to do next
     assert!(
         inside(&frame[WAVE_TOP + 1])
-            .starts_with("✓ 9 done   the feature is finished here — land it on main"),
+            .starts_with("  ✓ 9 done     the feature is finished here — land it on main"),
         "{:?}",
         frame[WAVE_TOP + 1],
     );
@@ -4834,7 +4837,7 @@ fn cells_at(terminal: &Terminal<TestBackend>, xs: std::ops::Range<u16>, y: u16) 
 /// Where a state's glyph is drawn: the panel's left border, then the marker
 /// column and the id, which is where the spec's table starts the state
 /// whatever the board's widest one is.
-const GLYPH_X: u16 = 8;
+const GLYPH_X: u16 = 9;
 
 /// The ten states of the table in one report, in the order it lists them,
 /// with the two the graph answers for left to the graph.
@@ -4962,7 +4965,7 @@ fn context_stream(used: u64) -> Vec<String> {
 /// Where the context column is drawn on a board whose widest state is the
 /// table's seventeen: the spec puts it at cell 43, and the panel's left
 /// border is the cell before that.
-const BAR_X: u16 = 44;
+const BAR_X: u16 = 48;
 
 #[test]
 fn the_context_bar_fills_cells_and_colours_by_threshold() {
@@ -5025,7 +5028,7 @@ fn the_context_bar_fills_cells_and_colours_by_threshold() {
 
 /// Where the commit column is drawn on that same board: cell 65 of the
 /// spec's table, and the border before it.
-const COMMIT_X: u16 = 66;
+const COMMIT_X: u16 = 72;
 
 #[test]
 fn the_commit_column_colours_the_hash_and_the_dirty_count() {
@@ -5099,7 +5102,7 @@ fn no_color_draws_the_same_characters_in_default_colours() {
     // of what this board has left to say a state with, so nothing may go
     // away with the colour.
     assert!(
-        inside(row_of(&frame, "T3")).starts_with("▸ T3   ● running"),
+        inside(row_of(&frame, "T3")).starts_with("▸ T3    ● running"),
         "{:?}",
         row_of(&frame, "T3"),
     );
@@ -5167,7 +5170,7 @@ fn the_ascii_theme_replaces_every_non_ascii_glyph() {
     // And the bar "###-----", the marker ">" and the connector "`-"
     let running = inside(row_of(&frame, "T3"));
     assert!(running.contains("###-----"), "{running:?}");
-    assert!(running.starts_with("> T3   * running"), "{running:?}");
+    assert!(running.starts_with("> T3    * running"), "{running:?}");
     assert!(
         inside(under_of(&frame, "T3")).starts_with("    `- Bash: just dev"),
         "{:?}",
@@ -5710,7 +5713,7 @@ fn rows_that_outgrow_the_panel_collapse_to_one_line_except_the_selected() {
     // And each collapsed row shows its tool in the TITLE column as
     // "Bash: just dev…" — cut where the column ends, since the second line
     // it came off had the panel's whole width to say it in.
-    let title: String = inside(row_of(&frame, "T1")).chars().skip(79).collect();
+    let title: String = inside(row_of(&frame, "T1")).chars().skip(86).collect();
     assert!(title.starts_with("Bash: just dev"), "{title:?}");
     assert!(title.trim_end().ends_with('…'), "{title:?}");
 }
@@ -5783,7 +5786,7 @@ fn the_hint_names_what_the_key_will_do_and_not_what_the_panel_did() {
         on_key(&mut app, press(KeyCode::Char('j')));
     }
     assert_eq!(app.board.selected, 2, "the fixture is not watching T3");
-    let frame = drawn(&app.board, WIDE.0, TALL);
+    let frame = drawn(&app.board, 160, TALL);
     assert!(
         inside(under_of(&frame, "T3")).starts_with("    └─"),
         "the panel collapsed the row it was drawn for:\n{}",
@@ -5827,7 +5830,7 @@ fn the_hint_names_what_the_key_will_do_and_not_what_the_panel_did() {
     // And a crowded board with no live row at all offers the same: there is
     // no second line anywhere on it for "z expand" to have been about.
     let closed: Vec<String> = (1..=30).map(|task| format!("T{task:<5} passed")).collect();
-    let crowded = drawn(&assemble(&report(&closed), "", NOON), WIDE.0, TALL);
+    let crowded = drawn(&assemble(&report(&closed), "", NOON), 200, TALL);
     assert!(
         inside(&crowded[WAVE_TOP + 2]).ends_with("z compact · q quit"),
         "{:?}",
@@ -5919,8 +5922,8 @@ fn at_100_columns_the_title_is_drawn_cut() {
 
     // Then T3's title occupies cells 79..97 and ends with "…" — the panel's
     // 98 cells, less the 79 the columns before it take.
-    let title: String = row.chars().skip(79).collect();
-    assert_eq!(title, "The fold reads the…");
+    let title: String = row.chars().skip(86).collect();
+    assert_eq!(title, "The fold re…");
     assert_eq!(
         unicode_width::UnicodeWidthStr::width(row.as_str()),
         98,
@@ -5946,7 +5949,7 @@ fn below_93_columns_the_title_goes_and_the_row_stays_whole() {
     // And MODEL, TOKENS and the full eight-cell bar are still drawn
     assert_eq!(
         inside(row_of(&frame, "T3")),
-        "▸ T3   ● running         review  opus5[1m] ███░░░░░  41%   12.1M b33e05f +4 ~2",
+        "▸ T3    ● running          review   opus5[1m]  ███░░░░░  41%    12.1M  b33e05f +4 ~2",
     );
 }
 
@@ -5962,7 +5965,7 @@ fn below_81_columns_the_bar_collapses_to_its_percentage() {
     // Then the CONTEXT column reads " 41% " and its header "CTX"
     assert_eq!(
         inside(row_of(&frame, "T3")),
-        "▸ T3   ● running         review  opus5[1m]  41%   12.1M b33e05f +4 ~2",
+        "▸ T3    ● running          review   opus5[1m]   41%    12.1M  b33e05f +4 ~2",
     );
     let heading = heading_of(&frame);
     assert!(heading.contains(" CTX "), "{heading:?}");
@@ -5983,14 +5986,14 @@ fn below_72_columns_model_and_tokens_go() {
     // When the board renders
     let frame = drawn(&board, 68, ROOMY);
 
-    // Then the tasks header reads "  TASK STATE             STAGE   CTX   COMMIT +~"
+    // Then the tasks header reads "  TASK  STATE              STAGE    CTX    COMMIT +~"
     assert_eq!(
         heading_of(&frame),
-        "  TASK STATE             STAGE   CTX   COMMIT +~",
+        "  TASK  STATE              STAGE    CTX    COMMIT +~",
     );
     assert_eq!(
         inside(row_of(&frame, "T3")),
-        "▸ T3   ● running         review   41%  b33e05f +4 ~2",
+        "▸ T3    ● running          review    41%   b33e05f +4 ~2",
     );
 }
 
@@ -6022,7 +6025,7 @@ fn a_column_that_does_not_fit_is_dropped_whole() {
     // stage — the state is 31 cells here, so every threshold moved 14 right
     // and the row is down to what a board is for.
     assert!(
-        inside(row_of(&frame, "T2")).starts_with("▸ T2   ◔ incomplete (no review record)"),
+        inside(row_of(&frame, "T2")).starts_with("▸ T2    ◔ incomplete (no review record)"),
         "the reason was cut: {:?}",
         row_of(&frame, "T2"),
     );
