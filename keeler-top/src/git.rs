@@ -103,16 +103,20 @@ fn show(root: &Path, git_ref: &str, rel: &str) -> Option<String> {
 
 /// The word on the `Verdict:` line of a task's review record.
 ///
-/// Asked of the task's own branch first and of `git_ref` only when that
-/// branch answers nothing, which is the order `keeler-status` asks the same
-/// question in and for the same reason: until somebody merges, the record
-/// exists only on the branch that wrote it, and afterwards that branch is
-/// what `keeler-land` removes.
+/// Asked of the shared ref first and of the task's own branch only when the
+/// ref holds no record. Until somebody merges, the record exists only on the
+/// branch that wrote it, so the branch is what answers for a task in flight;
+/// once the work has landed, the ref's copy is the one the feature was
+/// merged with, and a task branch left standing afterwards may still hold a
+/// verdict from a run that was superseded. `keeler-status` divides the same
+/// way and for the same reason, in the words of its own comment: a stale
+/// verdict from a run that was later fixed and landed is the record of
+/// something that no longer happened.
 #[must_use]
 pub fn verdict(root: &Path, slug: &str, id: &str, git_ref: &str) -> Option<String> {
     let record = crate::board::review_record(slug, id);
-    let text = show(root, &crate::board::task_branch(slug, id), &record)
-        .or_else(|| show(root, git_ref, &record))?;
+    let text = show(root, git_ref, &record)
+        .or_else(|| show(root, &crate::board::task_branch(slug, id), &record))?;
     verdict_of(&text)
 }
 
@@ -329,30 +333,33 @@ mod tests {
     }
 
     #[test]
-    fn a_records_verdict_is_read_from_the_branch_that_wrote_it_and_then_from_the_ref() {
-        // The order `keeler-status` asks in: until somebody merges, the
-        // record exists only on the task's own branch, and afterwards that
-        // branch is what `keeler-land` removes.
+    fn a_records_verdict_is_read_from_the_ref_and_then_from_the_branch_that_wrote_it() {
+        // In flight, the record exists only on the task's own branch, so
+        // that is what answers.
         let repo = Repo::new("verdict");
         repo.commit("README.md", "the project");
         repo.git(&["checkout", "-qb", "keeler/01-foo/t1"]);
         repo.commit(
             "reviews/01-foo/t1.md",
-            "Task: t1\nVerdict: pass\n\nthe prose\n",
+            "Task: t1\nVerdict: fail\n\nthe prose\n",
         );
         repo.git(&["checkout", "-q", "main"]);
 
         assert_eq!(
             super::verdict(&repo.0, "01-foo", "T1", "main"),
-            Some("pass".to_string()),
+            Some("fail".to_string()),
             "the record on the task's own branch was not read",
         );
         // A task nobody has reviewed, on a branch nobody has cut.
         assert_eq!(super::verdict(&repo.0, "01-foo", "T2", "main"), None);
 
-        // And once it has landed, the branch is gone and the ref carries it.
-        repo.git(&["merge", "-q", "keeler/01-foo/t1"]);
-        repo.git(&["branch", "-qD", "keeler/01-foo/t1"]);
+        // Once the work has landed, the ref answers — and it answers first,
+        // over a task branch left standing whose verdict a later run
+        // superseded. Anything else would report a failure that was fixed.
+        repo.commit(
+            "reviews/01-foo/t1.md",
+            "Task: t1\nVerdict: pass\n\nthe prose\n",
+        );
         assert_eq!(
             super::verdict(&repo.0, "01-foo", "T1", "main"),
             Some("pass".to_string()),
@@ -361,6 +368,12 @@ mod tests {
         // other name graph mode composes.
         assert_eq!(
             super::verdict(&repo.0, "01-foo", "t1", "main"),
+            Some("pass".to_string()),
+        );
+        // And with the branch removed, as `keeler-land` leaves it.
+        repo.git(&["branch", "-qD", "keeler/01-foo/t1"]);
+        assert_eq!(
+            super::verdict(&repo.0, "01-foo", "T1", "main"),
             Some("pass".to_string()),
         );
     }

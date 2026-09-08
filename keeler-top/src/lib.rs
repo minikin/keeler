@@ -35,6 +35,20 @@ pub mod theme;
 /// one of them deleting the other's files halfway through, which is a
 /// failing gate nobody can reproduce. The instant the process started, and
 /// a serial that only goes up, are what the pid is missing.
+#[cfg(test)]
+fn fixture_dir(name: &str) -> std::path::PathBuf {
+    static SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let started = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "keeler-top-unit-{name}-{}-{started}-{}",
+        std::process::id(),
+        SERIAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+    ))
+}
+
 /// A wave still running: no task has written a review record, and none has
 /// left an exit code behind.
 ///
@@ -55,18 +69,4 @@ impl dispatch::Records for Unasked {
     fn exit(&self, _slug: &str, _id: &str) -> Option<dispatch::Exit> {
         None
     }
-}
-
-#[cfg(test)]
-fn fixture_dir(name: &str) -> std::path::PathBuf {
-    static SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let started = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    std::env::temp_dir().join(format!(
-        "keeler-top-unit-{name}-{}-{started}-{}",
-        std::process::id(),
-        SERIAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-    ))
 }

@@ -233,6 +233,16 @@ impl Row {
     }
 }
 
+/// Whether a task could have a review record to read.
+///
+/// A run wrote one, or a merge landed one. The report names a log for every
+/// state that has a run, and `done` is the state that has landed — every
+/// other word it prints is a task that was never started, which has no
+/// branch for a record to be on and no tick for one to have arrived with.
+fn reviewable(task: &StatusLine) -> bool {
+    task.log.is_some() || task.state == DONE
+}
+
 /// The state column: `keeler-status`'s word, except for the one it has not
 /// got.
 ///
@@ -366,7 +376,16 @@ impl Board {
                     spawned_at: run.as_ref().and_then(|view| view.spawned_at),
                     run,
                     title: graph.title(&task.id),
-                    verdict: records.verdict(slug, &task.id, &status.git_ref),
+                    // Asked of the rows that could have one, and of no
+                    // others: a review record is written by a run or landed
+                    // by a merge, so a task with neither a run nor a tick has
+                    // no branch to hold one and no commit to have brought
+                    // one. The read is two `git show`s, and a board that made
+                    // them for every blocked task every second would spend
+                    // most of its subprocesses on answers that cannot exist.
+                    verdict: reviewable(task)
+                        .then(|| records.verdict(slug, &task.id, &status.git_ref))
+                        .flatten(),
                     exit: records.exit(slug, &task.id),
                     // The distance is measured from the ref the report
                     // answered about, so the commit column and the state column

@@ -48,10 +48,18 @@ const LEAVES: &str = "baseline staged, Status: Implemented";
 
 /// The panel's lines for one row, laid out for the space inside its borders.
 ///
-/// `height` is read for one decision and no other: how many commits fit. The
-/// sections above and below it are as long as what they hold — five texts at
-/// most, one command — so the commits are what a short panel has to give up,
-/// and they say how many they gave rather than stopping at the edge.
+/// **The pane never outgrows the panel.** Two of its parts are as long as
+/// what they hold — the run's own words are five texts of however many lines
+/// each, and its branch has however many commits — so a pane that only laid
+/// them out would be drawn past the panel's bottom border, taking the
+/// section under it with it.
+///
+/// What is fixed is the fact block, which is the four lines the pane exists
+/// for, and the last command, which is one. Everything between them is given
+/// what is left in the order it is drawn: the agent's words first, because
+/// they are what a watcher stopped at a row to read, and the commits after
+/// them — which is why the commits are the ones that say how many they had
+/// to leave out.
 #[must_use]
 pub fn pane(
     row: &Row,
@@ -62,19 +70,33 @@ pub fn pane(
     height: u16,
 ) -> Vec<Line<'static>> {
     let mut lines = facts(row, slug, theme, now, width);
-    lines.extend(section("agent", theme, width, texts(row, theme, width)));
-    let tail = section("last command", theme, width, command(row, theme, width));
-    // What is left once everything else has its lines, the commits' own rule
-    // included — which is why the rule is subtracted here and added there.
-    let room = usize::from(height)
-        .saturating_sub(lines.len())
-        .saturating_sub(tail.len())
-        .saturating_sub(1);
+    let mut tail = section("last command", theme, width, command(row, theme, width));
+    // The command goes too on a panel with room for the fact block and
+    // nothing else. Every section is a rule and what is under it, so a panel
+    // that cannot hold both holds neither.
+    if usize::from(height).saturating_sub(lines.len()) < tail.len() {
+        tail.clear();
+    }
+    // What is left once the fact block and the command have their lines, less
+    // the section's own rule — which is why the rule is subtracted here and
+    // added by `section`.
+    let spare = |taken: usize| {
+        usize::from(height)
+            .saturating_sub(taken)
+            .saturating_sub(tail.len())
+            .saturating_sub(1)
+    };
+    lines.extend(section(
+        "agent",
+        theme,
+        width,
+        texts(row, theme, spare(lines.len()), width),
+    ));
     lines.extend(section(
         "commits",
         theme,
         width,
-        commits(row, theme, room, width),
+        commits(row, theme, spare(lines.len()), width),
     ));
     lines.extend(tail);
     lines
@@ -242,16 +264,25 @@ fn joined(said: Vec<String>, theme: Theme) -> Vec<(String, Style)> {
 
 /// The run's last words, oldest first and without a prefix — the rule above
 /// them is what says whose they are.
-fn texts(row: &Row, theme: Theme, width: u16) -> Vec<Line<'static>> {
+///
+/// The **last** `room` lines of them when there are more than that, for the
+/// same reason the view keeps the last five texts rather than the first: what
+/// the run said a moment ago is what somebody watching it wants, and a
+/// paragraph shown from its opening would push that off the panel.
+fn texts(row: &Row, theme: Theme, room: usize, width: u16) -> Vec<Line<'static>> {
     let Some(run) = &row.run else {
         return Vec::new();
     };
-    run.texts
+    let said: Vec<&str> = run
+        .texts
         .iter()
         // A text block can hold several lines, and a pane that wrote the
         // newline as a symbol would show one long line of mojibake where the
         // run's own paragraph should be.
         .flat_map(|text| text.lines())
+        .collect();
+    said[said.len().saturating_sub(room)..]
+        .iter()
         .map(|line| Line::from(plain(line, theme, width)))
         .collect()
 }
@@ -262,26 +293,21 @@ fn commits(row: &Row, theme: Theme, room: usize, width: u16) -> Vec<Line<'static
     let Some(branch) = &row.branch else {
         return Vec::new();
     };
-    if room == 0 || branch.commits.is_empty() {
+    // When they do not all fit, one line of the room goes to saying how many
+    // are not shown: a list cut at the panel's edge would read as the whole
+    // of what the branch has done, which is the one thing the pane is asked
+    // this for. Which is also why a section that could hold nothing but that
+    // count draws nothing at all — `… +9 more` under a rule and above no
+    // commit at all is the pane reporting its own arithmetic.
+    let over = branch.commits.len() > room;
+    if branch.commits.is_empty() || room == 0 || (over && room < 2) {
         return Vec::new();
     }
-    if branch.commits.len() <= room {
-        return branch
-            .commits
-            .iter()
-            .map(|commit| {
-                Line::from(plain(
-                    &format!("{} {}", commit.hash, commit.subject),
-                    theme,
-                    width,
-                ))
-            })
-            .collect();
-    }
-    // One line of the room goes to saying how many are not shown: a list cut
-    // at the panel's edge would read as the whole of what the branch has
-    // done, which is the one thing the pane is asked this for.
-    let shown = room.saturating_sub(1);
+    let shown = if over {
+        room.saturating_sub(1)
+    } else {
+        branch.commits.len()
+    };
     let mut lines: Vec<Line<'static>> = branch.commits[..shown]
         .iter()
         .map(|commit| {
@@ -292,14 +318,16 @@ fn commits(row: &Row, theme: Theme, room: usize, width: u16) -> Vec<Line<'static
             ))
         })
         .collect();
-    lines.push(Line::styled(
-        format!(
-            "{} +{} more",
-            theme.ellipsis(),
-            branch.commits.len().saturating_sub(shown)
-        ),
-        theme.style(DIM),
-    ));
+    if over {
+        lines.push(Line::styled(
+            format!(
+                "{} +{} more",
+                theme.ellipsis(),
+                branch.commits.len().saturating_sub(shown)
+            ),
+            theme.style(DIM),
+        ));
+    }
     lines
 }
 
@@ -593,6 +621,27 @@ mod tests {
     }
 
     #[test]
+    fn a_paragraph_longer_than_the_panel_keeps_the_words_that_came_last() {
+        // A text block is one of the run's turns and can hold a paragraph,
+        // so the agent's section is as long as what it holds unless
+        // something bounds it. The review found the pane drawn past the
+        // panel's bottom border, taking the command under it with it.
+        let row = t3_saying(&["one\ntwo\nthree\nfour\nfive\nsix\nseven\neight"], 0);
+
+        let pane = shown(&row, 10);
+
+        assert_eq!(pane.len(), 10, "the pane outgrew the panel");
+        assert!(pane[4].starts_with("── agent ──"), "{:?}", pane[4]);
+        // The last of them, as the view keeps the last five texts: what the
+        // run said a moment ago is what somebody watching it came for.
+        assert_eq!(pane[5..8], ["six", "seven", "eight"]);
+        // And the section under it is still drawn, which is the whole point
+        // of bounding the one above.
+        assert!(pane[8].starts_with("── last command ──"), "{:?}", pane[8]);
+        assert_eq!(pane[9], "Bash: just dev");
+    }
+
+    #[test]
     fn a_pane_with_no_room_for_a_commit_draws_no_commits_at_all() {
         // Not a scenario of its own: it is what the one above does not say
         // about a panel with nothing left over. A rule with no list under it
@@ -725,6 +774,96 @@ mod tests {
             pane[0], "state   ‖ paused · gate · 41m since spawn",
             "a timer was left running beside a task nobody is waiting on",
         );
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig {
+            failure_persistence: Some(Box::new(
+                proptest::test_runner::FileFailurePersistence::WithSource("proptest-regressions"),
+            )),
+            ..proptest::prelude::ProptestConfig::default()
+        })]
+
+        /// However many commits a branch has and however much room the panel
+        /// leaves them, the list never outgrows that room, what it shows is
+        /// the newest commits in order, and every commit is either drawn or
+        /// counted. A list that overflowed would be drawn over the section
+        /// under it, and one that lied about the count would be worse than
+        /// showing none.
+        ///
+        /// Nothing at all is the answer in three cases, and only those: a
+        /// branch with no commits, no room, and room for nothing but the
+        /// count — where a rule over one line reading `… +9 more` would be
+        /// the pane reporting its own arithmetic.
+        #[test]
+        fn a_commit_list_fits_its_room_and_says_what_it_left_out(
+            how_many in 0_usize..20,
+            room in 0_usize..12,
+        ) {
+            let row = t3_saying(&[], how_many);
+            let branch = row.branch.clone().expect("the fixture has a branch");
+
+            let lines: Vec<String> = super::commits(&row, THEME, room, WIDE)
+                .iter()
+                .map(text)
+                .collect();
+
+            proptest::prop_assert!(lines.len() <= room);
+            if lines.is_empty() {
+                proptest::prop_assert!(
+                    how_many == 0 || room == 0 || (how_many > room && room < 2),
+                    "the list was dropped with room for {} of {}",
+                    room,
+                    how_many,
+                );
+                return Ok(());
+            }
+            let (shown, left) = match lines.last() {
+                Some(last) if last.starts_with('…') => (
+                    lines.len() - 1,
+                    last.trim_start_matches("… +")
+                        .trim_end_matches(" more")
+                        .parse::<usize>()
+                        .expect("the count is a number"),
+                ),
+                _ => (lines.len(), 0),
+            };
+            proptest::prop_assert_eq!(shown + left, how_many);
+            for (line, commit) in lines[..shown].iter().zip(&branch.commits) {
+                proptest::prop_assert!(line.starts_with(&commit.hash), "{}", line);
+            }
+        }
+
+        /// Whatever a run has said and whatever its branch has done, the pane
+        /// fits the panel it is drawn in. Two of its parts are as long as
+        /// what they hold — a text block can be a paragraph and a branch can
+        /// have thirty commits — and a pane that outgrew its panel would be
+        /// drawn over the border and take the section below it with it.
+        ///
+        /// Four lines is the floor rather than none: the fact block is the
+        /// pane's reason to exist and is never cut, and `frame::layout` draws
+        /// no detail panel with fewer rows inside it than that.
+        #[test]
+        fn a_pane_fits_the_panel_whatever_the_run_has_said(
+            texts in proptest::collection::vec("[a-z]{1,8}(\n[a-z]{1,8}){0,6}", 0..5),
+            commits in 0_usize..20,
+            height in 4_u16..30,
+        ) {
+            let said: Vec<&str> = texts.iter().map(String::as_str).collect();
+            let row = t3_saying(&said, commits);
+
+            let lines = pane(&row, SLUG, THEME, now(), WIDE, height);
+
+            proptest::prop_assert!(
+                lines.len() <= usize::from(height),
+                "{} lines in a panel {} rows tall",
+                lines.len(),
+                height,
+            );
+            // And the fact block is always there: it is what a short panel
+            // keeps, not what it gives up.
+            proptest::prop_assert!(text(&lines[0]).starts_with("state   "));
+        }
     }
 
     #[test]
