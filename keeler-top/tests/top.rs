@@ -136,7 +136,8 @@ fn a_malformed_stream_line_is_skipped() {
         batch.records,
         vec![
             Record::Init {
-                model: "claude-opus-5[1m]".to_string()
+                model: "claude-opus-5[1m]".to_string(),
+                at: None,
             },
             Record::Assistant {
                 message: serde_json::json!({"id": "m1"}),
@@ -163,7 +164,8 @@ fn a_half_written_last_line_waits_for_its_rest() {
     assert_eq!(
         first.records,
         vec![Record::Init {
-            model: "claude-opus-5[1m]".to_string()
+            model: "claude-opus-5[1m]".to_string(),
+            at: None,
         }],
     );
 
@@ -249,7 +251,8 @@ fn a_resumed_tasks_stream_is_read_from_the_start() {
     assert_eq!(
         view.first(),
         Some(&Record::Init {
-            model: "claude-opus-5[1m]".to_string()
+            model: "claude-opus-5[1m]".to_string(),
+            at: None,
         }),
     );
     assert!(
@@ -1708,7 +1711,7 @@ fn restamped(stamp: &str, line: &str) -> String {
 // ── T5
 
 use keeler_top::board::{Board, Runs};
-use keeler_top::frame::{cells, detail, layout, render};
+use keeler_top::frame::{cells, layout, render};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::layout::Rect;
@@ -1772,6 +1775,18 @@ fn assemble(report: &str, graph: &str, answered: &str) -> Board {
 /// The same, over a spec whose Tasks section the scenario supplies — which
 /// is where a row's title column comes from.
 fn assemble_titled(report: &str, graph: &str, spec: &str, answered: &str) -> Board {
+    assemble_read(report, graph, spec, answered, &Unread::default())
+}
+
+/// The same again, over a dispatch that answers the two reads a run's files
+/// are behind — which is what the pane's scenarios arrange.
+fn assemble_read(
+    report: &str,
+    graph: &str,
+    spec: &str,
+    answered: &str,
+    records: &dyn Records,
+) -> Board {
     let status =
         keeler_top::status::parse(report).expect("the fixture's report opens with a header");
     Board::assemble(
@@ -1782,7 +1797,56 @@ fn assemble_titled(report: &str, graph: &str, spec: &str, answered: &str) -> Boa
         },
         &mut Runs::default(),
         now(answered),
+        records,
     )
+}
+
+/// A dispatch that runs nothing, and finds whatever a scenario has put in
+/// the two files a run leaves behind it.
+///
+/// Nothing, by default: that is a wave still running, whose tasks have
+/// written no record and left no exit code, and it is what most boards below
+/// are. The pane's own scenarios are the ones that arrange otherwise.
+#[derive(Debug, Clone, Default)]
+struct Unread {
+    verdict: Option<String>,
+    exit: Option<Exit>,
+}
+
+impl Dispatch for Unread {
+    fn status(&self) -> Result<String, String> {
+        Err("keeler-top: nothing was asked of this dispatch.".to_string())
+    }
+
+    fn graph(&self, _spec: &Path) -> Result<String, String> {
+        Err("keeler-top: nothing was asked of this dispatch.".to_string())
+    }
+
+    fn kill(&self, _session: &str) -> Result<(), String> {
+        Err("keeler-top: nothing was asked of this dispatch.".to_string())
+    }
+
+    fn resume(&self, _task: &str) -> Result<String, String> {
+        Err("keeler-top: nothing was asked of this dispatch.".to_string())
+    }
+
+    fn in_tmux(&self) -> bool {
+        false
+    }
+
+    fn attach(&self, _session: &str, _inside: bool) -> Result<(), String> {
+        Err("keeler-top: nothing was asked of this dispatch.".to_string())
+    }
+}
+
+impl Records for Unread {
+    fn verdict(&self, _slug: &str, _id: &str, _git_ref: &str) -> Option<String> {
+        self.verdict.clone()
+    }
+
+    fn exit(&self, _slug: &str, _id: &str) -> Option<Exit> {
+        self.exit
+    }
 }
 
 /// A frame, drawn on a terminal of the given size and read back as lines
@@ -1831,6 +1895,33 @@ fn under_of<'a>(frame: &'a [String], id: &str) -> &'a str {
         String::as_str,
     )
 }
+
+/// The selected task's panel, as lines of text.
+///
+/// Spec 11's T6 replaced the pane spec 10 drew — the two scenarios below
+/// keep their subject and read it in the shape it has now.
+fn pane_of(board: &Board, height: u16) -> Vec<String> {
+    keeler_top::detail::pane(
+        board.selected_row().expect("the board has a row"),
+        board.slug(),
+        THEME,
+        now(NOON),
+        PANE,
+        height,
+    )
+    .iter()
+    .map(|line| {
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>()
+    })
+    .collect()
+}
+
+/// How wide the panel's inside is where a scenario asks for the pane rather
+/// than for the frame around it: wide enough for every line whole.
+const PANE: u16 = 100;
 
 /// The board's binary, run the way `keeler keeler-top` runs it: the plugin
 /// tree it shells back to, the project it is watching, and the flags and
@@ -2283,13 +2374,11 @@ fn the_detail_pane_shows_the_selected_tasks_last_five_texts_and_its_last_command
     );
 
     // When T1 is selected
-    let pane = detail(
-        board.selected_row().expect("the first row is selected"),
-        THEME,
-    );
+    let pane = pane_of(&board, 24);
 
     // Then the pane shows the last five texts, oldest first, and the
-    // command in full
+    // command in full — spec 11 took the prefix off them and put them under
+    // a rule that says whose words they are.
     let texts: Vec<&String> = pane
         .iter()
         .filter(|line| {
@@ -2331,10 +2420,7 @@ fn the_detail_pane_lists_the_branchs_commits_since_the_feature_branch() {
     );
 
     // When T1 is selected
-    let pane = detail(
-        board.selected_row().expect("the first row is selected"),
-        THEME,
-    );
+    let pane = pane_of(&board, 24);
 
     // Then the pane lists both subjects with their short hashes, newest first
     let listed: Vec<&String> = pane
@@ -2454,7 +2540,7 @@ fn a_narrow_terminal_drops_the_detail_pane_before_it_drops_columns() {
 // ── T6
 
 use keeler_top::app::{Action, App, Events, StatusFeed, TICK, Woke, looping, on_key, step};
-use keeler_top::dispatch::Dispatch;
+use keeler_top::dispatch::{Dispatch, Exit, Records};
 use keeler_top::terminal::{Guard, Screen};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::collections::VecDeque;
@@ -2542,6 +2628,18 @@ impl Dispatch for Reads {
 
     fn attach(&self, session: &str, _inside: bool) -> Result<(), String> {
         panic!("a board about the cadences attached to {session}")
+    }
+}
+
+/// Neither read has anything to find: these boards are a wave still
+/// running, whose tasks have written no record and left no exit file.
+impl Records for Reads {
+    fn verdict(&self, _slug: &str, _id: &str, _git_ref: &str) -> Option<String> {
+        None
+    }
+
+    fn exit(&self, _slug: &str, _id: &str) -> Option<Exit> {
+        None
     }
 }
 
@@ -2721,10 +2819,14 @@ fn j_and_k_move_the_selection_and_the_detail_pane_follows() {
     // Then T2 is selected and the detail pane shows T2
     assert_eq!(app.board.selected, 1);
     let frame = drawn(&app.board, 140, 20);
+    // Found by the branch the pane names rather than by a heading: spec 11's
+    // T6 put the task's id on the panel's own border and opened the pane
+    // with a fact block, and the paths line is the one that says which task
+    // those facts are about.
     let pane = |id: &str| {
-        frame
-            .iter()
-            .any(|line| inside(line).starts_with(&format!("{id} —")))
+        frame.iter().any(|line| {
+            inside(line).starts_with(&format!("paths   keeler/01-foo/{}", id.to_lowercase()))
+        })
     };
     assert!(
         pane("T2") && !pane("T1") && !pane("T3"),
@@ -3226,6 +3328,18 @@ impl Dispatch for Levers {
             meanwhile();
         }
         self.attach.clone()
+    }
+}
+
+/// The levers are what these scenarios pull; the two file reads are the
+/// pane's, and a board of running tasks has neither to find.
+impl Records for Levers {
+    fn verdict(&self, _slug: &str, _id: &str, _git_ref: &str) -> Option<String> {
+        None
+    }
+
+    fn exit(&self, _slug: &str, _id: &str) -> Option<Exit> {
+        None
     }
 }
 
@@ -3763,7 +3877,7 @@ fn enter_on_a_task_with_no_session_says_so() {
 // as the task, or this file would hold two `// ── T2`s about two different
 // pieces of work.
 
-use keeler_top::git::BranchFacts;
+use keeler_top::git::{BranchFacts, Commit};
 use ratatui::style::Color;
 
 /// The panel's own line: the frame's, without the cells its borders take.
@@ -5063,20 +5177,20 @@ fn the_ascii_theme_replaces_every_non_ascii_glyph() {
         row_of(&frame, "T7"),
     );
     assert!(running.ends_with("..."), "{running:?}");
-    // And no glyph the theme owns is above U+007F: every line of the table
-    // is drawn out of the ASCII set, its heading included. The pane below
-    // the table is spec 10's plain text and still carries its own `—`,
-    // which no theme owns and T6's fact block is what replaces.
-    for line in &frame[..=row_at(&frame, "T1")] {
+    // And no glyph the theme owns is above U+007F — the whole frame, not
+    // the table alone: spec 11's T6 gave the pane a fact block whose dash,
+    // separator and rules are the theme's, where spec 10's pane carried a
+    // `—` no theme owned.
+    for line in &frame {
         assert!(
             line.is_ascii(),
-            "the table drew a glyph this terminal cannot:\n{line:?}",
+            "the board drew a glyph this terminal cannot:\n{line:?}",
         );
     }
-    // What that pane does owe the theme is the state, which carries the
-    // arrow inside its own words: a pane reading "blocked ← T6" under a row
-    // reading "blocked <- T6" would be one board disagreeing with itself on
-    // one screen.
+    // The pane owes the theme the state most of all, since that one carries
+    // the arrow inside its own words: a pane reading "blocked ← T6" under a
+    // row reading "blocked <- T6" would be one board disagreeing with itself
+    // on one screen.
     board.selected = board
         .rows
         .iter()
@@ -5090,7 +5204,7 @@ fn the_ascii_theme_replaces_every_non_ascii_glyph() {
     assert!(
         watched
             .iter()
-            .any(|line| line.contains(&format!("T7 — {BLOCKED}"))),
+            .any(|line| line.contains(&format!("state   - {BLOCKED}"))),
         "the pane kept a glyph the row beside it swapped:\n{}",
         watched.join("\n"),
     );
@@ -5230,6 +5344,281 @@ fn the_marker_takes_the_rows_colour() {
         inside(row_of(&frame, "T3")).starts_with("  T3"),
         "{:?}",
         row_of(&frame, "T3"),
+    );
+}
+
+// ── 11-T6
+
+/// The wave these panes are about: spec 10's own, which is the board the
+/// fact block in the spec was written from.
+const WATCHED: &str = "graph: specs/10-keeler-top.md on feat/10-keeler-top";
+
+/// When T3 was spawned — forty-one minutes before the clock every frame here
+/// is drawn against — and when it called the tool it is still in, which is
+/// seven minutes and fifty-two seconds before it.
+const SPAWNED: &str = "2026-09-07T11:19:00.000Z";
+const CALLED: &str = "2026-09-07T11:52:08.000Z";
+
+/// A report of one task of that wave, with the paths the recipe prints
+/// beside a state that has a run.
+fn watched_report(id: &str, state: &str, log: &str) -> String {
+    format!(
+        "{WATCHED}\n{id:<6} {state:<16} log {log}  worktree /w/keeler-10-keeler-top-{}\n",
+        id.to_lowercase(),
+    )
+}
+
+/// T3's stream: spawned, and in its gate since 11:52:08.
+///
+/// `just keeler-branch` rather than `just dev`, because the stage is part of
+/// what the fact block says and that recipe is the one that means `gate`.
+fn gate_stream() -> Vec<String> {
+    vec![
+        restamped(SPAWNED, INIT),
+        restamped(
+            CALLED,
+            &stamped_tool_use(
+                "toolu_1",
+                "Bash",
+                serde_json::json!({ "command": "just keeler-branch" }),
+            ),
+        ),
+    ]
+}
+
+/// A board of one task, over the two files a scenario says are there.
+fn watched_board(report: &str, files: &Unread) -> Board {
+    assemble_read(report, "", "", NOON, files)
+}
+
+/// The pane as the frame drew it, from its first fact down — found by that
+/// line rather than counted, because how many lines the panels above it take
+/// is their scenarios' business and not this one's.
+fn pane_in(frame: &[String]) -> Vec<&str> {
+    let top = frame
+        .iter()
+        .position(|line| inside(line).starts_with("state   "))
+        .unwrap_or_else(|| panic!("no fact block in:\n{}", frame.join("\n")));
+    frame[top..]
+        .iter()
+        .map(String::as_str)
+        .map(inside)
+        .collect()
+}
+
+#[test]
+fn the_live_pane_opens_with_a_fact_block() {
+    // Given T3 is running, stage gate, in its tool for 07:52, spawned 41
+    // minutes ago, log at .keeler/runs/10-keeler-top/t3.log, review record
+    // with Verdict: pass on its branch
+    let runfiles = Runfiles::new("t6-fact-block");
+    let log = runfiles.stream("t3", &gate_stream());
+    let board = watched_board(
+        &watched_report("T3", "running", &log),
+        &Unread {
+            verdict: Some("pass".to_string()),
+            ..Unread::default()
+        },
+    );
+
+    // When T3 is selected — it is the only task, so it already is
+    let frame = drawn(&board, WIDE.0, WIDE.1);
+    let pane = pane_in(&frame);
+
+    // Then the pane's first lines read the four facts
+    assert_eq!(
+        pane[..4],
+        [
+            "state   ● running · gate · 07:52 in this tool · 41m since spawn",
+            "paths   keeler/10-keeler-top/t3 · ../keeler-10-keeler-top-t3 · tmux keeler-10-keeler-top-t3",
+            "run     .keeler/runs/10-keeler-top/t3.log",
+            "review  reviews/10-keeler-top/t3.md   Verdict: pass",
+        ],
+    );
+}
+
+#[test]
+fn a_review_record_not_yet_written_says_so() {
+    // Given T3 has no reviews/<slug>/t3.md on its branch
+    let runfiles = Runfiles::new("t6-no-record");
+    let log = runfiles.stream("t3", &gate_stream());
+    let board = watched_board(&watched_report("T3", "running", &log), &Unread::default());
+
+    // When T3 is selected
+    let frame = drawn(&board, WIDE.0, WIDE.1);
+
+    // Then the review line says nobody has written one, rather than naming
+    // a file that is not there
+    assert_eq!(pane_in(&frame)[3], "review  — not written yet");
+}
+
+#[test]
+fn a_failed_tasks_state_line_carries_the_exit_code() {
+    // Given T9 failed (exit 2) and its turn ended 04:11 ago
+    let runfiles = Runfiles::new("t6-failed");
+    let log = runfiles.stream("t9", &gate_stream());
+    let board = watched_board(
+        &watched_report("T9", "failed (exit 2)", &log),
+        &Unread {
+            exit: Some(Exit {
+                code: 2,
+                at: Timestamp::parse("2026-09-07T11:55:49.000Z"),
+            }),
+            ..Unread::default()
+        },
+    );
+
+    // When T9 is selected
+    let frame = drawn(&board, WIDE.0, WIDE.1);
+
+    // Then the state line reads the word, the code and when it ended
+    assert_eq!(
+        pane_in(&frame)[0],
+        "state   ✗ failed · exit 2 · ended 04:11 ago",
+    );
+}
+
+/// T3 with its own words behind it, and the branch a scenario gives it.
+///
+/// The commits are said outright rather than read from a repository, as the
+/// row's COMMIT column's are: what these scenarios are about is the pane,
+/// and `git.rs`'s own tests are where the facts behind it are read.
+fn saying(runfiles: &Runfiles, name: &str, texts: &[&str], commits: usize) -> Board {
+    let mut lines = gate_stream();
+    for said in texts {
+        lines.push(record(None, "m1", None, text(said)));
+    }
+    let log = runfiles.stream(name, &lines);
+    let mut board = watched_board(&watched_report("T3", "running", &log), &Unread::default());
+    board.rows[0].branch = Some(BranchFacts {
+        // The newest commit is the branch's head, as a repository would have
+        // it: the row's COMMIT column and the pane's first line are the same
+        // fact read twice, and a fixture that let them differ would not be
+        // able to say so.
+        head: "b33e050".to_string(),
+        ahead: commits,
+        dirty: 0,
+        commits: (0..commits)
+            .map(|which| Commit {
+                hash: format!("b33e05{which}"),
+                subject: format!("feat(10-keeler-top): T3 step {which}"),
+            })
+            .collect(),
+    });
+    board
+}
+
+#[test]
+fn the_panes_sections_are_ruled_and_ordered_agent_commits_last_command() {
+    // Given T3 has seven texts, four commits since the feature branch and a
+    // last command — the view keeps the last five texts, which is what the
+    // pane is handed
+    let runfiles = Runfiles::new("t6-sections");
+    let board = saying(
+        &runfiles,
+        "t3",
+        &["one", "two", "three", "four", "five", "six", "seven"],
+        4,
+    );
+
+    // When T3 is selected
+    let frame = drawn(&board, WIDE.0, WIDE.1);
+    let pane = pane_in(&frame);
+
+    // Then after the fact block come "── agent ──" and the last five texts,
+    // oldest first, without a prefix
+    assert!(pane[4].starts_with("── agent ──"), "{:?}", pane[4]);
+    assert_eq!(pane[5..10], ["three", "four", "five", "six", "seven"]);
+    // And then "── commits ──" and one commit per line, newest first, the
+    // first hash equal to the row's COMMIT hash
+    assert!(pane[10].starts_with("── commits ──"), "{:?}", pane[10]);
+    assert_eq!(pane[11], "b33e050 feat(10-keeler-top): T3 step 0");
+    assert_eq!(pane[14], "b33e053 feat(10-keeler-top): T3 step 3");
+    assert!(
+        inside(row_of(&frame, "T3")).contains("b33e050 +4"),
+        "the row and the pane name different commits: {:?}",
+        row_of(&frame, "T3"),
+    );
+    // And then "── last command ──" and the command in full
+    assert!(pane[15].starts_with("── last command ──"), "{:?}", pane[15]);
+    assert_eq!(pane[16], "Bash: just keeler-branch");
+    // And every rule spans the pane's inner width — the terminal's 120, less
+    // the two the panel's borders take
+    for rule in [pane[4], pane[10], pane[15]] {
+        assert_eq!(
+            unicode_width::UnicodeWidthStr::width(rule),
+            usize::from(WIDE.0 - 2),
+            "a rule stops short of the pane's edge: {rule:?}",
+        );
+    }
+}
+
+#[test]
+fn commits_that_do_not_fit_end_with_a_count() {
+    // Given T3 has 9 commits since the feature branch and the pane holds 3
+    // commit lines — a panel of twelve, whose fact block is four lines, whose
+    // agent section is a rule and one text, and whose last command is a rule
+    // and one line
+    let runfiles = Runfiles::new("t6-commit-count");
+    let board = saying(&runfiles, "t3", &["one"], 9);
+
+    // When T3 is selected
+    let pane = pane_of(&board, 12);
+
+    // Then the third commit line says how many were not drawn
+    assert!(pane[6].starts_with("── commits ──"), "{:?}", pane[6]);
+    assert_eq!(pane[7], "b33e050 feat(10-keeler-top): T3 step 0");
+    assert_eq!(pane[8], "b33e051 feat(10-keeler-top): T3 step 1");
+    assert_eq!(pane[9], "… +7 more");
+    // And it is dim, because it is the pane talking about the list rather
+    // than another line of it
+    let lines = keeler_top::detail::pane(
+        board.selected_row().expect("the board has a row"),
+        board.slug(),
+        THEME,
+        now(NOON),
+        PANE,
+        12,
+    );
+    assert_eq!(lines[9].style, ratatui::style::Style::new().fg(DIM));
+}
+
+/// A board whose one task has landed, over the record and the exit file a
+/// scenario says are still there.
+fn landed_board(files: &Unread) -> Board {
+    watched_board(&format!("{WATCHED}\nT1     done\n"), files)
+}
+
+#[test]
+fn a_done_tasks_pane_shows_its_record_its_run_and_the_next_step() {
+    // Given T1 is done and its worktree is gone
+    let board = landed_board(&Unread {
+        verdict: Some("pass".to_string()),
+        exit: Some(Exit {
+            code: 0,
+            at: Timestamp::parse("2026-09-07T11:45:00.000Z"),
+        }),
+    });
+
+    // When T1 is selected
+    let frame = drawn(&board, WIDE.0, WIDE.1);
+    let pane = pane_in(&frame);
+
+    // Then the pane's title reads "T1"
+    let top = frame
+        .iter()
+        .rposition(|line| line.starts_with('┌'))
+        .expect("the pane is drawn in a box");
+    assert!(frame[top].starts_with("┌ T1 ─"), "{:?}", frame[top]);
+    // And its lines read the state, the record, the run and the step after
+    assert_eq!(
+        pane[..4],
+        [
+            "state   ✓ done · landed, worktree and branch removed by keeler-land",
+            "review  reviews/10-keeler-top/t1.md   Verdict: pass",
+            "run     .keeler/runs/10-keeler-top/t1.log · exit 0",
+            "next    keeler keeler-land on main → baseline staged, Status: Implemented",
+        ],
     );
 }
 
@@ -5478,4 +5867,20 @@ fn a_short_panel_scrolls_to_keep_the_selection_visible() {
             frame.join("\n"),
         );
     }
+}
+
+#[test]
+fn a_done_task_whose_run_files_are_gone_shows_dashes_for_them() {
+    // Given T1 is done and .keeler/runs/<slug>/t1.exit does not exist, which
+    // is what removing the worktree with `keeler-land` leaves behind
+    let board = landed_board(&Unread {
+        verdict: Some("pass".to_string()),
+        exit: None,
+    });
+
+    // When T1 is selected
+    let frame = drawn(&board, WIDE.0, WIDE.1);
+
+    // Then the run line names no file it cannot open
+    assert_eq!(pane_in(&frame)[2], "run     —");
 }

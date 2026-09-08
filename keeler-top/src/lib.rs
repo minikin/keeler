@@ -8,6 +8,7 @@ pub mod app;
 pub mod board;
 pub mod cli;
 pub mod clock;
+pub mod detail;
 pub mod dispatch;
 pub mod frame;
 pub mod git;
@@ -46,4 +47,26 @@ fn fixture_dir(name: &str) -> std::path::PathBuf {
         std::process::id(),
         SERIAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
     ))
+}
+
+/// A wave still running: no task has written a review record, and none has
+/// left an exit code behind.
+///
+/// Here for the reason [`fixture_dir`] is: four test modules assemble a
+/// board, and what they are about is the rows rather than the two files a
+/// finished stage leaves beside them. The scenarios that *are* about those
+/// files hand [`board::Board::assemble`] a double that answers.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy)]
+struct Unasked;
+
+#[cfg(test)]
+impl dispatch::Records for Unasked {
+    fn verdict(&self, _slug: &str, _id: &str, _git_ref: &str) -> Option<String> {
+        None
+    }
+
+    fn exit(&self, _slug: &str, _id: &str) -> Option<dispatch::Exit> {
+        None
+    }
 }

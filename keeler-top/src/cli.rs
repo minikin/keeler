@@ -246,6 +246,7 @@ mod tests {
             &crate::graph::Graph::default(),
             &mut Runs::default(),
             now,
+            &crate::Unasked,
         );
 
         // `--once` is the frame, wherever stdout goes: it is what a script

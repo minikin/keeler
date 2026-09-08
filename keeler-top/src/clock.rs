@@ -57,6 +57,19 @@ impl Timestamp {
         ))
     }
 
+    /// The instant a file's own stamp names, or nothing for a clock this
+    /// machine will not answer for.
+    ///
+    /// The one time the board reads from something other than a stream: the
+    /// runner writes a run's `.exit` file as the turn ends, so that file's
+    /// modification time is when it ended — and nothing in the stream says
+    /// so, because the stream was closed before it was written.
+    #[must_use]
+    pub fn from_system_time(time: std::time::SystemTime) -> Option<Self> {
+        let since = time.duration_since(std::time::UNIX_EPOCH).ok()?;
+        i64::try_from(since.as_secs()).ok().map(Self)
+    }
+
     /// How long ago `self` was, from `now`. An instant in the future is no
     /// time at all rather than a negative one: a stream written by a
     /// machine whose clock runs ahead should show a tool that has just
@@ -141,9 +154,28 @@ pub fn format_elapsed(seconds: u64) -> String {
     }
 }
 
+/// How long ago something was, in the largest unit that still says
+/// something: `45s`, `41m`, `2h`.
+///
+/// Coarser than [`format_elapsed`], and about a different question. That is a
+/// clock on a tool call, read while it runs, where a second hand is the
+/// thing that moves. This is the age of a spawn — read once, to know whether
+/// a run has been going twenty minutes or five hours — and `41:12:07` in
+/// that place invites the eye to a second hand with nothing to say.
+#[must_use]
+pub fn format_age(seconds: u64) -> String {
+    if seconds < 60 {
+        format!("{seconds}s")
+    } else if seconds < 3_600 {
+        format!("{}m", seconds / 60)
+    } else {
+        format!("{}h", seconds / 3_600)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Timestamp, format_elapsed};
+    use super::{Timestamp, format_age, format_elapsed};
 
     fn at(text: &str) -> Timestamp {
         Timestamp::parse(text).expect("the test's own timestamp did not parse")
@@ -284,6 +316,34 @@ mod tests {
         // at all, since a `now` stuck at the epoch would make every elapsed
         // column read the age of the Unix epoch instead.
         assert!(Timestamp::now() > at("2020-01-01T00:00:00Z"));
+    }
+
+    #[test]
+    fn an_age_is_the_largest_unit_that_still_says_something() {
+        assert_eq!(format_age(0), "0s");
+        assert_eq!(format_age(59), "59s");
+        assert_eq!(format_age(60), "1m");
+        assert_eq!(format_age(2_460), "41m");
+        assert_eq!(format_age(3_599), "59m");
+        assert_eq!(format_age(3_600), "1h");
+        assert_eq!(format_age(7_199), "1h");
+        assert_eq!(format_age(18_000), "5h");
+    }
+
+    #[test]
+    fn a_files_own_stamp_is_read_as_an_instant() {
+        use std::time::{Duration, UNIX_EPOCH};
+
+        assert_eq!(
+            Timestamp::from_system_time(UNIX_EPOCH + Duration::from_secs(1_000)),
+            Some(Timestamp::from_epoch_seconds(1_000)),
+        );
+        // A stamp before the epoch is a machine whose clock is wrong by
+        // decades, and the age it would produce is the least of that.
+        assert_eq!(
+            Timestamp::from_system_time(UNIX_EPOCH - Duration::from_secs(1)),
+            None,
+        );
     }
 
     #[test]

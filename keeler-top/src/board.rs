@@ -18,6 +18,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::clock::Timestamp;
+use crate::dispatch::{Exit, Records};
 use crate::git::{BranchFacts, branch_facts};
 use crate::graph::{Graph, GraphLine, GraphState};
 use crate::run::{DASH, RunView, fold};
@@ -44,6 +45,48 @@ pub const PAUSED: &str = "paused";
 /// finished view, which is a different board.
 pub const DONE: &str = "done";
 
+/// A spec's slug: its file name without `.md`, from the path the report's
+/// own header names.
+///
+/// A function of the path rather than of the board, because the rows are
+/// composed before the board they belong to is: every name in graph mode is
+/// derived from this, and two of them are read while the rows are being
+/// built.
+#[must_use]
+pub fn slug_of(rel: &str) -> &str {
+    std::path::Path::new(rel)
+        .file_stem()
+        .and_then(std::ffi::OsStr::to_str)
+        .unwrap_or_default()
+}
+
+/// The branch `keeler-spawn` cut for a task.
+///
+/// The three names below are the ones every recipe in graph mode composes
+/// from a spec's slug and a task's id, with the id lowercased on the way in
+/// as all of them do — the branch, the record `/keeler:review` writes, and
+/// the files a run leaves under `.keeler/runs/`. They are here rather than
+/// in the places that want them because two do: the pane shows them, and
+/// [`crate::dispatch::Shell`] opens two of them, and a board naming a file
+/// one way while it reads another would show a record nobody wrote.
+#[must_use]
+pub fn task_branch(slug: &str, id: &str) -> String {
+    format!("keeler/{slug}/{}", id.to_lowercase())
+}
+
+/// A task's review record, relative to the repository root.
+#[must_use]
+pub fn review_record(slug: &str, id: &str) -> String {
+    format!("reviews/{slug}/{}.md", id.to_lowercase())
+}
+
+/// One of a run's files — its log, its stream, its exit code — relative to
+/// the repository root.
+#[must_use]
+pub fn run_file(slug: &str, id: &str, suffix: &str) -> String {
+    format!(".keeler/runs/{slug}/{}.{suffix}", id.to_lowercase())
+}
+
 /// One task, as the board shows it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Row {
@@ -55,6 +98,11 @@ pub struct Row {
     /// The run's log, as the report named it — the path every other file of
     /// the run is found beside.
     pub log: Option<PathBuf>,
+    /// The worktree the run is in, as the report named it, while there is
+    /// one. Kept beside the log because the pane names it: a watcher
+    /// deciding where to go next reads the branch, the worktree and the
+    /// session together, and the report is where two of the three are said.
+    pub worktree: Option<PathBuf>,
     /// What the run's stream says, for a task that has one.
     pub run: Option<RunView>,
     /// What the task's branch and worktree say, while they are there.
@@ -64,6 +112,15 @@ pub struct Row {
     /// one, which is a blank column rather than a board complaining about
     /// somebody's prose.
     pub title: Option<String>,
+    /// The word on the `Verdict:` line of the task's review record, and
+    /// nothing where no record has been written — which is one of the three
+    /// things `incomplete` names, said in the pane as the thing to do next.
+    pub verdict: Option<String>,
+    /// What the run ended with, from the file the runner wrote after the
+    /// stream was closed.
+    pub exit: Option<Exit>,
+    /// When the run began, from the stamp on its stream's first record.
+    pub spawned_at: Option<Timestamp>,
 }
 
 impl Row {
@@ -174,6 +231,16 @@ impl Row {
         };
         format!("{} +{}{dirty}", branch.head, branch.ahead)
     }
+}
+
+/// Whether a task could have a review record to read.
+///
+/// A run wrote one, or a merge landed one. The report names a log for every
+/// state that has a run, and `done` is the state that has landed — every
+/// other word it prints is a task that was never started, which has no
+/// branch for a record to be on and no tick for one to have arrived with.
+fn reviewable(task: &StatusLine) -> bool {
+    task.log.is_some() || task.state == DONE
 }
 
 /// The state column: `keeler-status`'s word, except for the one it has not
@@ -288,25 +355,55 @@ pub struct Board {
 }
 
 impl Board {
-    /// One tick's board, from the two reads and the streams.
+    /// One tick's board, from the two reads, the streams, and the two files
+    /// a run leaves behind it.
+    ///
+    /// Every row, and not the selected one alone. The two files are a row's
+    /// facts rather than the pane's — the same shape as the branch facts
+    /// beside them, which are four git queries a row a tick — and a board
+    /// that read them when the selection moved would put a subprocess
+    /// between `j` and the frame that answers it.
     #[must_use]
-    pub fn assemble(status: &Status, graph: &Graph, runs: &mut Runs, answered: Timestamp) -> Self {
+    pub fn assemble<R: Records + ?Sized>(
+        status: &Status,
+        graph: &Graph,
+        runs: &mut Runs,
+        answered: Timestamp,
+        records: &R,
+    ) -> Self {
+        let slug = slug_of(&status.rel);
         let rows = status
             .tasks
             .iter()
-            .map(|task| Row {
-                id: task.id.clone(),
-                state: state_column(&task.state, graph.line(&task.id)),
-                log: task.log.clone(),
-                run: runs.refresh(task),
-                title: graph.title(&task.id),
-                // The distance is measured from the ref the report
-                // answered about, so the commit column and the state column
-                // are about one graph and not two.
-                branch: task
-                    .worktree
-                    .as_deref()
-                    .and_then(|worktree| branch_facts(worktree, &status.git_ref)),
+            .map(|task| {
+                let run = runs.refresh(task);
+                Row {
+                    id: task.id.clone(),
+                    state: state_column(&task.state, graph.line(&task.id)),
+                    log: task.log.clone(),
+                    worktree: task.worktree.clone(),
+                    spawned_at: run.as_ref().and_then(|view| view.spawned_at),
+                    run,
+                    title: graph.title(&task.id),
+                    // Asked of the rows that could have one, and of no
+                    // others: a review record is written by a run or landed
+                    // by a merge, so a task with neither a run nor a tick has
+                    // no branch to hold one and no commit to have brought
+                    // one. The read is two `git show`s, and a board that made
+                    // them for every blocked task every second would spend
+                    // most of its subprocesses on answers that cannot exist.
+                    verdict: reviewable(task)
+                        .then(|| records.verdict(slug, &task.id, &status.git_ref))
+                        .flatten(),
+                    exit: records.exit(slug, &task.id),
+                    // The distance is measured from the ref the report
+                    // answered about, so the commit column and the state column
+                    // are about one graph and not two.
+                    branch: task
+                        .worktree
+                        .as_deref()
+                        .and_then(|worktree| branch_facts(worktree, &status.git_ref)),
+                }
             })
             .collect();
         Self {
@@ -328,10 +425,7 @@ impl Board {
     /// header rather than from anything the board was launched with.
     #[must_use]
     pub fn slug(&self) -> &str {
-        std::path::Path::new(&self.rel)
-            .file_stem()
-            .and_then(std::ffi::OsStr::to_str)
-            .unwrap_or_default()
+        slug_of(&self.rel)
     }
 
     /// How old `keeler-status`'s answer is.
@@ -456,9 +550,13 @@ mod tests {
             id: "T1".to_string(),
             state: "running".to_string(),
             log: Some(std::path::PathBuf::from("/r/.keeler/runs/01-foo/t1.log")),
+            worktree: None,
             run,
             branch,
             title: None,
+            verdict: None,
+            exit: None,
+            spawned_at: None,
         }
     }
 
@@ -745,6 +843,7 @@ mod tests {
                 &crate::graph::Graph::default(),
                 &mut Runs::default(),
                 Timestamp::default(),
+                &crate::Unasked,
             )
             .slug()
             .to_string()
@@ -834,6 +933,7 @@ mod tests {
             &crate::graph::Graph::default(),
             &mut Runs::default(),
             Timestamp::default(),
+            &crate::Unasked,
         )
     }
 
@@ -897,6 +997,63 @@ mod tests {
         assert_eq!(board_of(&[]).moved(true), 0);
     }
 
+    /// A dispatch that answers both reads and remembers what it was asked.
+    #[derive(Debug, Default)]
+    struct Asked {
+        verdicts: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl crate::dispatch::Records for Asked {
+        fn verdict(&self, slug: &str, id: &str, git_ref: &str) -> Option<String> {
+            self.verdicts
+                .lock()
+                .expect("the asks")
+                .push(format!("{slug} {id} {git_ref}"));
+            Some("pass".to_string())
+        }
+
+        fn exit(&self, _slug: &str, id: &str) -> Option<crate::dispatch::Exit> {
+            Some(crate::dispatch::Exit {
+                code: i32::from(id == "T9"),
+                at: None,
+            })
+        }
+    }
+
+    #[test]
+    fn the_record_is_asked_for_only_where_one_could_be() {
+        // Two `git show`s a row a tick is what this read costs, and a task
+        // nobody has spawned has no branch to hold a record and no tick to
+        // have merged one — so the answer cannot exist and the board does
+        // not go looking for it every second.
+        let status = parse(
+            "graph: specs/01-foo.md on feat/01-foo\n\
+             T1     running          log /r/t1.log  worktree /w/r-01-foo-t1\n\
+             T2     done\n\
+             T3     not spawned\n",
+        )
+        .expect("a report");
+        let asked = Asked::default();
+
+        let board = Board::assemble(
+            &status,
+            &crate::graph::Graph::default(),
+            &mut Runs::default(),
+            Timestamp::default(),
+            &asked,
+        );
+
+        assert_eq!(
+            *asked.verdicts.lock().expect("the asks"),
+            ["01-foo T1 feat/01-foo", "01-foo T2 feat/01-foo"],
+        );
+        assert_eq!(board.rows[2].verdict, None, "T3 was asked about after all");
+        // The exit file is a stat rather than a subprocess, so it is read
+        // for every row — and it reaches the row it was read for.
+        assert_eq!(board.rows[0].exit.map(|exit| exit.code), Some(0));
+        assert_eq!(board.rows[2].exit.map(|exit| exit.code), Some(0));
+    }
+
     #[test]
     fn a_row_carries_the_title_the_spec_gives_its_task_and_no_other() {
         let status = parse("graph: s.md on HEAD\nT1     done\nT2     done\n").expect("a report");
@@ -905,7 +1062,13 @@ mod tests {
             titles: crate::graph::titles("- [x] **T1 — The theme.** x\n"),
         };
 
-        let board = Board::assemble(&status, &graph, &mut Runs::default(), Timestamp::default());
+        let board = Board::assemble(
+            &status,
+            &graph,
+            &mut Runs::default(),
+            Timestamp::default(),
+            &crate::Unasked,
+        );
 
         assert_eq!(board.rows[0].title.as_deref(), Some("The theme"));
         assert_eq!(board.rows[1].title, None, "a title nobody wrote was found");
@@ -991,6 +1154,7 @@ mod tests {
             &crate::graph::Graph::default(),
             &mut Runs::default(),
             answered,
+            &crate::Unasked,
         );
 
         assert_eq!(board.rel, "specs/01-foo.md");

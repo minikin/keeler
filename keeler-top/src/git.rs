@@ -108,6 +108,50 @@ fn next_serial() -> u64 {
     SERIAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
+/// One file as one ref holds it, or nothing where that ref holds no such
+/// path — a branch that was never cut, a record nobody has written yet.
+///
+/// A string rather than the file [`spec_from_ref`] writes, because the
+/// reader is this process: only the graph script needs a path, and only
+/// because it is a shell script.
+fn show(root: &Path, git_ref: &str, rel: &str) -> Option<String> {
+    git(root, &["show", &format!("{git_ref}:{rel}")])
+}
+
+/// The word on the `Verdict:` line of a task's review record.
+///
+/// Asked of the shared ref first and of the task's own branch only when the
+/// ref holds no record. Until somebody merges, the record exists only on the
+/// branch that wrote it, so the branch is what answers for a task in flight;
+/// once the work has landed, the ref's copy is the one the feature was
+/// merged with, and a task branch left standing afterwards may still hold a
+/// verdict from a run that was superseded. `keeler-status` divides the same
+/// way and for the same reason, in the words of its own comment: a stale
+/// verdict from a run that was later fixed and landed is the record of
+/// something that no longer happened.
+#[must_use]
+pub fn verdict(root: &Path, slug: &str, id: &str, git_ref: &str) -> Option<String> {
+    let record = crate::board::review_record(slug, id);
+    let text = show(root, git_ref, &record)
+        .or_else(|| show(root, &crate::board::task_branch(slug, id), &record))?;
+    verdict_of(&text)
+}
+
+/// The line and not the file: a record is prose under a short header, and
+/// the one thing the board shows of it is the word the reviewer settled on.
+///
+/// A header without that line is a record still being written, which is the
+/// same answer as no record at all — the pane says so either way.
+#[must_use]
+pub fn verdict_of(record: &str) -> Option<String> {
+    record
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("Verdict:"))
+        .map(str::trim)
+        .filter(|verdict| !verdict.is_empty())
+        .map(str::to_string)
+}
+
 /// One commit of a task's branch.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Commit {
@@ -361,6 +405,71 @@ mod tests {
             "a refusal that is not a taken name was retried as one: {refused}"
         );
         assert!(refused.contains("keeler-top-"), "{refused}");
+    }
+
+    #[test]
+    fn a_records_verdict_is_read_from_the_ref_and_then_from_the_branch_that_wrote_it() {
+        // In flight, the record exists only on the task's own branch, so
+        // that is what answers.
+        let repo = Repo::new("verdict");
+        repo.commit("README.md", "the project");
+        repo.git(&["checkout", "-qb", "keeler/01-foo/t1"]);
+        repo.commit(
+            "reviews/01-foo/t1.md",
+            "Task: t1\nVerdict: fail\n\nthe prose\n",
+        );
+        repo.git(&["checkout", "-q", "main"]);
+
+        assert_eq!(
+            super::verdict(&repo.0, "01-foo", "T1", "main"),
+            Some("fail".to_string()),
+            "the record on the task's own branch was not read",
+        );
+        // A task nobody has reviewed, on a branch nobody has cut.
+        assert_eq!(super::verdict(&repo.0, "01-foo", "T2", "main"), None);
+
+        // Once the work has landed, the ref answers — and it answers first,
+        // over a task branch left standing whose verdict a later run
+        // superseded. Anything else would report a failure that was fixed.
+        repo.commit(
+            "reviews/01-foo/t1.md",
+            "Task: t1\nVerdict: pass\n\nthe prose\n",
+        );
+        assert_eq!(
+            super::verdict(&repo.0, "01-foo", "T1", "main"),
+            Some("pass".to_string()),
+        );
+        // The id is lowercased on the way into the path, as it is into every
+        // other name graph mode composes.
+        assert_eq!(
+            super::verdict(&repo.0, "01-foo", "t1", "main"),
+            Some("pass".to_string()),
+        );
+        // And with the branch removed, as `keeler-land` leaves it.
+        repo.git(&["branch", "-qD", "keeler/01-foo/t1"]);
+        assert_eq!(
+            super::verdict(&repo.0, "01-foo", "T1", "main"),
+            Some("pass".to_string()),
+        );
+    }
+
+    #[test]
+    fn a_record_with_no_verdict_line_is_a_record_still_being_written() {
+        assert_eq!(
+            super::verdict_of("Task: t1\nCommit: 01a8434\nVerdict: pass\n"),
+            Some("pass".to_string()),
+        );
+        // Whatever the reviewer settled on, and whatever is under it.
+        assert_eq!(
+            super::verdict_of("Verdict: fail — the gate is red\n\nthe prose\n"),
+            Some("fail — the gate is red".to_string()),
+        );
+        assert_eq!(super::verdict_of("Task: t1\n"), None);
+        assert_eq!(super::verdict_of(""), None);
+        // A header opened and not answered is not a verdict: the pane's
+        // "not written yet" is the honest reading of it.
+        assert_eq!(super::verdict_of("Verdict:\n"), None);
+        assert_eq!(super::verdict_of("Verdict:   \n"), None);
     }
 
     #[test]

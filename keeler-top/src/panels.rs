@@ -464,9 +464,13 @@ mod tests {
                 id: (*id).to_string(),
                 state: (*state).to_string(),
                 log: None,
+                worktree: None,
                 run: None,
                 branch: None,
                 title: None,
+                verdict: None,
+                exit: None,
+                spawned_at: None,
             })
             .collect()
     }

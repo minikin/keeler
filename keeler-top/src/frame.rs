@@ -503,44 +503,6 @@ pub fn layout(area: Rect, lines: usize) -> Panes {
 /// The one line the footer takes.
 const FOOTER_ROWS: u16 = 1;
 
-/// The detail pane's lines for one row: which task and what it is doing,
-/// the command whole rather than cut to a column, the run's last words
-/// oldest first, and the commits its branch has made.
-///
-/// The state goes through the theme for the reason the row above it does:
-/// the arrow a blocked task carries is inside its words, and a pane that
-/// wrote `blocked ← T6` under a row reading `blocked <- T6` would be the
-/// same board disagreeing with itself on one screen. The `—` is not the
-/// theme's — it is spec 10's separator, and T6's fact block is what
-/// replaces it.
-#[must_use]
-pub fn detail(row: &Row, theme: Theme) -> Vec<String> {
-    let mut lines = vec![format!("{} — {}", row.id, theme.state_text(&row.state))];
-    if let Some(run) = &row.run {
-        lines.push(run.tool_column());
-        lines.push(String::new());
-        // A text block can hold several lines, and a pane that wrote the
-        // newline as a symbol would show one long line of mojibake where
-        // the run's own paragraph should be.
-        lines.extend(
-            run.texts
-                .iter()
-                .flat_map(|text| text.lines())
-                .map(str::to_string),
-        );
-    }
-    if let Some(branch) = &row.branch {
-        lines.push(String::new());
-        lines.extend(
-            branch
-                .commits
-                .iter()
-                .map(|commit| format!("{} {}", commit.hash, commit.subject)),
-        );
-    }
-    lines
-}
-
 /// The same frame as plain text — the table alone, which is what a script
 /// reading `--once` wants.
 #[must_use]
@@ -593,8 +555,15 @@ pub fn render(frame: &mut ratatui::Frame, board: &Board, theme: Theme, now: Time
     // untitled empty box — the board drawing its own furniture.
     if let (Some(pane), Some(row)) = (panes.detail, board.selected_row()) {
         frame.render_widget(
-            Paragraph::new(detail(row, theme).join("\n"))
-                .block(panel(theme, named(&row.id, theme.style(GREEN)))),
+            Paragraph::new(crate::detail::pane(
+                row,
+                board.slug(),
+                theme,
+                now,
+                pane.width.saturating_sub(BORDERS),
+                pane.height.saturating_sub(BORDERS),
+            ))
+            .block(panel(theme, named(&row.id, theme.style(GREEN)))),
             pane,
         );
     }
@@ -883,6 +852,7 @@ mod tests {
             &crate::graph::Graph::default(),
             &mut Runs::default(),
             Timestamp::default(),
+            &crate::Unasked,
         );
 
         let text = super::once(&board, Timestamp::default());
@@ -979,9 +949,13 @@ mod tests {
             id: "T5".to_string(),
             state: "ready".to_string(),
             log: None,
+            worktree: None,
             run: None,
             branch: None,
             title: None,
+            verdict: None,
+            exit: None,
+            spawned_at: None,
         };
 
         // When the board renders
@@ -1007,9 +981,13 @@ mod tests {
             id: "T1".to_string(),
             state: "sulking".to_string(),
             log: None,
+            worktree: None,
             run: None,
             branch: None,
             title: None,
+            verdict: None,
+            exit: None,
+            spawned_at: None,
         };
 
         // When the board renders
@@ -1041,8 +1019,12 @@ mod tests {
                 }),
                 ..RunView::default()
             }),
+            worktree: None,
             branch: None,
             title: None,
+            verdict: None,
+            exit: None,
+            spawned_at: None,
         };
 
         // When the board renders
@@ -1072,9 +1054,13 @@ mod tests {
             id: "T3".to_string(),
             state: state.to_string(),
             log: None,
+            worktree: None,
             run,
             branch: None,
             title: title.map(str::to_string),
+            verdict: None,
+            exit: None,
+            spawned_at: None,
         }
     }
 
@@ -1171,8 +1157,12 @@ mod tests {
                 }),
                 ..RunView::default()
             }),
+            worktree: None,
             branch: None,
             title: Some("The fold reads the tool".to_string()),
+            verdict: None,
+            exit: None,
+            spawned_at: None,
         };
         let cols = Columns::live(118, 17);
 
@@ -1212,36 +1202,5 @@ mod tests {
             text(&lines[0]).trim_end(),
             "  T3   ● running         reading"
         );
-    }
-
-    #[test]
-    fn the_pane_shows_a_task_that_has_neither_a_run_nor_a_branch() {
-        let row = Row {
-            id: "T1".to_string(),
-            state: "not spawned".to_string(),
-            log: None,
-            run: None,
-            branch: None,
-            title: None,
-        };
-
-        assert_eq!(super::detail(&row, THEME), ["T1 — not spawned"]);
-    }
-
-    // ── 11-T3
-
-    #[test]
-    fn the_pane_says_a_blocked_task_in_the_glyphs_the_row_above_it_uses() {
-        // The arrow reaches the pane inside the state's own words, as it
-        // reaches the row: a pane reading `blocked ← T6` under a row reading
-        // `blocked <- T6` would be one board disagreeing with itself on one
-        // screen — and mojibake on the terminal the ASCII set exists for.
-        let row = row_of("blocked ← T6", None, None);
-
-        assert_eq!(
-            super::detail(&row, Theme::new(true, true)),
-            ["T3 — blocked <- T6"],
-        );
-        assert_eq!(super::detail(&row, THEME), ["T3 — blocked ← T6"]);
     }
 }
