@@ -10,6 +10,42 @@ The plugin's version is the one in `.claude-plugin/plugin.json`, which
 
 ## [Unreleased]
 
+### Added
+
+- **`keeler keeler-top <spec>` — the live board.** A wave of agents used
+  to be a text report you re-ran by hand; this is a terminal board that
+  reads the same wave and redraws itself. Three panels: the wave, with the
+  counts, what needs a human, and one glyph per task; the tasks, one row
+  each with its state, its stage, how much of its context window it has
+  spent, its commit and what the spec calls it; and the selected task in
+  full — its branch and worktree, its log, its review record, the agent's
+  own last words and the last command it ran. It reads what graph mode
+  already writes: `keeler keeler-status`, the run's `stream-json`, and the
+  task's branch. `j`/`k` move, `Enter` attaches to the task's tmux session,
+  `p` pauses a run, `R` resumes one, `r` re-reads, `z` collapses the rows
+  to one line each, `q` quits.
+
+  It is a first launch away: the board is a Rust binary the plugin builds
+  from its own tree, which takes a few minutes once and is instant after.
+  `--once` prints one frame as plain text instead, for a script or a diff,
+  and needs no terminal.
+
+- **The board is a board, not a table.** Ten states, each with its own
+  glyph and colour, so a wave is read at a glance rather than word by word.
+  Bordered panels; a running row carries a second line naming the command
+  it is in and how long it has been there; the context bar turns yellow at
+  60% and red with a `!` at 80%. The columns are measured, not fixed: a
+  window too narrow for a row gives up whole columns in a fixed order —
+  title, then the bar, then the share of the window, then the commit facts
+  — and never draws half a hash. A state's reason is the one thing never
+  cut, because it names what to do. `KEELER_TOP_ASCII=1` swaps every glyph
+  for ASCII on a terminal that cannot draw them.
+
+- **`demo/board.py`** builds a throwaway repository whose board shows every
+  state at once, so the frame can be looked at after a change without
+  spending an agent on a wave. `--clean` takes it away. Repository
+  machinery: it is never installed and no recipe reaches it.
+
 ### Changed
 
 - **Keeler is a Claude Code plugin.** `/plugin marketplace add

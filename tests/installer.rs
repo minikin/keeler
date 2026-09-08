@@ -891,8 +891,8 @@ fn assert_graph_mode_is_documented(project: &TempProject) {
     let chapter = std::fs::read_to_string(repo_root().join("graph-mode.md")).unwrap();
     for (recipe, _) in GRAPH_MODE_RECIPES {
         assert!(
-            chapter.contains(&format!("just {recipe}")),
-            "graph-mode.md never mentions `just {recipe}` — an agent reading it stays on the linear road",
+            chapter.contains(&format!("keeler {recipe}")),
+            "graph-mode.md never mentions `keeler {recipe}` — an agent reading it stays on the linear road",
         );
     }
     assert!(
@@ -908,8 +908,19 @@ fn assert_graph_mode_is_documented(project: &TempProject) {
     // And the guide the reasoning lives in.
     let guide = std::fs::read_to_string(repo_root().join("docs/KEELER.md")).unwrap();
     assert!(
-        guide.to_lowercase().contains("graph mode") && guide.contains("just keeler-spawn"),
+        guide.to_lowercase().contains("graph mode") && guide.contains("keeler keeler-spawn"),
         "docs/KEELER.md describes the workflow without the parallel road",
+    );
+    // And spells the recipes the way an adopter can type them: the Justfile
+    // is the plugin's now, so `just keeler-spawn` finds nothing in the
+    // project somebody reads this guide in.
+    let strays: Vec<&str> = guide
+        .lines()
+        .filter(|line| line.contains("just keeler-"))
+        .collect();
+    assert!(
+        strays.is_empty(),
+        "docs/KEELER.md sends the reader to a recipe their project has no justfile for: {strays:?}",
     );
 }
 

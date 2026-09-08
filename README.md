@@ -202,15 +202,46 @@ wave: T2 T3
 spawn T2 T3? [yes/no] yes
 ```
 
-One yes spawns them all, into one tmux window with a pane per run.
-`keeler keeler-status <spec>` is the board afterwards; you merge the
-finished branches into the feature branch, and `keeler keeler-land` runs the
-gates and clears the landed worktrees.
+One yes spawns them all, into one tmux window with a pane per run. Then
+`keeler keeler-top <spec>` watches them (below), you merge the finished
+branches into the feature branch, and `keeler keeler-land` runs the gates
+and clears the landed worktrees.
 
 It is opt-in and changes nothing on the linear road: a project that never
 runs these recipes never meets them. Its one extra requirement is **tmux**.
 [docs/KEELER.md](docs/KEELER.md#graph-mode-the-same-pipeline-in-parallel) has the day,
 start to finish.
+
+## The board
+
+```bash
+keeler keeler-top specs/01-the-espresso-machine.md
+```
+
+![The keeler-top board watching a wave of ten tasks](docs/images/keeler-top.png)
+
+Nobody watches an agent work, but somebody has to know which of ten needs
+them. The board reads what graph mode already writes — the same report
+`keeler keeler-status` prints, each run's `stream-json`, and each task's
+branch — and redraws itself:
+
+- **the wave** — how many are running, blocked and done, then the ones that
+  need a human, then a glyph per task;
+- **the tasks** — one row each: state, stage, how much of its context window
+  the run has spent, its commit and dirty count, and what the spec calls it.
+  A running row names the command it is in underneath;
+- **the selected task** — its branch and worktree, its log, its review
+  record, the agent's own last words, and the last command it ran.
+
+`j`/`k` move, `Enter` attaches to that task's tmux session, `p` pauses a
+run and `R` resumes one, `r` re-reads, `z` collapses the rows to one line
+each, `q` quits.
+
+The board is a Rust binary the plugin builds from its own tree: the first
+launch compiles it, which takes a few minutes, and every launch after is
+instant. `--once` prints one frame as plain text for a script or a diff,
+and needs no terminal. On a terminal that cannot draw the glyphs, set
+`KEELER_TOP_ASCII=1`.
 
 ## Skills
 

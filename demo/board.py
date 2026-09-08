@@ -262,7 +262,7 @@ def main():
          600, 380_000, 300),
         ("text", "Two findings, both mine. Fixing, tests first.", 400,
          402_000, 260),
-        ("bash", {"id": "tu4", "command": "just dev 2>&1 | tail -35"},
+        ("bash", {"id": "tu4", "command": "keeler dev 2>&1 | tail -35"},
          134, 412_000, 180),
     ])
     stream(runs / "t5.stream", OPUS, 63 * 60, [
@@ -275,7 +275,7 @@ def main():
          842_000, 150),
     ])
     stream(runs / "t4.stream", OPUS, 96 * 60, [
-        ("bash", {"id": "f1", "command": "just dev", "returned": True},
+        ("bash", {"id": "f1", "command": "keeler dev", "returned": True},
          3600, 300_000, 700),
         ("bash", {"id": "f2", "command": "keeler keeler-branch", "returned": True},
          900, 470_000, 200),
@@ -290,7 +290,7 @@ def main():
     stream(runs / "t8.stream", "claude-sonnet-5", 30 * 60, [
         ("edit", {"id": "s1", "file_path": f"{ROOT}/tests/tank.rs",
                   "returned": True}, 1500, 36_000, 400),
-        ("bash", {"id": "s2", "command": "just dev", "returned": True}, 1000,
+        ("bash", {"id": "s2", "command": "keeler dev", "returned": True}, 1000,
          44_000, 200),
     ])
     for tid in ("t1", "t2"):
