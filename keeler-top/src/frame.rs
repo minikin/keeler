@@ -563,17 +563,21 @@ pub fn table(board: &Board, theme: Theme, now: Timestamp, width: u16) -> Vec<Lin
         cols.header(theme.ellipsis()),
         theme.style(DIM),
     )];
-    for (index, row) in crate::board::ordered(&board.rows) {
-        drawn.extend(lines(
-            row,
-            &cols,
-            theme,
-            now,
-            index == board.selected,
-            false,
-        ));
-    }
+    drawn.extend(rows(board, &cols, theme, now));
     drawn
+}
+
+/// Every task's lines, in the order the board draws them, with the selected
+/// task's marked.
+///
+/// The selection is a report index and the rows are in the board's order,
+/// so the two are compared here rather than counted: what `j` moved is a
+/// task, and where it ends up on the screen is this order's answer.
+fn rows(board: &Board, cols: &Columns, theme: Theme, now: Timestamp) -> Vec<Line<'static>> {
+    crate::board::ordered(&board.rows)
+        .into_iter()
+        .flat_map(|(index, row)| lines(row, cols, theme, now, index == board.selected, false))
+        .collect()
 }
 
 /// The columns this board's rows are drawn through: the finished view's
