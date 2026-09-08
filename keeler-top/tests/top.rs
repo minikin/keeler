@@ -2529,7 +2529,15 @@ fn a_narrow_terminal_drops_the_detail_pane_before_it_drops_columns() {
     );
 
     // And the detail pane is absent
-    assert_eq!(layout(Rect::new(0, 0, 100, 20), 11).detail, None);
+    assert_eq!(
+        layout(
+            Rect::new(0, 0, 100, 20),
+            11,
+            &keeler_top::layout::bands(100, 20, 17, false),
+        )
+        .detail,
+        None,
+    );
     assert!(
         !frame.iter().any(|line| inside(line).starts_with("T1 — ")),
         "the pane was drawn on a terminal with no room for it:\n{}",
@@ -2816,9 +2824,11 @@ fn j_and_k_move_the_selection_and_the_detail_pane_follows() {
         assert_eq!(on_key(&mut app, press(code)), Action::Nothing);
     }
 
-    // Then T2 is selected and the detail pane shows T2
+    // Then T2 is selected and the detail pane shows T2 — on a terminal with
+    // room for the pane, which spec 11's T7 made a band of its own: below
+    // twenty-four lines there is no pane for a selection to move it.
     assert_eq!(app.board.selected, 1);
-    let frame = drawn(&app.board, 140, 20);
+    let frame = drawn(&app.board, 140, 24);
     // Found by the branch the pane names rather than by a heading: spec 11's
     // T6 put the task's id on the panel's own border and opened the pane
     // with a fact block, and the paths line is the one that says which task
@@ -5220,10 +5230,17 @@ use ratatui::style::Modifier;
 /// twenty-two, and the panel's own borders take two of those.
 const TALL: u16 = 27;
 
-/// And one whose tasks panel is eight, by the same arithmetic — which is
-/// fewer rows than twelve tasks have lines, and so the terminal the scroll
-/// scenario is about.
-const SHORT: u16 = 15;
+/// And one whose tasks panel is eight — which is fewer rows than twelve
+/// tasks have lines, and so the terminal the scroll scenario is about.
+///
+/// Fourteen rather than fifteen because of T7's height bands: below sixteen
+/// lines the wave panel is its first line alone, so it and the footer leave
+/// ten and the panel's own borders take two of those.
+const SHORT: u16 = 14;
+
+/// Which line of a frame that short the tasks panel opens on: one above
+/// [`TASKS_TOP`], the line the wave panel gave up.
+const SHORT_TASKS_TOP: usize = TASKS_TOP - 1;
 
 /// What every task below is in the middle of: a command long enough that a
 /// collapsed row, which shows the tool where the title goes, has to cut it.
@@ -5810,11 +5827,11 @@ fn the_hint_names_what_the_key_will_do_and_not_what_the_panel_did() {
     // And a crowded board with no live row at all offers the same: there is
     // no second line anywhere on it for "z expand" to have been about.
     let closed: Vec<String> = (1..=30).map(|task| format!("T{task:<5} passed")).collect();
-    let short = drawn(&assemble(&report(&closed), "", NOON), WIDE.0, SHORT);
+    let crowded = drawn(&assemble(&report(&closed), "", NOON), WIDE.0, TALL);
     assert!(
-        inside(&short[WAVE_TOP + 2]).ends_with("z compact · q quit"),
+        inside(&crowded[WAVE_TOP + 2]).ends_with("z compact · q quit"),
         "{:?}",
-        short[WAVE_TOP + 2],
+        crowded[WAVE_TOP + 2],
     );
 }
 
@@ -5847,16 +5864,16 @@ fn a_short_panel_scrolls_to_keep_the_selection_visible() {
         frame.join("\n"),
     );
     assert!(
-        frame[TASKS_TOP + 9].starts_with('└'),
+        frame[SHORT_TASKS_TOP + 9].starts_with('└'),
         "the tasks panel is not eight rows tall:\n{}",
         frame.join("\n"),
     );
 
     // And the first row drawn is T7
     assert!(
-        inside(&frame[TASKS_TOP + 2]).starts_with("  T7 "),
+        inside(&frame[SHORT_TASKS_TOP + 2]).starts_with("  T7 "),
         "{:?}",
-        frame[TASKS_TOP + 2],
+        frame[SHORT_TASKS_TOP + 2],
     );
     for task in 1..=6 {
         assert!(
@@ -5883,4 +5900,229 @@ fn a_done_task_whose_run_files_are_gone_shows_dashes_for_them() {
 
     // Then the run line names no file it cannot open
     assert_eq!(pane_in(&frame)[2], "run     —");
+}
+
+// ── 11-T7
+
+/// The height every width band below is read at: tall enough that no height
+/// band has a say in what the rows lost.
+const ROOMY: u16 = 40;
+
+#[test]
+fn at_100_columns_the_title_is_drawn_cut() {
+    // Given a 100-column terminal
+    let runfiles = Runfiles::new("t7-title-cut");
+    let board = t3_board(&runfiles);
+
+    // When the board renders
+    let row = inside(row_of(&drawn(&board, 100, ROOMY), "T3")).to_string();
+
+    // Then T3's title occupies cells 79..97 and ends with "…" — the panel's
+    // 98 cells, less the 79 the columns before it take.
+    let title: String = row.chars().skip(79).collect();
+    assert_eq!(title, "The fold reads the…");
+    assert_eq!(
+        unicode_width::UnicodeWidthStr::width(row.as_str()),
+        98,
+        "the row does not end at the panel's inner right edge: {row:?}",
+    );
+}
+
+#[test]
+fn below_93_columns_the_title_goes_and_the_row_stays_whole() {
+    // Given a 90-column terminal
+    let runfiles = Runfiles::new("t7-no-title");
+    let board = t3_board(&runfiles);
+
+    // When the board renders
+    let frame = drawn(&board, 90, ROOMY);
+
+    // Then no title is drawn
+    assert!(
+        !heading_of(&frame).contains("TITLE"),
+        "the heading kept a column the rows dropped: {:?}",
+        heading_of(&frame),
+    );
+    // And MODEL, TOKENS and the full eight-cell bar are still drawn
+    assert_eq!(
+        inside(row_of(&frame, "T3")),
+        "▸ T3   ● running         review  opus5[1m] ███░░░░░  41%   12.1M b33e05f +4 ~2",
+    );
+}
+
+#[test]
+fn below_81_columns_the_bar_collapses_to_its_percentage() {
+    // Given a 78-column terminal
+    let runfiles = Runfiles::new("t7-narrow-bar");
+    let board = t3_board(&runfiles);
+
+    // When the board renders
+    let frame = drawn(&board, 78, ROOMY);
+
+    // Then the CONTEXT column reads " 41% " and its header "CTX"
+    assert_eq!(
+        inside(row_of(&frame, "T3")),
+        "▸ T3   ● running         review  opus5[1m]  41%   12.1M b33e05f +4 ~2",
+    );
+    let heading = heading_of(&frame);
+    assert!(heading.contains(" CTX "), "{heading:?}");
+    assert!(!heading.contains("CONTEXT"), "{heading:?}");
+    // And MODEL and TOKENS are still drawn
+    assert!(
+        heading.contains("MODEL") && heading.contains("TOKENS"),
+        "{heading:?}",
+    );
+}
+
+#[test]
+fn below_72_columns_model_and_tokens_go() {
+    // Given a 68-column terminal
+    let runfiles = Runfiles::new("t7-no-numbers");
+    let board = t3_board(&runfiles);
+
+    // When the board renders
+    let frame = drawn(&board, 68, ROOMY);
+
+    // Then the tasks header reads "  TASK STATE             STAGE   CTX   COMMIT +~"
+    assert_eq!(
+        heading_of(&frame),
+        "  TASK STATE             STAGE   CTX   COMMIT +~",
+    );
+    assert_eq!(
+        inside(row_of(&frame, "T3")),
+        "▸ T3   ● running         review   41%  b33e05f +4 ~2",
+    );
+}
+
+#[test]
+fn a_column_that_does_not_fit_is_dropped_whole() {
+    // Given a 60-column terminal and T2 incomplete (no review record)
+    let runfiles = Runfiles::new("t7-drop-whole");
+    let log = runfiles.stream("t3", &t3_stream());
+    let mut board = assemble_titled(
+        &report(&[
+            "T2     incomplete (no review record)".to_string(),
+            format!("T3     running          log {log}  worktree /nowhere"),
+        ]),
+        "",
+        TITLES,
+        NOON,
+    );
+    board.rows[1].branch = Some(BranchFacts {
+        head: "b33e05f".to_string(),
+        ahead: 4,
+        dirty: 2,
+        commits: Vec::new(),
+    });
+
+    // When the board renders
+    let frame = drawn(&board, 60, ROOMY);
+
+    // Then T2's row shows "◔ incomplete (no review record)" whole and its
+    // stage — the state is 31 cells here, so every threshold moved 14 right
+    // and the row is down to what a board is for.
+    assert!(
+        inside(row_of(&frame, "T2")).starts_with("▸ T2   ◔ incomplete (no review record)"),
+        "the reason was cut: {:?}",
+        row_of(&frame, "T2"),
+    );
+    assert!(
+        heading_of(&frame).contains("STAGE"),
+        "the stage went before the columns to the right of it: {:?}",
+        heading_of(&frame),
+    );
+    assert!(
+        inside(row_of(&frame, "T3")).ends_with("review"),
+        "{:?}",
+        row_of(&frame, "T3"),
+    );
+    // And COMMIT is absent from every row rather than half drawn
+    assert!(
+        !heading_of(&frame).contains("COMMIT"),
+        "{:?}",
+        heading_of(&frame),
+    );
+    for line in &frame {
+        assert!(
+            !line.contains("b33e0"),
+            "a hash was drawn on a board with no room for the column: {line:?}",
+        );
+    }
+}
+
+#[test]
+fn the_detail_panel_goes_below_100_columns_or_24_rows() {
+    // Given a 96x40 terminal, and separately a 120x22 terminal
+    let runfiles = Runfiles::new("t7-no-detail");
+    let board = t3_board(&runfiles);
+
+    // When the board renders
+    // Then in both the wave and tasks panels are drawn and the detail panel
+    // is absent
+    for (width, height) in [(96, 40), (120, 22)] {
+        let frame = drawn(&board, width, height);
+        assert!(
+            frame[0].contains("wave  specs/01-foo.md"),
+            "the wave panel is not drawn at {width}x{height}:\n{}",
+            frame.join("\n"),
+        );
+        heading_of(&frame);
+        assert!(
+            !frame
+                .iter()
+                .any(|line| inside(line).starts_with("state   ")),
+            "the pane was drawn on a terminal with no room for it at {width}x{height}:\n{}",
+            frame.join("\n"),
+        );
+    }
+    // And a terminal at both bands has it: the panel goes below them, not at
+    // them.
+    assert!(
+        drawn(&board, 100, 24)
+            .iter()
+            .any(|line| inside(line).starts_with("state   ")),
+        "the pane went from a terminal with room for it",
+    );
+}
+
+#[test]
+fn the_wave_panel_collapses_to_one_line_below_16_rows() {
+    // Given a 120x14 terminal
+    let runfiles = Runfiles::new("t7-short");
+    let board = t3_board(&runfiles);
+
+    // When the board renders
+    let frame = drawn(&board, 120, 14);
+
+    // Then the wave panel holds only its first line
+    assert!(
+        inside(&frame[1]).ends_with("status 0s ago"),
+        "{:?}",
+        frame[1],
+    );
+    assert!(
+        frame[2].starts_with('└') && frame[3].starts_with("┌ tasks"),
+        "the wave panel kept its second line:\n{}",
+        frame.join("\n"),
+    );
+    assert!(
+        !frame.iter().any(|line| line.contains("j/k move")),
+        "the hints stayed on a panel that lost the line they sit on:\n{}",
+        frame.join("\n"),
+    );
+    // And the tasks panel has at least 5 rows — its column heading among
+    // them, and its borders not.
+    let bottom = frame
+        .iter()
+        .rposition(|line| line.starts_with('└'))
+        .expect("the tasks panel is drawn in a box");
+    let rows = bottom - 4;
+    assert!(
+        rows >= 5,
+        "the tasks panel is {rows} rows tall:\n{}",
+        frame.join("\n"),
+    );
+    // And at sixteen lines the panel has both of its own again.
+    let taller = drawn(&board, 120, 16);
+    assert!(taller[2].contains("j/k move"), "{:?}", taller[2]);
 }

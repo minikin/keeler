@@ -105,10 +105,26 @@ pub fn title(board: &Board, theme: Theme) -> Vec<Span<'static>> {
     ]
 }
 
-/// The panel's two lines, laid out for the width inside its borders.
+/// The panel's lines, laid out for the width inside its borders.
+///
+/// Two of them where the window has the rows for both, and on a short one
+/// the first alone — which is the half that is about this wave. The second
+/// is the strip and the keys: the keys are the same on every board there is,
+/// and the strip is the first line's counts task by task. A window that has
+/// to choose keeps the reading that cannot be had anywhere else.
 #[must_use]
-pub fn wave(board: &Board, theme: Theme, now: Timestamp, width: u16) -> Vec<Line<'static>> {
-    vec![first(board, theme, now, width), second(board, theme, width)]
+pub fn wave(
+    board: &Board,
+    theme: Theme,
+    now: Timestamp,
+    width: u16,
+    lines: u16,
+) -> Vec<Line<'static>> {
+    let mut panel = vec![first(board, theme, now, width)];
+    if lines > 1 {
+        panel.push(second(board, theme, width));
+    }
+    panel
 }
 
 /// The column heading, which takes a row of the panel like any other.
@@ -328,15 +344,46 @@ fn hints(finished: bool, compact: bool) -> Vec<(&'static str, &'static str)> {
 fn first(board: &Board, theme: Theme, now: Timestamp, width: u16) -> Line<'static> {
     let mut left = tally(&board.rows, theme, board.finished());
     if board.finished() {
-        left.push(Span::raw(GAP));
-        left.push(Span::styled(FINISHED, theme.style(GREEN)));
+        left.push(vec![Span::styled(FINISHED, theme.style(GREEN))]);
     }
     let mut right = needed(&board.rows, theme);
     if !right.is_empty() {
         right.push(Span::raw(GAP));
     }
     right.push(Span::styled(board.age(now), theme.style(DIM)));
-    spread(left, right, width)
+    // What is left for the counts once the right-hand end has its cells and
+    // the two are a gap apart. The counts are what gives way on a narrow
+    // window: what needs a human is the reading the line exists for, and an
+    // age that has stopped moving is how a watcher learns the board is
+    // stale — a line cut from the right would lose both to a tally of tasks
+    // going as they should.
+    let room = width
+        .saturating_sub(measured(&right))
+        .saturating_sub(wide(GAP));
+    spread(fitted(left, room), right, width)
+}
+
+/// As many of the counts as `room` holds, given up from the left.
+///
+/// Whole ones: half a count is a glyph with no number after it, or a number
+/// with no glyph before it, and either reads as some other state's tally.
+fn fitted(mut counts: Vec<Vec<Span<'static>>>, room: u16) -> Vec<Span<'static>> {
+    while !counts.is_empty() && measured(&joined(&counts)) > room {
+        counts.remove(0);
+    }
+    joined(&counts)
+}
+
+/// The counts as one run of spans, a gap between each pair.
+fn joined(counts: &[Vec<Span<'static>>]) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    for count in counts {
+        if !spans.is_empty() {
+            spans.push(Span::raw(GAP));
+        }
+        spans.extend(count.iter().cloned());
+    }
+    spans
 }
 
 /// The second: the strip, and the hints against the right edge — when there
@@ -369,20 +416,20 @@ fn second(board: &Board, theme: Theme, width: u16) -> Line<'static> {
 /// Only the glyph, because the right half of this line is the one that
 /// means *act* and it is coloured throughout — six coloured tallies beside
 /// it would spend that signal on work going as it should.
-fn tally(rows: &[Row], theme: Theme, finished: bool) -> Vec<Span<'static>> {
-    let mut spans = Vec::new();
-    for (word, how_many) in counts(rows) {
-        if !spans.is_empty() {
-            spans.push(Span::raw(GAP));
-        }
-        let look = theme.look(word, finished);
-        spans.push(Span::styled(look.glyph, look.style));
-        spans.push(Span::styled(
-            format!(" {how_many} {word}"),
-            theme.style(TEXT),
-        ));
-    }
-    spans
+///
+/// One entry per count rather than one run of spans, because a narrow window
+/// gives them up one at a time and a count is two spans.
+fn tally(rows: &[Row], theme: Theme, finished: bool) -> Vec<Vec<Span<'static>>> {
+    counts(rows)
+        .into_iter()
+        .map(|(word, how_many)| {
+            let look = theme.look(word, finished);
+            vec![
+                Span::styled(look.glyph, look.style),
+                Span::styled(format!(" {how_many} {word}"), theme.style(TEXT)),
+            ]
+        })
+        .collect()
 }
 
 /// What needs a human, as it is drawn: each task in its state's colour,
@@ -683,6 +730,29 @@ mod tests {
         );
         assert!(Collapse::Whole.takes(false));
         assert!(Collapse::Whole.takes(true));
+    }
+
+    #[test]
+    fn a_first_line_that_does_not_fit_gives_up_counts_from_the_left() {
+        // The counts as the line draws them, and what a window with room for
+        // some of them keeps.
+        let tallied = || super::tally(&rows_of(&[("T1", "running"), ("T2", "done")]), THEME, false);
+        let text = |room| {
+            super::fitted(tallied(), room)
+                .iter()
+                .map(|span| span.content.to_string())
+                .collect::<String>()
+        };
+
+        assert_eq!(text(u16::MAX), "● 1 running   ✓ 1 done");
+        // A window a cell short of both gives up the leftmost, whole: the
+        // line's right-hand end is what needs a human and how old the answer
+        // is, and neither may be lost to a tally of work going as it should.
+        assert_eq!(text(21), "✓ 1 done");
+        assert_eq!(text(8), "✓ 1 done");
+        assert_eq!(text(7), "");
+        assert_eq!(text(0), "");
+        assert!(super::fitted(Vec::new(), 40).is_empty());
     }
 
     #[test]
