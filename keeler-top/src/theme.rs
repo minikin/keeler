@@ -11,8 +11,16 @@
 //! The two questions it answers are independent. `NO_COLOR` leaves every
 //! style the terminal's default, so the glyphs alone carry the state —
 //! which is why no two states share one. `KEELER_TOP_ASCII`, or a locale
-//! that is not UTF-8, swaps every glyph above U+007F for one that is not,
-//! borders included.
+//! that is not UTF-8, swaps every glyph **the theme owns** for one below
+//! U+007F: the states, the bar, the marker, the connector, the borders and
+//! the four punctuation marks.
+//!
+//! A glyph the theme does not own is not the theme's to swap, and there
+//! are two. `board.rs` composes `blocked ← T1` as one string, so the `←`
+//! reaches the frame inside the state's own text rather than through
+//! [`Theme::waits_on`] — a frame that wants the ASCII set has to compose
+//! that text itself. And `run.rs`'s `DASH` belongs to `--once`, which is a
+//! frozen plain-text surface and has no theme at all.
 //!
 //! **The state table is the whole of what the board believes about
 //! `keeler-status`'s vocabulary.** It classifies by the leading word and
@@ -207,6 +215,24 @@ fn state_of(state: &str) -> &'static State {
         .unwrap_or(&UNKNOWN)
 }
 
+/// The context bar, in the two pieces it is drawn in.
+///
+/// Two and not one string with one style: the empty cells are the track,
+/// and a bar handed over whole would be drawn in the fill's colour — so a
+/// run at 84% would show eight red cells, which is the one reading the bar
+/// exists to give, said twice and in the wrong half.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Bar {
+    /// The cells the share has filled.
+    pub filled: String,
+    /// What those are drawn in: blue, yellow or red, by the share.
+    pub fill: Style,
+    /// The cells it has not.
+    pub empty: String,
+    /// What those are drawn in — [`CHROME`], whatever the share.
+    pub track: Style,
+}
+
 /// What a state looks like: the glyph that stands for it, and the style
 /// that glyph and its word are drawn in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -234,22 +260,35 @@ impl Theme {
 
     /// The theme this process's environment asks for.
     ///
-    /// Called once, in `main`. What it decides is [`Self::chosen`]'s, which
-    /// is a function of three values and is tested against every
-    /// combination of them; what is here is the three names it reads.
+    /// Called once, in `main`, and outside the mutation gate for the reason
+    /// `Shell::in_tmux` gives: setting a variable is a process-wide, unsafe
+    /// act in this edition and the suite runs its tests in threads, so a
+    /// test cannot arrange either answer. Nothing is decided here — every
+    /// decision is [`Self::chosen`]'s, which is a function of four values
+    /// and is tested against them; what is left is the four names.
+    #[cfg_attr(test, mutants::skip)]
     #[must_use]
     pub fn from_env() -> Self {
         Self::chosen(
             std::env::var_os("NO_COLOR").as_deref(),
             std::env::var_os("KEELER_TOP_ASCII").as_deref(),
-            std::env::var_os("LC_ALL")
-                .or_else(|| std::env::var_os("LANG"))
-                .as_deref(),
+            std::env::var_os("LC_ALL").as_deref(),
+            std::env::var_os("LANG").as_deref(),
         )
     }
 
-    /// The theme three environment variables come to.
-    fn chosen(no_color: Option<&OsStr>, ascii: Option<&OsStr>, locale: Option<&OsStr>) -> Self {
+    /// The theme four environment variables come to.
+    fn chosen(
+        no_color: Option<&OsStr>,
+        ascii: Option<&OsStr>,
+        lc_all: Option<&OsStr>,
+        lang: Option<&OsStr>,
+    ) -> Self {
+        // LC_ALL wins when it is set to something, as it does for every
+        // other program that reads a locale — and an exported but empty
+        // one is a shell standing aside rather than a locale, which
+        // `or_else` on the variable alone would have read as `C`.
+        let locale = lc_all.filter(|value| !value.is_empty()).or(lang);
         Self::new(!set(no_color), asked(ascii) || !utf8(locale))
     }
 
@@ -289,18 +328,18 @@ impl Theme {
         u8::try_from(rounded).unwrap_or(BAR_CELLS).min(BAR_CELLS)
     }
 
-    /// The bar's eight cells, and the colour its filled ones carry. The
-    /// empty ones are [`CHROME`]: they are the track, not a reading.
+    /// The bar's eight cells, in the two halves they are drawn in.
     #[must_use]
-    pub fn bar(&self, percent: u8) -> (String, Style) {
+    pub fn bar(&self, percent: u8) -> Bar {
         let filled = usize::from(Self::cells(percent));
-        let mut bar = self.pick("█", "#").repeat(filled);
-        bar.push_str(
-            &self
+        Bar {
+            filled: self.pick("█", "#").repeat(filled),
+            fill: self.style(fill(percent)),
+            empty: self
                 .pick("░", "-")
                 .repeat(usize::from(BAR_CELLS).saturating_sub(filled)),
-        );
-        (bar, self.style(fill(percent)))
+            track: self.style(CHROME),
+        }
     }
 
     /// The percentage and its flag slot: five cells, whatever the number.
@@ -314,10 +353,12 @@ impl Theme {
         format!("{percent:>3}%{flag}")
     }
 
-    /// The context column whole: the bar, a space, and the percentage.
+    /// The context column's characters whole: the bar, a space, and the
+    /// percentage. What each of them is drawn in is [`Self::bar`]'s.
     #[must_use]
     pub fn context(&self, percent: u8) -> String {
-        format!("{} {}", self.bar(percent).0, Self::percentage(percent))
+        let bar = self.bar(percent);
+        format!("{}{} {}", bar.filled, bar.empty, Self::percentage(percent))
     }
 
     /// One colour as a style — or the terminal's default, which is the
@@ -547,7 +588,7 @@ mod tests {
         // Given context at 59%, 60%, 79% and 80%
         // When the board renders
         // Then 59% is blue, 60% and 79% yellow, 80% red with "!"
-        let fill = |percent| COLOURED.bar(percent).1;
+        let fill = |percent| COLOURED.bar(percent).fill;
 
         assert_eq!(fill(59), Style::new().fg(BLUE));
         assert_eq!(fill(60), Style::new().fg(YELLOW));
@@ -576,6 +617,12 @@ mod tests {
         }
     }
 
+    /// The bar's eight cells, whichever half they are in.
+    fn bar_glyphs(theme: Theme, percent: u8) -> String {
+        let bar = theme.bar(percent);
+        format!("{}{}", bar.filled, bar.empty)
+    }
+
     #[test]
     fn the_bar_is_eight_cells_however_full_the_window_is() {
         for (percent, bar) in [
@@ -586,7 +633,7 @@ mod tests {
             (84, "███████░"),
             (100, "████████"),
         ] {
-            assert_eq!(COLOURED.bar(percent).0, bar, "at {percent}%");
+            assert_eq!(bar_glyphs(COLOURED, percent), bar, "at {percent}%");
         }
         // Half a cell is an eighth of the window either side of 6.25%,
         // and the rounding is up, as the percentage's own is.
@@ -594,7 +641,21 @@ mod tests {
         assert_eq!(Theme::cells(7), 1);
         // A share above full is a model the board guessed the window for,
         // not a bar that runs into the column beside it.
-        assert_eq!(COLOURED.bar(u8::MAX).0, "████████");
+        assert_eq!(bar_glyphs(COLOURED, u8::MAX), "████████");
+    }
+
+    #[test]
+    fn the_track_is_chrome_at_every_share_and_the_fill_never_paints_it() {
+        // The two halves are handed over separately because a bar drawn as
+        // one span would paint the empty cells red at 80% — which is the
+        // one reading the bar exists to give, said twice and in the wrong
+        // place.
+        for percent in [0, 41, 80, 100] {
+            let bar = COLOURED.bar(percent);
+
+            assert_eq!(bar.track, Style::new().fg(super::CHROME), "at {percent}%");
+            assert_ne!(bar.fill, bar.track, "at {percent}%");
+        }
     }
 
     #[test]
@@ -603,7 +664,7 @@ mod tests {
         let glyphs: Vec<String> = VOCABULARY
             .iter()
             .map(|state| ASCII.look(state, false).glyph.to_string())
-            .chain([ASCII.bar(50).0])
+            .chain([bar_glyphs(ASCII, 50)])
             .chain(
                 [
                     ASCII.marker(),
@@ -632,7 +693,7 @@ mod tests {
             VOCABULARY.map(|state| ASCII.look(state, false).glyph),
             ["x", "X", "o", "=", "*", "+", "<", "-", ".", "v", "?"],
         );
-        assert_eq!(ASCII.bar(50).0, "####----");
+        assert_eq!(bar_glyphs(ASCII, 50), "####----");
         assert_eq!(
             [
                 ASCII.marker(),
@@ -682,60 +743,80 @@ mod tests {
         );
     }
 
+    /// The four variables, as the strings a shell would export them as.
+    fn chosen(
+        no_color: Option<&str>,
+        ascii: Option<&str>,
+        lc_all: Option<&str>,
+        lang: Option<&str>,
+    ) -> Theme {
+        Theme::chosen(
+            no_color.map(OsStr::new),
+            ascii.map(OsStr::new),
+            lc_all.map(OsStr::new),
+            lang.map(OsStr::new),
+        )
+    }
+
     #[test]
     fn the_environment_answers_the_two_questions_the_theme_asks_it() {
-        let chosen = |no_color: Option<&str>, ascii: Option<&str>, locale: Option<&str>| {
-            Theme::chosen(
-                no_color.map(OsStr::new),
-                ascii.map(OsStr::new),
-                locale.map(OsStr::new),
-            )
-        };
-
-        assert_eq!(chosen(None, None, None), Theme::new(true, false));
+        assert_eq!(chosen(None, None, None, None), Theme::new(true, false));
         // NO_COLOR by the convention it is named for: set to anything at
         // all but the empty string, whatever the value.
-        assert_eq!(chosen(Some("1"), None, None), Theme::new(false, false));
-        assert_eq!(chosen(Some("0"), None, None), Theme::new(false, false));
-        assert_eq!(chosen(Some(""), None, None), Theme::new(true, false));
+        assert_eq!(
+            chosen(Some("1"), None, None, None),
+            Theme::new(false, false)
+        );
+        assert_eq!(
+            chosen(Some("0"), None, None, None),
+            Theme::new(false, false)
+        );
+        assert_eq!(chosen(Some(""), None, None, None), Theme::new(true, false));
         // KEELER_TOP_ASCII is the board's own, and `=0` is how somebody
         // who has already exported it turns it back off.
-        assert_eq!(chosen(None, Some("1"), None), Theme::new(true, true));
-        assert_eq!(chosen(None, Some("0"), None), Theme::new(true, false));
-        assert_eq!(chosen(None, Some(""), None), Theme::new(true, false));
-        // And a locale that cannot draw the glyphs asks for the ASCII set
-        // without anybody having to know the variable's name.
+        assert_eq!(chosen(None, Some("1"), None, None), Theme::new(true, true));
+        assert_eq!(chosen(None, Some("0"), None, None), Theme::new(true, false));
+        assert_eq!(chosen(None, Some(""), None, None), Theme::new(true, false));
+        // The two are independent: a terminal with no colours still draws
+        // the glyphs, and one with no glyphs still has its colours.
+        assert_eq!(
+            chosen(Some("1"), Some("1"), None, None),
+            Theme::new(false, true),
+        );
+    }
+
+    #[test]
+    fn a_locale_that_cannot_draw_the_glyphs_asks_for_the_ascii_set() {
         for utf8 in ["en_US.UTF-8", "en_US.utf8", "C.UTF-8"] {
             assert_eq!(
-                chosen(None, None, Some(utf8)),
+                chosen(None, None, None, Some(utf8)),
                 Theme::new(true, false),
-                "{utf8}"
+                "{utf8}",
             );
         }
         for ascii in ["C", "POSIX", "en_US.ISO8859-1"] {
             assert_eq!(
-                chosen(None, None, Some(ascii)),
+                chosen(None, None, None, Some(ascii)),
                 Theme::new(true, true),
-                "{ascii}"
+                "{ascii}",
             );
         }
-        // The two are independent: a terminal with no colours still draws
-        // the glyphs, and one with no glyphs still has its colours.
-        assert_eq!(chosen(Some("1"), Some("1"), None), Theme::new(false, true));
-    }
-
-    #[test]
-    fn the_process_environment_is_read_by_this_one_function_and_these_three_names() {
-        // Read here the way `from_env` reads them, because that is the
-        // whole of what it does: which combination means what is
-        // `chosen`'s, and is tested against every one of them above.
-        let no_color = std::env::var_os("NO_COLOR");
-        let ascii = std::env::var_os("KEELER_TOP_ASCII");
-        let locale = std::env::var_os("LC_ALL").or_else(|| std::env::var_os("LANG"));
-
+        // LC_ALL decides when it is set to something, as it does for
+        // every other program that reads a locale — and an exported but
+        // empty LC_ALL is a shell standing aside rather than a locale.
+        // Reading it as one would drop a UTF-8 terminal into the ASCII
+        // set for a variable nobody meant to set.
         assert_eq!(
-            Theme::from_env(),
-            Theme::chosen(no_color.as_deref(), ascii.as_deref(), locale.as_deref()),
+            chosen(None, None, Some("C"), Some("en_US.UTF-8")),
+            Theme::new(true, true),
+        );
+        assert_eq!(
+            chosen(None, None, Some(""), Some("en_US.UTF-8")),
+            Theme::new(true, false),
+        );
+        assert_eq!(
+            chosen(None, None, Some("en_US.UTF-8"), Some("C")),
+            Theme::new(true, false),
         );
     }
 
@@ -773,7 +854,8 @@ mod tests {
         ) {
             proptest::prop_assert_eq!(PLAIN.look(&state, false).style, Style::default());
             proptest::prop_assert_eq!(PLAIN.look(&state, true).style, Style::default());
-            proptest::prop_assert_eq!(PLAIN.bar(percent).1, Style::default());
+            proptest::prop_assert_eq!(PLAIN.bar(percent).fill, Style::default());
+            proptest::prop_assert_eq!(PLAIN.bar(percent).track, Style::default());
             proptest::prop_assert_eq!(PLAIN.selection(), Style::default());
             proptest::prop_assert_eq!(PLAIN.style(RED), Style::default());
         }
