@@ -194,6 +194,14 @@ const UNKNOWN: State = State {
 /// board around it.
 const DONE: u8 = 7;
 
+/// What stands between a blocked task and what it waits on, in the set a
+/// terminal that can draw it gets.
+///
+/// A constant rather than a literal in two places: `board.rs` composes the
+/// state that carries it, so the frame has to find it again to swap it, and
+/// the finding and the swapping must be looking for the same character.
+const ARROW: &str = "←";
+
 /// The borders a terminal that cannot draw a box gets.
 const ASCII_BORDER: border::Set<'static> = border::Set {
     top_left: "+",
@@ -409,7 +417,24 @@ impl Theme {
     /// What stands between a blocked task and what it waits on.
     #[must_use]
     pub fn waits_on(&self) -> &'static str {
-        self.pick("←", "<-")
+        self.pick(ARROW, "<-")
+    }
+
+    /// A state's own words, in the glyphs this terminal can draw.
+    ///
+    /// The one string the theme is handed rather than composing: `board.rs`
+    /// writes `blocked ← T1` whole, because the state column is one reading
+    /// and not two, so the arrow arrives inside the words instead of through
+    /// [`Self::waits_on`]. Swapped here and not there because `--once` reads
+    /// the same state: that surface is frozen plain text a script parses,
+    /// and it has no theme to ask.
+    ///
+    /// Which is also why the frame measures its state column through this:
+    /// `<-` is two cells where `←` is one, and a width taken from the
+    /// unthemed words would cut the last of them off the widest state.
+    #[must_use]
+    pub fn state_text(&self, state: &str) -> String {
+        state.replace(ARROW, self.waits_on())
     }
 
     /// What stands between two things on one line.
@@ -709,6 +734,28 @@ mod tests {
             [border.top_left, border.horizontal_top, border.vertical_left],
             ["+", "-", "|"],
         );
+    }
+
+    #[test]
+    fn a_states_own_words_are_swapped_into_the_set_the_terminal_can_draw() {
+        // The arrow is the one glyph that reaches the frame inside a state
+        // rather than beside it: `board.rs` composes the whole column, and
+        // `--once` prints that same string with no theme to ask.
+        assert_eq!(ASCII.state_text("blocked ← T1"), "blocked <- T1");
+        assert_eq!(
+            ASCII.state_text("blocked ← T1, T2"),
+            "blocked <- T1, T2",
+            "a state waiting on two tasks kept the glyph in one of them",
+        );
+        assert_eq!(COLOURED.state_text("blocked ← T1"), "blocked ← T1");
+        // And a state with nothing to swap is the state: every other word
+        // the recipe prints goes through untouched, reason and all.
+        for state in VOCABULARY {
+            assert_eq!(COLOURED.state_text(state), state);
+            if !state.contains('←') {
+                assert_eq!(ASCII.state_text(state), state);
+            }
+        }
     }
 
     #[test]

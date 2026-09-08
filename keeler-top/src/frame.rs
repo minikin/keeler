@@ -279,7 +279,10 @@ fn pieces(
         // to read before the row itself.
         Field::Mark => vec![(marker(theme, selected), look.style)],
         Field::Task => vec![(row.id.clone(), theme.style(TEXT))],
-        Field::State => vec![(format!("{} {}", look.glyph, row.state), look.style)],
+        Field::State => vec![(
+            format!("{} {}", look.glyph, theme.state_text(&row.state)),
+            look.style,
+        )],
         Field::Stage => plain(row.run.as_ref().map(|run| run.stage.to_string()), theme),
         Field::Model => plain(said(row, RunView::model_column), theme),
         Field::Context => context(row, theme),
@@ -561,7 +564,7 @@ pub fn render(frame: &mut ratatui::Frame, board: &Board, theme: Theme, now: Time
 /// board puts its rows in.
 #[must_use]
 pub fn table(board: &Board, theme: Theme, now: Timestamp, width: u16) -> Vec<Line<'static>> {
-    let cols = columns_of(board, width);
+    let cols = columns_of(board, theme, width);
     let mut drawn = vec![Line::styled(
         cols.header(theme.ellipsis()),
         theme.style(DIM),
@@ -586,14 +589,20 @@ fn rows(board: &Board, cols: &Columns, theme: Theme, now: Timestamp) -> Vec<Line
 /// The columns this board's rows are drawn through: the finished view's
 /// when every task has landed, and otherwise the live ones, as wide in the
 /// state as the widest state on the board.
-fn columns_of(board: &Board, width: u16) -> Columns {
+fn columns_of(board: &Board, theme: Theme, width: u16) -> Columns {
     if board.finished() {
         return Columns::landed(width);
     }
-    Columns::live(
-        width,
-        widest_state(board.rows.iter().map(|row| row.state.as_str())),
-    )
+    // Measured through the theme, because the words it measures are the ones
+    // that will be drawn: `blocked <- T1` is a cell wider than `blocked ← T1`
+    // on the terminal that gets it, and a column sized from the other set
+    // would cut the last thing a blocked task is waiting on.
+    let states: Vec<String> = board
+        .rows
+        .iter()
+        .map(|row| theme.state_text(&row.state))
+        .collect();
+    Columns::live(width, widest_state(states.iter().map(String::as_str)))
 }
 
 #[cfg(test)]
