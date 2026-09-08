@@ -797,6 +797,33 @@ mod tests {
     }
 
     #[test]
+    fn a_collapsed_wave_panel_composes_one_line_and_not_two() {
+        // Composed rather than clipped. The panel a short window gives it is
+        // one row tall, so a second line drawn into it would be cut off by
+        // the box and look right — and the strip and the keys would be
+        // measured, laid out and thrown away on every frame of a board whose
+        // watcher cannot see them.
+        let board = board_of(&[("T1", "running"), ("T2", "done")]);
+        let lines = |how_many| {
+            super::wave(
+                &board,
+                THEME,
+                Timestamp::from_epoch_seconds(60),
+                118,
+                how_many,
+            )
+            .len()
+        };
+
+        assert_eq!(lines(1), 1);
+        assert_eq!(lines(2), 2);
+        // And the one it keeps is the first: what this wave is doing, not
+        // the keys, which are the same on every board there is.
+        let short = super::wave(&board, THEME, Timestamp::from_epoch_seconds(60), 118, 1);
+        assert!(text(&short[0]).ends_with("status 60s ago"), "{short:?}");
+    }
+
+    #[test]
     fn the_status_age_stands_whatever_else_the_first_line_gives_up() {
         // Given more tasks needing a human than the panel has cells for
         // their names — ten failures are 137 cells of them, and the panel
