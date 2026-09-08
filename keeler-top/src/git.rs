@@ -50,17 +50,34 @@ pub fn spec_from_ref(root: &Path, git_ref: &str, rel: &str) -> Result<SpecCopy, 
     let name = Path::new(rel)
         .file_name()
         .ok_or_else(|| format!("{rel} does not name a file"))?;
-    let dir = std::env::temp_dir().join(format!(
-        "keeler-top-{}-{}",
-        std::process::id(),
-        next_serial()
-    ));
     // `create_dir`, not `create_dir_all`: the second adopts whatever is
     // already at that path, and in a shared temporary directory that is
     // somebody else's — the shell this mirrors reaches for `mktemp -d` for
-    // the same reason. A tick that refuses is a tick; the next one has the
-    // next serial.
-    std::fs::create_dir(&dir).map_err(|err| format!("{}: {err}", dir.display()))?;
+    // the same reason. A name already taken is not a refusal, though: a
+    // process id comes round again, and a copy an earlier process left
+    // behind under this pid and serial was found by a test run under
+    // `cargo mutants`, which then failed the whole gate on a directory
+    // nobody made this time. Taken means the next serial, up to a bound
+    // that says the temporary directory itself is the problem.
+    let dir = (0..64)
+        .map(|_| {
+            std::env::temp_dir().join(format!(
+                "keeler-top-{}-{}",
+                std::process::id(),
+                next_serial()
+            ))
+        })
+        .find_map(|dir| match std::fs::create_dir(&dir) {
+            Ok(()) => Some(Ok(dir)),
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => None,
+            Err(err) => Some(Err(format!("{}: {err}", dir.display()))),
+        })
+        .unwrap_or_else(|| {
+            Err(format!(
+                "{}: every name tried was taken",
+                std::env::temp_dir().display()
+            ))
+        })?;
     // Built before the read, so a failure below still takes the directory
     // with it — the board makes this copy every second it is up.
     let copy = SpecCopy {
@@ -286,6 +303,64 @@ mod tests {
             second.path().exists(),
             "one copy's end took the other's file",
         );
+    }
+
+    #[test]
+    fn a_copy_whose_name_is_taken_takes_the_next_one() {
+        // Given a directory already standing where the next copy would go —
+        // what a reused process id and a leaked copy leave behind
+        let repo = Repo::new("taken");
+        repo.commit("specs/01-foo.md", "## Tasks\n\n- [ ] **T1 — one.**\n");
+        let first = spec_from_ref(&repo.0, "HEAD", "specs/01-foo.md").expect("HEAD holds it");
+        let serial: u64 = first
+            .path()
+            .parent()
+            .unwrap()
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .rsplit('-')
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap();
+        let taken =
+            std::env::temp_dir().join(format!("keeler-top-{}-{}", std::process::id(), serial + 1));
+        std::fs::create_dir(&taken).unwrap();
+
+        // When the next copy is made
+        let second = spec_from_ref(&repo.0, "HEAD", "specs/01-foo.md");
+
+        // Then it is made, beside the taken name rather than on it
+        let second = second.expect("a taken name is not a refusal");
+        assert_ne!(second.path().parent().unwrap(), taken.as_path());
+        assert!(second.path().exists());
+        std::fs::remove_dir(&taken).unwrap();
+    }
+
+    #[test]
+    fn a_directory_that_cannot_be_made_is_refused_in_its_own_words() {
+        // Given a temporary directory that is not a directory at all — a
+        // failure that is not "already taken", and must not be tried again
+        let repo = Repo::new("notadir");
+        repo.commit("specs/01-foo.md", "## Tasks\n\n- [ ] **T1 — one.**\n");
+        let file = repo.0.join("a-file");
+        std::fs::write(&file, "").unwrap();
+        // SAFETY: nextest runs each test in its own process, so no other
+        // thread reads the environment while it changes.
+        unsafe { std::env::set_var("TMPDIR", file.join("under-a-file")) };
+
+        // When a copy is asked for
+        let refused = spec_from_ref(&repo.0, "HEAD", "specs/01-foo.md").unwrap_err();
+
+        // Then the refusal carries the system's reason, at the first try —
+        // not the sixty-fourth, and not "every name tried was taken"
+        assert!(
+            !refused.contains("every name tried was taken"),
+            "a refusal that is not a taken name was retried as one: {refused}"
+        );
+        assert!(refused.contains("keeler-top-"), "{refused}");
     }
 
     #[test]
