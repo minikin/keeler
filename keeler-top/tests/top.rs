@@ -4624,6 +4624,23 @@ fn hints_go_before_the_strip_is_cut() {
         !second.contains("q quit"),
         "the hints crowded the strip out: {second:?}",
     );
+
+    // And they go at the width they no longer fit on, not before it. Nine
+    // glyphs and the space after the fifth are ten cells; the three between
+    // and the hints' seventy-seven make ninety, which is exactly the room
+    // inside a 92-column terminal. One task more is one cell over.
+    let fitting = drawn(&assemble(&running_report(9), "", NOON), 92, WIDE.1);
+    let fits = inside(&fitting[WAVE_TOP + 2]);
+    assert!(
+        fits.ends_with(KEYS),
+        "the hints went while they still fitted: {fits:?}",
+    );
+    let crowded = drawn(&assemble(&running_report(10), "", NOON), 92, WIDE.1);
+    let over = inside(&crowded[WAVE_TOP + 2]);
+    assert!(
+        !over.contains("q quit"),
+        "the hints stayed one cell past the edge: {over:?}",
+    );
 }
 
 #[test]
