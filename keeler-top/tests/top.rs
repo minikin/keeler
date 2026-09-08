@@ -1795,12 +1795,7 @@ fn drawn(board: &Board, width: u16, height: u16) -> Vec<String> {
 /// what a scenario asking what colour something is needs, since a line of
 /// text has thrown that away.
 fn painted(board: &Board, width: u16, height: u16) -> Terminal<TestBackend> {
-    let mut terminal =
-        Terminal::new(TestBackend::new(width, height)).expect("a terminal to draw on");
-    terminal
-        .draw(|frame| render(frame, board, THEME, now(NOON)))
-        .expect("the board drew a frame");
-    terminal
+    painted_through(board, THEME, width, height)
 }
 
 /// The drawn line a task's row is on, or the whole frame in the failure
@@ -2283,7 +2278,10 @@ fn the_detail_pane_shows_the_selected_tasks_last_five_texts_and_its_last_command
     );
 
     // When T1 is selected
-    let pane = detail(board.selected_row().expect("the first row is selected"));
+    let pane = detail(
+        board.selected_row().expect("the first row is selected"),
+        THEME,
+    );
 
     // Then the pane shows the last five texts, oldest first, and the
     // command in full
@@ -2328,7 +2326,10 @@ fn the_detail_pane_lists_the_branchs_commits_since_the_feature_branch() {
     );
 
     // When T1 is selected
-    let pane = detail(board.selected_row().expect("the first row is selected"));
+    let pane = detail(
+        board.selected_row().expect("the first row is selected"),
+        THEME,
+    );
 
     // Then the pane lists both subjects with their short hashes, newest first
     let listed: Vec<&String> = pane
@@ -3769,8 +3770,7 @@ fn inside(line: &str) -> &str {
 /// What is in one cell of a drawn frame: the character, and the colour it
 /// is drawn in.
 fn cell_at(terminal: &Terminal<TestBackend>, x: u16, y: u16) -> (String, Color) {
-    let buffer = terminal.backend().buffer().clone();
-    let cell = &buffer[(x, y)];
+    let cell = &terminal.backend().buffer()[(x, y)];
     (cell.symbol().to_string(), cell.fg)
 }
 
@@ -4149,4 +4149,431 @@ fn once_is_untouched() {
         assert!(!line.contains("└─") && !line.contains('│'), "{line:?}");
     }
     assert_eq!(lines.len(), 11, "not a heading and ten rows:\n{table}");
+}
+
+// ── 11-T3
+
+use keeler_top::theme::{BLUE, CHROME, DIM, GREEN, ORANGE, RED, TEXT, VIOLET, YELLOW};
+
+/// A frame drawn through a theme the scenario names rather than the coloured
+/// one every other board here uses.
+///
+/// The theme is a value and never the process's environment, which is what
+/// lets one board be drawn twice — once as a terminal that can colour and
+/// once as one that has said it will not.
+fn painted_through(board: &Board, theme: Theme, width: u16, height: u16) -> Terminal<TestBackend> {
+    let mut terminal =
+        Terminal::new(TestBackend::new(width, height)).expect("a terminal to draw on");
+    terminal
+        .draw(|frame| render(frame, board, theme, now(NOON)))
+        .expect("the board drew a frame");
+    terminal
+}
+
+/// The background one cell is drawn on.
+///
+/// The foreground is [`cell_at`]'s; this is the other half of the answer,
+/// which the `NO_COLOR` scenario asks for because a theme that painted a
+/// background instead would be colour by another name.
+fn ground_at(terminal: &Terminal<TestBackend>, x: u16, y: u16) -> Color {
+    terminal.backend().buffer()[(x, y)].bg
+}
+
+/// Which line of a drawn frame a task's row is on, as a coordinate.
+fn y_of(frame: &[String], id: &str) -> u16 {
+    u16::try_from(row_at(frame, id)).expect("a frame is not that tall")
+}
+
+/// The characters a drawn frame holds between two cells of one line.
+fn cells_at(terminal: &Terminal<TestBackend>, xs: std::ops::Range<u16>, y: u16) -> String {
+    xs.map(|x| cell_at(terminal, x, y).0).collect()
+}
+
+/// Where a state's glyph is drawn: the panel's left border, then the marker
+/// column and the id, which is where the spec's table starts the state
+/// whatever the board's widest one is.
+const GLYPH_X: u16 = 8;
+
+/// The ten states of the table in one report, in the order it lists them,
+/// with the two the graph answers for left to the graph.
+///
+/// No run behind any of them, so every row is one line and what the frame is
+/// asked about is the state alone.
+fn every_state_report() -> String {
+    states_report(&[
+        ("T9", "failed (exit 2)"),
+        ("T4", "died"),
+        ("T2", "incomplete (no review record)"),
+        ("T8", "paused"),
+        ("T3", "running"),
+        ("T6", "passed"),
+        ("T5", "not spawned"),
+        ("T7", "not spawned"),
+        ("T10", "not spawned"),
+        ("T1", "done"),
+    ])
+}
+
+/// The graph's answer for the two states `keeler-status` has no word for.
+///
+/// T7 waits on five tasks, which makes it the widest state on this board —
+/// wider than `incomplete (no review record)`, and the one state whose
+/// width the theme changes, since `<-` is two cells where `←` is one.
+const READY_AND_BLOCKED: &str = "T5 ready\nT7 blocked T6 T4 T9 T10 T11\n";
+
+/// What that state comes to, whole.
+const BLOCKED: &str = "blocked <- T6, T4, T9, T10, T11";
+
+#[test]
+fn each_state_has_its_glyph_and_colour() {
+    // Given one task in each of the ten states
+    let board = assemble(&every_state_report(), READY_AND_BLOCKED, NOON);
+
+    // When the board renders
+    let terminal = painted(&board, 120, 30);
+    let frame = lines_of(&terminal, 120, 30);
+
+    // Then failed is "✗" red, died "⊘" red, incomplete "◔" yellow, paused
+    // "‖" violet, running "●" orange, passed "◐" green, ready "◇" blue,
+    // blocked "○" dim, not spawned "·" dim, done "✓" dim
+    for (id, glyph, colour) in [
+        ("T9", "✗", RED),
+        ("T4", "⊘", RED),
+        ("T2", "◔", YELLOW),
+        ("T8", "‖", VIOLET),
+        ("T3", "●", ORANGE),
+        ("T6", "◐", GREEN),
+        ("T5", "◇", BLUE),
+        ("T7", "○", DIM),
+        ("T10", "·", DIM),
+        ("T1", "✓", DIM),
+    ] {
+        let y = y_of(&frame, id);
+        assert_eq!(
+            cell_at(&terminal, GLYPH_X, y),
+            (glyph.to_string(), colour),
+            "{id} is not the state table's row:\n{}",
+            frame.join("\n"),
+        );
+        // And the word after the glyph is in the same colour: the glyph is
+        // what a NO_COLOR terminal reads the state by and the colour is what
+        // every other one reads it by, so a column coloured over the glyph
+        // alone would be saying it twice to nobody.
+        assert_eq!(
+            cell_at(&terminal, GLYPH_X + 2, y).1,
+            colour,
+            "{id}'s state word left its glyph's colour behind",
+        );
+    }
+}
+
+#[test]
+fn a_finished_view_paints_done_green() {
+    // Given every task is done
+    let board = assemble(
+        &states_report(&[("T1", "done"), ("T2", "done"), ("T3", "done")]),
+        "",
+        NOON,
+    );
+
+    // When the board renders
+    let terminal = painted(&board, 120, 24);
+    let frame = lines_of(&terminal, 120, 24);
+
+    // Then every "✓ done" is green — the glyph and the word alike, which is
+    // the one state whose colour the board around it decides.
+    for id in ["T1", "T2", "T3"] {
+        let y = y_of(&frame, id);
+        assert_eq!(
+            cells_at(&terminal, GLYPH_X..GLYPH_X + 6, y),
+            "✓ done",
+            "{id} is not a landed row",
+        );
+        for x in GLYPH_X..GLYPH_X + 6 {
+            assert_eq!(
+                cell_at(&terminal, x, y).1,
+                GREEN,
+                "{id}'s landed state is not green at {x}",
+            );
+        }
+    }
+}
+
+/// A run that has used a share of its window and is in a tool call — the
+/// context column's reading, and nothing else.
+fn context_stream(used: u64) -> Vec<String> {
+    vec![
+        INIT.to_string(),
+        record(
+            None,
+            "m1",
+            Some(input_usage(used)),
+            call(
+                "toolu_1",
+                "Read",
+                serde_json::json!({ "file_path": "/nowhere/x.rs" }),
+            ),
+        ),
+    ]
+}
+
+/// Where the context column is drawn on a board whose widest state is the
+/// table's seventeen: the spec puts it at cell 43, and the panel's left
+/// border is the cell before that.
+const BAR_X: u16 = 44;
+
+#[test]
+fn the_context_bar_fills_cells_and_colours_by_threshold() {
+    // Given context at 41%, 65% and 84%
+    let runfiles = Runfiles::new("t3-context-bar");
+    let board = assemble(
+        &report(
+            &[("T1", 410_000_u64), ("T2", 650_000), ("T3", 840_000)].map(|(id, used)| {
+                let log = runfiles.stream(&id.to_lowercase(), &context_stream(used));
+                format!("{id:<6} running          log {log}  worktree /nowhere")
+            }),
+        ),
+        "",
+        NOON,
+    );
+
+    // When the board renders
+    let terminal = painted(&board, 120, 30);
+    let frame = lines_of(&terminal, 120, 30);
+
+    // Then the bars read "███░░░░░", "█████░░░" and "███████░", their filled
+    // cells are blue, yellow and red, the empty cells chrome, and the
+    // percentages read "  41% ", "  65% " and "  84%!"
+    for (id, filled, colour, percentage) in [
+        ("T1", 3_u16, BLUE, "  41% "),
+        ("T2", 5, YELLOW, "  65% "),
+        ("T3", 7, RED, "  84%!"),
+    ] {
+        let y = y_of(&frame, id);
+        let bar = BAR_X..BAR_X + 8;
+        assert_eq!(
+            cells_at(&terminal, bar.clone(), y),
+            format!(
+                "{}{}",
+                "█".repeat(usize::from(filled)),
+                "░".repeat(usize::from(8 - filled)),
+            ),
+            "{id}'s bar is not the share it was given:\n{}",
+            frame.join("\n"),
+        );
+        for x in bar {
+            let (half, expected) = if x < BAR_X + filled {
+                ("filled", colour)
+            } else {
+                ("empty", CHROME)
+            };
+            assert_eq!(
+                cell_at(&terminal, x, y).1,
+                expected,
+                "{id}'s {half} cell at {x} is the wrong colour",
+            );
+        }
+        assert_eq!(
+            cells_at(&terminal, BAR_X + 8..BAR_X + 14, y),
+            percentage,
+            "{id}'s percentage is not beside its bar",
+        );
+    }
+}
+
+/// Where the commit column is drawn on that same board: cell 65 of the
+/// spec's table, and the border before it.
+const COMMIT_X: u16 = 66;
+
+#[test]
+fn the_commit_column_colours_the_hash_and_the_dirty_count() {
+    // Given T3's commit facts are hash b33e05f, 4 ahead, 2 dirty — and T6,
+    // whose worktree has nothing uncommitted in it
+    let mut board = assemble(
+        &states_report(&[("T3", "running"), ("T6", "running")]),
+        "",
+        NOON,
+    );
+    for (index, dirty) in [(0_usize, 2_usize), (1, 0)] {
+        board.rows[index].branch = Some(BranchFacts {
+            head: "b33e05f".to_string(),
+            ahead: 4,
+            dirty,
+            commits: Vec::new(),
+        });
+    }
+
+    // When the board renders
+    let terminal = painted(&board, 120, 24);
+    let frame = lines_of(&terminal, 120, 24);
+    let y = y_of(&frame, "T3");
+
+    // Then "b33e05f" is yellow, "+4" plain, "~2" red
+    assert_eq!(
+        cells_at(&terminal, COMMIT_X..COMMIT_X + 13, y),
+        "b33e05f +4 ~2",
+    );
+    for x in COMMIT_X..COMMIT_X + 7 {
+        assert_eq!(cell_at(&terminal, x, y).1, YELLOW, "the hash at {x}");
+    }
+    for x in COMMIT_X + 8..COMMIT_X + 10 {
+        assert_eq!(cell_at(&terminal, x, y).1, TEXT, "the distance at {x}");
+    }
+    for x in COMMIT_X + 11..COMMIT_X + 13 {
+        assert_eq!(cell_at(&terminal, x, y).1, RED, "the dirt at {x}");
+    }
+    // And a clean worktree shows "+4" and no "~"
+    let clean = y_of(&frame, "T6");
+    assert_eq!(
+        cells_at(&terminal, COMMIT_X..COMMIT_X + 13, clean).trim_end(),
+        "b33e05f +4",
+    );
+}
+
+#[test]
+fn no_color_draws_the_same_characters_in_default_colours() {
+    // Given NO_COLOR is set
+    let runfiles = Runfiles::new("t3-no-color");
+    let board = t3_board(&runfiles);
+
+    // When the board renders
+    let coloured = painted(&board, 120, 24);
+    let plain = painted_through(&board, Theme::new(false, false), 120, 24);
+
+    // Then every cell's foreground and background are the terminal defaults
+    for y in 0..24 {
+        for x in 0..120 {
+            assert_eq!(
+                (cell_at(&plain, x, y).1, ground_at(&plain, x, y)),
+                (Color::Reset, Color::Reset),
+                "the cell at {x},{y} was painted on a board that asked for no paint",
+            );
+        }
+    }
+    // And the characters in every cell equal those of the coloured frame
+    let frame = lines_of(&plain, 120, 24);
+    assert_eq!(frame, lines_of(&coloured, 120, 24));
+    // And the selected row is marked by "▸" alone — the glyphs are the whole
+    // of what this board has left to say a state with, so nothing may go
+    // away with the colour.
+    assert!(
+        inside(row_of(&frame, "T3")).starts_with("▸ T3   ● running"),
+        "{:?}",
+        row_of(&frame, "T3"),
+    );
+}
+
+/// The ten states, a word the theme has no row for, and a running task
+/// carrying everything a row can — the one board every glyph the theme owns
+/// appears on at once.
+fn glyph_board(runfiles: &Runfiles) -> Board {
+    let log = runfiles.stream("t3", &t3_stream());
+    let lines: Vec<String> = every_state_report()
+        .lines()
+        .skip(1)
+        .map(|line| {
+            if line.starts_with("T3 ") {
+                format!("T3     running          log {log}  worktree /nowhere")
+            } else {
+                line.to_string()
+            }
+        })
+        .chain(["T11    sulking".to_string()])
+        .collect();
+    let mut board = assemble_titled(&report(&lines), READY_AND_BLOCKED, TITLES, NOON);
+    // The watched task is the running one, so the marker lands on a row that
+    // also carries a bar, a title cut to its column and a line under it.
+    board.selected = board
+        .rows
+        .iter()
+        .position(|row| row.id == "T3")
+        .expect("the report named T3");
+    board
+}
+
+#[test]
+fn the_ascii_theme_replaces_every_non_ascii_glyph() {
+    // Given KEELER_TOP_ASCII=1
+    let runfiles = Runfiles::new("t3-ascii");
+    let mut board = glyph_board(&runfiles);
+
+    // When the board renders
+    let terminal = painted_through(&board, Theme::new(true, true), 120, 30);
+    let frame = lines_of(&terminal, 120, 30);
+
+    // Then the states read x X o = * + < - . v and the fallback "?"
+    for (id, glyph) in [
+        ("T9", "x"),
+        ("T4", "X"),
+        ("T2", "o"),
+        ("T8", "="),
+        ("T3", "*"),
+        ("T6", "+"),
+        ("T5", "<"),
+        ("T7", "-"),
+        ("T10", "."),
+        ("T1", "v"),
+        ("T11", "?"),
+    ] {
+        assert_eq!(
+            cell_at(&terminal, GLYPH_X, y_of(&frame, id)).0,
+            glyph,
+            "{id} kept a glyph this terminal cannot draw:\n{}",
+            frame.join("\n"),
+        );
+    }
+    // And the bar "###-----", the marker ">" and the connector "`-"
+    let running = inside(row_of(&frame, "T3"));
+    assert!(running.contains("###-----"), "{running:?}");
+    assert!(running.starts_with("> T3   * running"), "{running:?}");
+    assert!(
+        inside(under_of(&frame, "T3")).starts_with("    `- Bash: just dev"),
+        "{:?}",
+        under_of(&frame, "T3"),
+    );
+    // And "←" and "…" are drawn as "<-" and "..." — the arrow reaches the
+    // frame inside the state's own words rather than through the theme, and
+    // the mark that says a title was cut is three cells here and not one.
+    //
+    // Whole, and that is the second half of it: T7's is the widest state on
+    // this board, and the two cells `<-` takes where `←` took one are two a
+    // column measured in the other set would not have given it. What would
+    // be cut is the last task a blocked one is waiting on.
+    assert!(
+        inside(row_of(&frame, "T7")).contains(&format!("- {BLOCKED}")),
+        "the widest state was measured in glyphs this terminal will not draw: {:?}",
+        row_of(&frame, "T7"),
+    );
+    assert!(running.ends_with("..."), "{running:?}");
+    // And no glyph the theme owns is above U+007F: every line of the table
+    // is drawn out of the ASCII set, its heading included. The pane below
+    // the table is spec 10's plain text and still carries its own `—`,
+    // which no theme owns and T6's fact block is what replaces.
+    for line in &frame[..=row_at(&frame, "T1")] {
+        assert!(
+            line.is_ascii(),
+            "the table drew a glyph this terminal cannot:\n{line:?}",
+        );
+    }
+    // What that pane does owe the theme is the state, which carries the
+    // arrow inside its own words: a pane reading "blocked ← T6" under a row
+    // reading "blocked <- T6" would be one board disagreeing with itself on
+    // one screen.
+    board.selected = board
+        .rows
+        .iter()
+        .position(|row| row.id == "T7")
+        .expect("the report named T7");
+    let watched = lines_of(
+        &painted_through(&board, Theme::new(true, true), 120, 30),
+        120,
+        30,
+    );
+    assert!(
+        watched
+            .iter()
+            .any(|line| line.contains(&format!("T7 — {BLOCKED}"))),
+        "the pane kept a glyph the row beside it swapped:\n{}",
+        watched.join("\n"),
+    );
 }
