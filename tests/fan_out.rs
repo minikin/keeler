@@ -2179,7 +2179,7 @@ mod fork {
             // Then the graph-mode day names both commands in the steps a human
             // takes
             let day = the_day(&text);
-            for recipe in ["just keeler-feature-branch", "just keeler-fan-out"] {
+            for recipe in ["keeler keeler-feature-branch", "keeler keeler-fan-out"] {
                 assert!(
                     day.contains(recipe),
                     "{name}'s walk-through never names `{recipe}`, so the human types spec 06's steps",
@@ -2204,7 +2204,9 @@ mod fork {
             let commit = day
                 .find("commit the graph")
                 .unwrap_or_else(|| panic!("{name}'s walk-through never says to commit the graph"));
-            let wave = day.find("just keeler-fan-out").unwrap();
+            let wave = day
+                .find("keeler keeler-fan-out")
+                .unwrap_or_else(|| panic!("{name}'s walk-through never names the wave"));
             assert!(
                 commit < wave,
                 "{name} names the wave before the graph it reads is committed",

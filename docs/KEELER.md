@@ -55,11 +55,11 @@ for big ones too. So the first question is always: *what kind of change is this?
 ```mermaid
 flowchart TD
     A[Incoming change] --> B{Does it change<br/>behavior?}
-    B -- "No — docs, comments,<br/>config, renames" --> C[<b>Trivial: fast path</b><br/>just lint<br/>+ just test if code touched]
+    B -- "No — docs, comments,<br/>config, renames" --> C[<b>Trivial: fast path</b><br/>keeler lint<br/>+ keeler test if code touched]
     B -- "Yes — existing behavior<br/>is wrong" --> D[<b>Bugfix: /keeler:fix</b><br/>failing regression test first,<br/>minimised, hypotheses ranked,<br/>then the minimal fix]
     B -- "Yes — new or changed<br/>behavior, new API" --> E[<b>Feature: /keeler:feature</b><br/>full pipeline below]
     C --> F[English summary,<br/>commit on confirmation]
-    D --> G[just dev + mutants on<br/>the changed lines] --> F
+    D --> G[keeler dev + mutants on<br/>the changed lines] --> F
     E --> F
 ```
 
@@ -100,7 +100,7 @@ runs that same pipeline several times at once** — one agent per task, each on
 its own branch in its own worktree, each going through tdd → qa → review →
 mutants for the single task it was handed. Every gate travels with it: qa
 carries coverage and CRAP exactly as on the linear road, and the branch's
-final gate is `just keeler-branch` — `dev`, then the CRAP delta against the
+final gate is `keeler keeler-branch` — `dev`, then the CRAP delta against the
 committed baseline, then mutants on the diff. Entirely opt-in: the linear
 road is unchanged, and a project that never runs the recipes below never
 meets them.
@@ -121,13 +121,13 @@ Three ideas carry all of it:
 
 ```mermaid
 flowchart LR
-    S["Approved spec, committed on<br/><b>feat/&lt;spec-slug&gt;</b> by<br/><b>just keeler-feature-branch</b><br/>Tasks carry <b>Needs:</b>"] --> G["<b>just keeler-fan-out &lt;spec&gt;</b><br/>names every ready task —<br/>one <b>yes</b> spawns the wave"]
-    G --> B1["keeler/&lt;spec&gt;/t2<br/>tdd → qa → review → mutants<br/><b>just keeler-branch</b>"]
-    G --> B2["keeler/&lt;spec&gt;/t3<br/>tdd → qa → review → mutants<br/><b>just keeler-branch</b>"]
-    B1 --> LF["merge into feat/, then<br/><b>just keeler-land</b> there:<br/>gates, worktrees removed"]
+    S["Approved spec, committed on<br/><b>feat/&lt;spec-slug&gt;</b> by<br/><b>keeler keeler-feature-branch</b><br/>Tasks carry <b>Needs:</b>"] --> G["<b>keeler keeler-fan-out &lt;spec&gt;</b><br/>names every ready task —<br/>one <b>yes</b> spawns the wave"]
+    G --> B1["keeler/&lt;spec&gt;/t2<br/>tdd → qa → review → mutants<br/><b>keeler keeler-branch</b>"]
+    G --> B2["keeler/&lt;spec&gt;/t3<br/>tdd → qa → review → mutants<br/><b>keeler keeler-branch</b>"]
+    B1 --> LF["merge into feat/, then<br/><b>keeler keeler-land</b> there:<br/>gates, worktrees removed"]
     B2 --> LF
     LF -- "ticks landed —<br/>dependents ready" --> G
-    LF -- "every box ticked" --> LM["PR to main, then<br/><b>just keeler-land</b> on main:<br/>gates, baseline, Status: —<br/>staged, never committed"]
+    LF -- "every box ticked" --> LM["PR to main, then<br/><b>keeler keeler-land</b> on main:<br/>gates, baseline, Status: —<br/>staged, never committed"]
 ```
 
 **A feature, start to finish** — the commands are the parts, this is the day:
@@ -136,26 +136,28 @@ flowchart LR
    On approval it asks which road; **graph** is the answer that starts this
    day. Answering "graph" is the human's consent for the one commit the next
    step makes, and for nothing else.
-2. `just keeler-feature-branch <spec>` cuts `feat/<spec-slug>` from main and
+2. `keeler keeler-feature-branch <spec>` cuts `feat/<spec-slug>` from main and
    commits the approved spec there. `/keeler:spec` runs it for you on the
    "graph" answer; by hand it is the same thing.
 3. `/keeler:tasks` writes `Needs:` into every task. **Commit the graph** —
    spawns read the committed spec, never the working tree.
-4. `just keeler-fan-out <spec>` names every ready task; one **yes** spawns
+4. `keeler keeler-fan-out <spec>` names every ready task; one **yes** spawns
    them all, each on its own branch, all in one tmux window with a pane per
-   run. (`just keeler-spawn <spec> T3` hands out one task at a time instead.)
-5. `just keeler-status <spec>` is the board while they run;
-   `tmux attach -t keeler-<spec-slug>-t1` to watch one. `died` means a
-   session ended before its gate — `just keeler-resume` picks up from the
-   commits it left.
+   run. (`keeler keeler-spawn <spec> T3` hands out one task at a time instead.)
+5. `keeler keeler-top <spec>` is the live board while they run, and
+   `keeler keeler-status <spec>` the same wave as text. `Enter` on a row
+   attaches to that task's tmux session, as
+   `tmux attach -t keeler-<spec-slug>-t1` does. `died` means a session
+   ended before its gate — `keeler keeler-resume` picks up from the commits
+   it left.
 6. Merge each finished task branch into `feat/<spec-slug>` and run
-   `just keeler-land` there: gates, then the landed worktrees are removed.
+   `keeler keeler-land` there: gates, then the landed worktrees are removed.
    Landed ticks unblock their dependents — back to step 4, until every box
    is ticked.
-7. Pull request to main, merge, `just keeler-land` on main: it stages the
+7. Pull request to main, merge, `keeler keeler-land` on main: it stages the
    refreshed baseline and `Status: Implemented`, and you commit.
 
-Why these are `just` recipes and not slash commands: the pipeline's *stages*
+Why these are recipes and not slash commands: the pipeline's *stages*
 are conversations with the agent, so they are slash commands — but spawning
 agents, watching them and landing their work are the human's levers, and a
 lever the agent could pull itself would be no consent at all. Inside a
@@ -165,14 +167,15 @@ either way, and the **yes** it asks for is yours.
 
 | Command                                      | What it does                                                                                                                                                                     |
 | -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `just keeler-feature-branch <spec>`          | Cuts `feat/<spec-slug>` from main, checks it out and commits the approved spec there — the "graph" answer's one mechanical step, and the same by hand                            |
-| `/keeler:graph` — `just keeler-graph <spec>` | Ready / blocked / done, read from the spec on the feature's branch **`feat/<spec-slug>`**; a cycle or a dangling `Needs:` is refused by the parser                               |
-| `just keeler-fan-out <spec>`                 | The wave: every ready task named, and one **yes** spawns them all through `keeler-spawn` — nothing starts that was not said yes to                                               |
-| `just keeler-spawn <spec> <task>`            | Worktree + branch `keeler/<spec-slug>/<task-id>` + a headless agent in a detached tmux session                                                                                   |
-| `just keeler-status <spec>`                  | The board: running, passed, incomplete, failed, died mid-pipeline, paused, done, never spawned                                                                                   |
-| `just keeler-resume <spec> <task>`           | Re-runs a task whose session died or was paused, in the worktree and branch it already has                                                                                       |
-| `just keeler-branch`                         | The gate a task branch runs instead of `just dev`: dev, then the CRAP delta vs the committed baseline, then mutants on the diff                                                  |
-| `just keeler-land`                           | Fan-in, twice: gates first at both levels; on `feat/<spec-slug>` it then removes landed worktrees, on main the baseline and `Status: Implemented` — staged for a human to commit |
+| `keeler keeler-feature-branch <spec>`          | Cuts `feat/<spec-slug>` from main, checks it out and commits the approved spec there — the "graph" answer's one mechanical step, and the same by hand                            |
+| `/keeler:graph` — `keeler keeler-graph <spec>` | Ready / blocked / done, read from the spec on the feature's branch **`feat/<spec-slug>`**; a cycle or a dangling `Needs:` is refused by the parser                               |
+| `keeler keeler-fan-out <spec>`                 | The wave: every ready task named, and one **yes** spawns them all through `keeler-spawn` — nothing starts that was not said yes to                                               |
+| `keeler keeler-spawn <spec> <task>`            | Worktree + branch `keeler/<spec-slug>/<task-id>` + a headless agent in a detached tmux session                                                                                   |
+| `keeler keeler-status <spec>`                  | The board: running, passed, incomplete, failed, died mid-pipeline, paused, done, never spawned                                                                                   |
+| `keeler keeler-top <spec>`                     | The same wave as a live board that redraws itself: counts, what needs a human, a row per task, and the selected one in full. `Enter` attaches, `p` pauses, `R` resumes, `q` quits; `--once` prints one frame as text |
+| `keeler keeler-resume <spec> <task>`           | Re-runs a task whose session died or was paused, in the worktree and branch it already has                                                                                       |
+| `keeler keeler-branch`                         | The gate a task branch runs instead of `keeler dev`: dev, then the CRAP delta vs the committed baseline, then mutants on the diff                                                  |
+| `keeler keeler-land`                           | Fan-in, twice: gates first at both levels; on `feat/<spec-slug>` it then removes landed worktrees, on main the baseline and `Status: Implemented` — staged for a human to commit |
 
 Three rules keep parallel branches honest, and CI enforces the first and
 third on every `keeler/*` pull request:
@@ -258,7 +261,7 @@ what one alone cannot, but only when all of them run.
   answers "is this scenario enforced?" The agent may not edit a spec
   without permission; only the `Status:` line and task checkboxes move, as
   bookkeeping, and only at the end of the pipeline.
-- **Every claim is re-runnable.** Every gate is one `just` recipe, so a
+- **Every claim is re-runnable.** Every gate is one `keeler` recipe, so a
   human can rerun anything the agent says it did. Locally the law is
   discipline; in CI it's physics.
 
@@ -281,7 +284,7 @@ return value, deletes a branch — and runs the suite against each edit. A
 test that still passes with the bug in place was never testing that line;
 it was describing whatever the code happened to do. Every surviving mutant
 is a claim the suite makes and cannot back, and the response is always a
-stronger test, never a weaker mutant. `just mutants-diff` runs it on the
+stronger test, never a weaker mutant. `keeler mutants-diff` runs it on the
 lines you changed; the whole crate is for a rainy afternoon.
 
 What it can and cannot see is worth being exact about. It proves the tests

@@ -284,10 +284,29 @@ fn the_chapters_that_left_are_whole() {
         "keeler-resume",
         "keeler-branch",
         "keeler-land",
+        // The live board is graph mode's, and a chapter that never names it
+        // sends the reader to `keeler-status` and no further.
+        "keeler-top",
     ] {
         assert!(
             graph_mode.contains(recipe),
             "graph-mode.md does not describe `{recipe}`",
+        );
+    }
+
+    // And names them the way an adopter can type. The Justfile left the
+    // project for the plugin, so `just keeler-status` finds no recipe in
+    // the repository somebody reads this in — the workflow and the
+    // Justfile's own printed text are already guarded this way, and these
+    // two chapters went stale for a year because they were not.
+    for (name, chapter) in [("graph-mode.md", &graph_mode), ("gates.md", &gates)] {
+        let strays: Vec<&str> = chapter
+            .lines()
+            .filter(|line| line.contains("just keeler-"))
+            .collect();
+        assert!(
+            strays.is_empty(),
+            "{name} sends the reader to a recipe their project has no justfile for: {strays:?}",
         );
     }
 
