@@ -532,26 +532,29 @@ pub fn once(board: &Board, now: Timestamp) -> String {
 const BORDERS: u16 = 2;
 
 /// Draws one frame.
+///
+/// The rows are composed for one width and drawn on a rectangle of that
+/// same width, from one binding: a table laid out for one number and drawn
+/// in a rectangle of another would line up by luck for as long as the
+/// difference happened to be slack.
 pub fn render(frame: &mut ratatui::Frame, board: &Board, theme: Theme, now: Timestamp) {
     let area = frame.area();
-    let rows = table(board, theme, now, area.width.saturating_sub(BORDERS));
+    let width = area.width.saturating_sub(BORDERS);
+    let rows = table(board, theme, now, width);
     let panes = layout(area, rows.len());
+    let inside = Rect::new(
+        area.x.saturating_add(1),
+        panes.table.y,
+        width,
+        panes.table.height,
+    );
     frame.render_widget(Paragraph::new(board.header(now)), panes.header);
-    frame.render_widget(Paragraph::new(rows), inside(panes.table));
+    frame.render_widget(Paragraph::new(rows), inside);
     if let Some(pane) = panes.detail {
         let lines = board.selected_row().map(detail).unwrap_or_default();
         frame.render_widget(Paragraph::new(lines.join("\n")), pane);
     }
     frame.render_widget(Paragraph::new(board.message.clone()), panes.status);
-}
-
-/// The area inside a panel's borders.
-fn inside(area: Rect) -> Rect {
-    Rect {
-        x: area.x.saturating_add(1),
-        width: area.width.saturating_sub(BORDERS),
-        ..area
-    }
 }
 
 /// The tasks table: the heading, then every task's lines, in the order the
@@ -1006,6 +1009,92 @@ mod tests {
         );
     }
 
+    /// A row with the run a scenario describes, and the state it is in.
+    fn row_of(state: &str, run: Option<RunView>, title: Option<&str>) -> Row {
+        Row {
+            id: "T3".to_string(),
+            state: state.to_string(),
+            log: None,
+            run,
+            branch: None,
+            title: title.map(str::to_string),
+        }
+    }
+
+    /// A run whose last call is one the board can name.
+    fn calling() -> RunView {
+        RunView {
+            last_tool: Some(crate::run::ToolCall {
+                id: "toolu_1".to_string(),
+                name: "Bash".to_string(),
+                detail: "just dev".to_string(),
+                at: None,
+            }),
+            ..RunView::default()
+        }
+    }
+
+    #[test]
+    fn only_a_live_rows_tool_takes_the_place_of_its_title() {
+        // Collapsing is what a row gives up its second line to; a row that
+        // never had one has nothing to move into the title's column, and a
+        // done task showing the last tool of a run that ended would be the
+        // board answering a question nobody asked of it.
+        let compacted = |row: &Row| {
+            let cols = Columns::live(118, 17);
+            text(&super::lines(row, &cols, THEME, Timestamp::default(), false, true)[0])
+                .trim_end()
+                .to_string()
+        };
+
+        assert!(
+            compacted(&row_of("running", Some(calling()), Some("the title")))
+                .ends_with("Bash: just dev"),
+        );
+        // Paused is live too: it is stopped, not closed, and what it was in
+        // the middle of is what somebody deciding whether to resume reads.
+        assert!(
+            compacted(&row_of("paused", Some(calling()), Some("the title")))
+                .ends_with("Bash: just dev"),
+        );
+        // And a closed row keeps its title, whatever its run last said.
+        assert!(
+            compacted(&row_of("done", Some(calling()), Some("the title"))).ends_with("the title"),
+            "a closed row showed the tool of a run that is over",
+        );
+        assert!(
+            compacted(&row_of("passed", Some(calling()), Some("the title"))).ends_with("the title")
+        );
+    }
+
+    #[test]
+    fn the_commit_column_names_the_dirt_only_when_there_is_some() {
+        // A `~0` on every clean row would spend the column saying nothing,
+        // and the count is read for one decision — whether a branch is safe
+        // to remove — which a zero never enters into.
+        let commit = |dirty| {
+            let row = Row {
+                branch: Some(crate::git::BranchFacts {
+                    head: "b33e05f".to_string(),
+                    ahead: 4,
+                    dirty,
+                    commits: Vec::new(),
+                }),
+                ..row_of("running", None, None)
+            };
+            super::column(&super::commit(&row, THEME), 13, "…")
+                .iter()
+                .map(|span| span.content.to_string())
+                .collect::<String>()
+                .trim_end()
+                .to_string()
+        };
+
+        assert_eq!(commit(2), "b33e05f +4 ~2");
+        assert_eq!(commit(1), "b33e05f +4 ~1");
+        assert_eq!(commit(0), "b33e05f +4", "a clean worktree was called dirty");
+    }
+
     #[test]
     fn a_row_collapsed_to_one_line_shows_its_tool_where_its_title_goes() {
         // The second line is what a compact row gives up, and the tool is
@@ -1050,23 +1139,21 @@ mod tests {
 
     #[test]
     fn a_live_row_that_has_nothing_to_say_underneath_says_nothing() {
-        // A running task whose stream has not reached a tool call yet —
-        // the connector alone would be a line about the board rather than
-        // about the run.
-        let row = Row {
-            id: "T1".to_string(),
-            state: "running".to_string(),
-            log: None,
-            run: Some(RunView::default()),
-            branch: None,
-            title: None,
-        };
+        // A running task whose stream holds its init record and nothing
+        // else — the connector alone would be a line about the board rather
+        // than about the run.
+        let row = row_of("running", Some(RunView::default()), None);
 
-        let cols = Columns::live(60, 17);
+        let cols = Columns::live(118, 17);
+        let lines = super::lines(&row, &cols, THEME, Timestamp::default(), false, false);
 
+        assert_eq!(lines.len(), 1);
+        // And the columns that run has nothing to say for are blank, not
+        // dashed: the dash is `--once`'s answer, and a run that has started
+        // is exactly where the two surfaces part company.
         assert_eq!(
-            super::lines(&row, &cols, THEME, Timestamp::default(), false, false).len(),
-            1,
+            text(&lines[0]).trim_end(),
+            "  T3   ● running         reading"
         );
     }
 
