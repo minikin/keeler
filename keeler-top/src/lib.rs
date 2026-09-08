@@ -12,6 +12,7 @@ pub mod dispatch;
 pub mod frame;
 pub mod git;
 pub mod graph;
+pub mod layout;
 pub mod run;
 pub mod status;
 pub mod stream;

@@ -9,12 +9,15 @@
 //! same values joined with spaces, so the two cannot drift apart.
 
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::Stylize as _;
-use ratatui::text::Line;
+use ratatui::style::Style;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::board::{Board, Row};
+use crate::board::{Board, PAUSED, Row};
 use crate::clock::Timestamp;
+use crate::layout::{Columns, Field, cut, right, wide, widest_state};
+use crate::run::{DASH, RunView};
+use crate::theme::{CYAN, DIM, RED, TEXT, Theme, YELLOW};
 
 /// The table's columns, in the order it shows them.
 const HEADINGS: [&str; COLUMNS] = [
@@ -178,45 +181,245 @@ fn line(cells: &[String; COLUMNS], widths: &[u16; COLUMNS], shown: usize) -> Str
     line.trim_end().to_string()
 }
 
-/// How many of the terminal's columns a string takes up.
-///
-/// Not its characters: the table is composed as text and padded by hand, so
-/// a cell measured in characters and drawn in columns puts every column
-/// after it out by one for each double-width character in it. The only cell
-/// that can hold one is the command, which is whatever the agent typed.
-fn wide(text: &str) -> u16 {
-    u16::try_from(unicode_width::UnicodeWidthStr::width(text)).unwrap_or(u16::MAX)
-}
-
 /// `text` cut to `width` columns, the last of them an ellipsis saying that
 /// something was cut. The detail pane is where the whole of it is.
 ///
-/// Cut by column and not by character, for the reason [`wide`] gives — and
-/// a character that would straddle the edge is left out rather than half
-/// drawn, so the result can be a column short of its budget. The padding
-/// that follows it in [`line`] closes that up.
+/// The mark is the literal `…` and never the theme's: this is `--once`'s
+/// cut, and `--once` is a plain-text surface a script parses. The frame's
+/// own rows cut through [`crate::layout::cut`], which is given whichever
+/// mark the terminal can draw.
 #[must_use]
 pub fn truncate(text: &str, width: u16) -> String {
-    if wide(text) <= width {
-        return text.to_string();
+    cut(text, width, "…")
+}
+
+/// How far in the second line hangs under the row above it, before the
+/// connector: enough to clear the marker and the id, so the connector sits
+/// under the state's glyph.
+const HANGS: usize = 4;
+
+/// What a paused row has to say under it — the key that starts it again.
+const RESUME: &str = "resume: R";
+
+/// One task's row, as the one or two lines it is drawn on.
+///
+/// Two for a task that is live and has something to say about right now,
+/// one for everything else: a closed or waiting task has no tool to name,
+/// and a connector under it would be a line saying nothing is happening.
+/// `compact` takes that second line away from every row, which is what a
+/// panel with more tasks than lines does.
+#[must_use]
+pub fn lines(
+    row: &Row,
+    cols: &Columns,
+    theme: &Theme,
+    now: Timestamp,
+    selected: bool,
+    compact: bool,
+) -> Vec<Line<'static>> {
+    let mut lines = vec![Line::from(cells_of(row, cols, theme, selected, compact))];
+    if !compact {
+        lines.extend(under(row, cols, theme, now));
     }
-    // A column with no room for the ellipsis has no room for a head to put
-    // it after either.
-    let Some(budget) = usize::from(width).checked_sub(1) else {
-        return String::new();
+    lines
+}
+
+/// The row's first line: every column the layout has, in its place.
+fn cells_of(
+    row: &Row,
+    cols: &Columns,
+    theme: &Theme,
+    selected: bool,
+    compact: bool,
+) -> Vec<Span<'static>> {
+    let look = theme.look(&row.state, cols.finished());
+    let mut spans = Vec::new();
+    let last = cols.fields().len().saturating_sub(1);
+    for (index, (field, place)) in cols.fields().iter().enumerate() {
+        let pieces = pieces(row, *field, place.width, theme, look, cols.finished(), compact, selected);
+        spans.extend(column(&pieces, place.width, theme.ellipsis()));
+        // The marker carries its own trailing space, and the last column
+        // has nothing after it to be separated from.
+        if index < last && !matches!(field, Field::Mark) {
+            spans.push(Span::raw(" "));
+        }
+    }
+    spans
+}
+
+/// What one column of one row holds, in the pieces it is drawn in — each
+/// with the style that piece is drawn in, because a column can carry two
+/// readings at once: a bar and its track, a hash and the dirt beside it.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one row's cell is a function of the row, the column, the theme and the three answers the view has already decided — a struct of them would be built per cell and read once"
+)]
+fn pieces(
+    row: &Row,
+    field: Field,
+    width: u16,
+    theme: &Theme,
+    look: crate::theme::Look,
+    finished: bool,
+    compact: bool,
+    selected: bool,
+) -> Vec<(String, Style)> {
+    match field {
+        // In the row's own colour: the marker says which row is selected,
+        // and a marker of one colour on every row would be one more thing
+        // to read before the row itself.
+        Field::Mark => vec![(marker(theme, selected), look.style)],
+        Field::Task => vec![(row.id.clone(), theme.style(TEXT))],
+        Field::State => vec![(format!("{} {}", look.glyph, row.state), look.style)],
+        Field::Stage => plain(row.run.as_ref().map(|run| run.stage.to_string()), theme),
+        Field::Model => plain(said(row, RunView::model_column), theme),
+        Field::Context => context(row, theme),
+        // Right-aligned, because it is read beside the number above it.
+        Field::Tokens => vec![(
+            right(&said(row, RunView::tokens_column).unwrap_or_default(), width),
+            theme.style(TEXT),
+        )],
+        Field::Commit => commit(row, theme),
+        Field::Title => title(row, theme, finished, compact),
+    }
+}
+
+/// What marks the selected row, and the nothing every other row gets.
+fn marker(theme: &Theme, selected: bool) -> String {
+    if selected {
+        theme.marker().to_string()
+    } else {
+        String::new()
+    }
+}
+
+/// One of the run's columns, or nothing at all where `--once` writes a dash.
+///
+/// The two surfaces ask the same [`RunView`] and part company on this one
+/// answer: `--once` fills an empty cell so that a row of a table is never
+/// ambiguous, and the frame leaves it blank so that a board of done rows is
+/// not a wall of dashes.
+fn said(row: &Row, column: fn(&RunView) -> String) -> Option<String> {
+    row.run
+        .as_ref()
+        .map(column)
+        .filter(|said| said != DASH && !said.is_empty())
+}
+
+/// A column with one piece in it, in the ordinary text colour.
+fn plain(text: Option<String>, theme: &Theme) -> Vec<(String, Style)> {
+    vec![(text.unwrap_or_default(), theme.style(TEXT))]
+}
+
+/// The context column: the bar in its two halves, then the share as a
+/// number with the flag slot after it.
+fn context(row: &Row, theme: &Theme) -> Vec<(String, Style)> {
+    let Some(percent) = row.run.as_ref().and_then(RunView::context_percent) else {
+        return Vec::new();
     };
-    let mut cut = String::new();
-    let mut used = 0;
-    for character in text.chars() {
-        let next = used + unicode_width::UnicodeWidthChar::width(character).unwrap_or(0);
-        if next > budget {
+    let bar = theme.bar(percent);
+    vec![
+        (bar.filled, bar.fill),
+        (bar.empty, bar.track),
+        (format!(" {}", Theme::percentage(percent)), theme.style(TEXT)),
+    ]
+}
+
+/// The commit column: the branch's head, how far ahead it is, and what is
+/// not committed — the dirty count only when there is one.
+fn commit(row: &Row, theme: &Theme) -> Vec<(String, Style)> {
+    let Some(branch) = &row.branch else {
+        return Vec::new();
+    };
+    let mut pieces = vec![
+        (branch.head.clone(), theme.style(YELLOW)),
+        (format!(" +{}", branch.ahead), theme.style(TEXT)),
+    ];
+    if branch.dirty > 0 {
+        pieces.push((format!(" ~{}", branch.dirty), theme.style(RED)));
+    }
+    pieces
+}
+
+/// The last column: what the spec calls the task, what landed on a finished
+/// board — or, on a row collapsed to one line, the tool that row's second
+/// line would have named.
+fn title(row: &Row, theme: &Theme, finished: bool, compact: bool) -> Vec<(String, Style)> {
+    if compact && row.live() {
+        return plain(said(row, RunView::tool_column), theme);
+    }
+    let colour = if finished { TEXT } else { DIM };
+    vec![(row.title.clone().unwrap_or_default(), theme.style(colour))]
+}
+
+/// The line under a live row: what the run is doing now, and how long it
+/// has been doing it.
+///
+/// Nothing at all for a row with nothing to put there — a closed task, or a
+/// running one whose stream has not reached a tool call yet. A connector
+/// with an empty line after it would be the board reporting on itself.
+fn under(row: &Row, cols: &Columns, theme: &Theme, now: Timestamp) -> Option<Line<'static>> {
+    let pieces = if row.state == PAUSED {
+        vec![(RESUME.to_string(), theme.style(TEXT))]
+    } else if row.running() {
+        tool(row, theme)?
+    } else {
+        return None;
+    };
+    let elapsed = row.elapsed_column(now);
+    let hangs = format!("{}{} ", " ".repeat(HANGS), theme.connector());
+    // What is left once the connector and the elapsed have their cells: the
+    // elapsed ends at the panel's inner right edge, so a command long
+    // enough to reach it is cut rather than drawn over it.
+    let tail = if elapsed.is_empty() {
+        0
+    } else {
+        wide(&elapsed).saturating_add(1)
+    };
+    let width = cols
+        .width()
+        .saturating_sub(wide(&hangs))
+        .saturating_sub(tail);
+    let mut spans = vec![Span::styled(hangs, theme.style(DIM))];
+    spans.extend(column(&pieces, width, theme.ellipsis()));
+    if !elapsed.is_empty() {
+        spans.push(Span::styled(format!(" {elapsed}"), theme.style(DIM)));
+    }
+    Some(Line::from(spans))
+}
+
+/// The tool a running row names under it: what was called, and what it was
+/// called on.
+fn tool(row: &Row, theme: &Theme) -> Option<Vec<(String, Style)>> {
+    let call = row.run.as_ref()?.last_tool.as_ref()?;
+    let mut pieces = vec![(call.name.clone(), theme.style(CYAN))];
+    if !call.detail.is_empty() {
+        pieces.push((format!(": {}", call.detail), theme.style(TEXT)));
+    }
+    Some(pieces)
+}
+
+/// One column's pieces, laid into `width` cells: each in its own style, cut
+/// where the column ends and padded where its pieces do not fill it.
+///
+/// The cut runs across the pieces rather than inside one of them: a hash
+/// and the counts beside it are one column, and a column that cut each
+/// piece to its own share would show a short hash rather than a cut one.
+fn column(pieces: &[(String, Style)], width: u16, ellipsis: &str) -> Vec<Span<'static>> {
+    let mut spans = Vec::with_capacity(pieces.len() + 1);
+    let mut left = width;
+    for (text, style) in pieces {
+        if left == 0 {
             break;
         }
-        cut.push(character);
-        used = next;
+        let piece = cut(text, left, ellipsis);
+        left = left.saturating_sub(wide(&piece));
+        spans.push(Span::styled(piece, *style));
     }
-    cut.push('…');
-    cut
+    if left > 0 {
+        spans.push(Span::raw(" ".repeat(usize::from(left))));
+    }
+    spans
 }
 
 /// Where the board's four parts go.
@@ -236,9 +439,13 @@ pub struct Panes {
 }
 
 /// Where the parts of a frame go on a terminal of this size.
+///
+/// `lines` is how many lines the table wants, its heading included — not
+/// how many tasks there are. A live task's row carries a second line under
+/// it, so the two numbers stopped being the same one.
 #[must_use]
-pub fn layout(area: Rect, tasks: usize) -> Panes {
-    let table = u16::try_from(tasks).unwrap_or(u16::MAX).saturating_add(1);
+pub fn layout(area: Rect, lines: usize) -> Panes {
+    let table = u16::try_from(lines).unwrap_or(u16::MAX);
     // What is left once the header and the status line have their line.
     let body = area.height.saturating_sub(2);
     let roomy = body >= table.saturating_add(DETAIL_MIN);
@@ -297,12 +504,21 @@ pub fn once(board: &Board, now: Timestamp) -> String {
     text
 }
 
+/// The two cells a panel's borders take from its width.
+///
+/// Every offset in the spec's column table is measured from the panel's
+/// inner left edge, so the rows are composed for the width inside the
+/// borders — which makes a row the same row whether the box around it has
+/// been drawn yet or not.
+const BORDERS: u16 = 2;
+
 /// Draws one frame.
-pub fn render(frame: &mut ratatui::Frame, board: &Board, now: Timestamp) {
+pub fn render(frame: &mut ratatui::Frame, board: &Board, theme: &Theme, now: Timestamp) {
     let area = frame.area();
-    let panes = layout(area, board.rows.len());
+    let rows = table(board, theme, now, area.width.saturating_sub(BORDERS));
+    let panes = layout(area, rows.len());
     frame.render_widget(Paragraph::new(board.header(now)), panes.header);
-    frame.render_widget(table(board, now, area.width), panes.table);
+    frame.render_widget(Paragraph::new(rows), inside(panes.table));
     if let Some(pane) = panes.detail {
         let lines = board.selected_row().map(detail).unwrap_or_default();
         frame.render_widget(Paragraph::new(lines.join("\n")), pane);
@@ -310,29 +526,48 @@ pub fn render(frame: &mut ratatui::Frame, board: &Board, now: Timestamp) {
     frame.render_widget(Paragraph::new(board.message.clone()), panes.status);
 }
 
-/// The table, with the selected row marked.
-fn table(board: &Board, now: Timestamp, width: u16) -> Paragraph<'static> {
-    Paragraph::new(marked(Grid::new(board, now, width).lines(), board.selected))
+/// The area inside a panel's borders.
+fn inside(area: Rect) -> Rect {
+    Rect {
+        x: area.x.saturating_add(1),
+        width: area.width.saturating_sub(BORDERS),
+        ..area
+    }
 }
 
-/// The table's lines, with the one the detail pane is about marked.
-///
-/// The headings are the first line, so the selected row is the one after
-/// it — and a board with no tasks has a `selected` that names no line,
-/// which marks nothing rather than marking the headings.
-fn marked(lines: Vec<String>, selected: usize) -> Vec<Line<'static>> {
-    let selected = selected.saturating_add(1);
-    lines
-        .into_iter()
-        .enumerate()
-        .map(|(index, line)| {
-            if index == selected {
-                Line::from(line).reversed()
-            } else {
-                Line::from(line)
-            }
-        })
-        .collect()
+/// The tasks table: the heading, then every task's lines, in the order the
+/// board puts its rows in.
+#[must_use]
+pub fn table(board: &Board, theme: &Theme, now: Timestamp, width: u16) -> Vec<Line<'static>> {
+    let cols = columns_of(board, width);
+    let mut drawn = vec![Line::styled(cols.header(), theme.style(DIM))];
+    for index in crate::board::order(&board.rows) {
+        let Some(row) = board.rows.get(index) else {
+            continue;
+        };
+        drawn.extend(lines(
+            row,
+            &cols,
+            theme,
+            now,
+            index == board.selected,
+            false,
+        ));
+    }
+    drawn
+}
+
+/// The columns this board's rows are drawn through: the finished view's
+/// when every task has landed, and otherwise the live ones, as wide in the
+/// state as the widest state on the board.
+fn columns_of(board: &Board, width: u16) -> Columns {
+    if board.finished() {
+        return Columns::landed(width);
+    }
+    Columns::live(
+        width,
+        widest_state(board.rows.iter().map(|row| row.state.as_str())),
+    )
 }
 
 #[cfg(test)]
@@ -533,27 +768,6 @@ mod tests {
     }
 
     #[test]
-    fn the_row_the_pane_is_about_is_marked_and_the_headings_never_are() {
-        use ratatui::style::Modifier;
-
-        let lines = ["TASK …", "T1 …", "T2 …", "T3 …"].map(str::to_string);
-        let reversed =
-            |line: &ratatui::text::Line<'_>| line.style.add_modifier.contains(Modifier::REVERSED);
-
-        let marked = super::marked(lines.to_vec(), 1);
-
-        assert!(!reversed(&marked[0]), "the headings were marked as a row");
-        assert!(!reversed(&marked[1]));
-        assert!(reversed(&marked[2]), "T2's row is not marked");
-        assert!(!reversed(&marked[3]));
-
-        // A board with no tasks selects a row that is not there, and marks
-        // nothing rather than marking the line above it.
-        let empty = super::marked(vec!["TASK …".to_string()], 0);
-        assert!(!reversed(&empty[0]));
-    }
-
-    #[test]
     fn the_detail_pane_is_the_first_thing_a_small_terminal_does_without() {
         // Five tasks want six lines, and the header and status line take
         // one each: the pane needs six more on top of those eight.
@@ -581,7 +795,12 @@ mod tests {
     #[test]
     fn the_plain_frame_is_the_drawn_one_composed_at_a_width_of_its_own() {
         let status = parse("graph: s.md on HEAD\nT1     done\n").expect("a report");
-        let board = Board::assemble(&status, &[], &mut Runs::default(), Timestamp::default());
+        let board = Board::assemble(
+            &status,
+            &crate::graph::Graph::default(),
+            &mut Runs::default(),
+            Timestamp::default(),
+        );
 
         let text = super::once(&board, Timestamp::default());
 
@@ -597,6 +816,166 @@ mod tests {
         assert!(text.ends_with('\n'), "the last row had no line ending");
     }
 
+    // ── 11-T2
+
+    use crate::layout::Columns;
+    use crate::run::RunView;
+    use crate::theme::Theme;
+    use ratatui::style::Style;
+
+    /// The theme the rows below are composed through: colours on, glyphs
+    /// drawable. Said outright rather than read from the process, which is
+    /// the whole reason the theme is a value.
+    const THEME: Theme = Theme::new(true, false);
+
+    /// What a line reads as text, which is what a column's arithmetic shows
+    /// up in.
+    fn text(line: &ratatui::text::Line<'_>) -> String {
+        line.spans.iter().map(|span| span.content.as_ref()).collect()
+    }
+
+    /// The style one cell of a line is drawn in.
+    fn style_at(line: &ratatui::text::Line<'_>, column: usize) -> Style {
+        let mut seen = 0;
+        for span in &line.spans {
+            seen += usize::from(super::wide(&span.content));
+            if seen > column {
+                return span.style;
+            }
+        }
+        Style::default()
+    }
+
+    #[test]
+    fn a_column_is_padded_when_it_is_short_and_cut_when_it_is_long() {
+        let plain = |text: &str| (text.to_string(), Style::default());
+
+        // Padded to its place, so the column after it begins where the
+        // table says whatever this one holds.
+        assert_eq!(
+            super::column(&[plain("qa")], 7, "…")
+                .iter()
+                .map(|span| span.content.to_string())
+                .collect::<Vec<_>>(),
+            ["qa", "     "],
+        );
+        // And cut where the column ends, with the mark the theme owns —
+        // across as many pieces as it takes, so a piece that starts past
+        // the edge is not drawn at all.
+        let cut = super::column(&[plain("b33e05f"), plain(" +4 ~2")], 9, "…");
+        assert_eq!(
+            cut.iter().map(|span| span.content.to_string()).collect::<Vec<_>>(),
+            ["b33e05f", " …"],
+        );
+        assert_eq!(
+            super::column(&[plain("b33e05f"), plain(" +4")], 7, "...")
+                .iter()
+                .map(|span| span.content.to_string())
+                .collect::<Vec<_>>(),
+            ["b33e05f"],
+            "a column that ends exactly where a piece does has nothing to cut",
+        );
+    }
+
+    /// One row's first line, drawn through the live columns for a board
+    /// this wide.
+    fn drawn(row: &Row, width: u16) -> String {
+        let cols = Columns::live(width, crate::layout::widest_state([row.state.as_str()]));
+        text(&super::lines(row, &cols, &THEME, Timestamp::default(), false, false)[0])
+    }
+
+    #[test]
+    fn a_row_with_no_run_shows_empty_live_columns() {
+        // Given T5 is ready
+        let row = Row {
+            id: "T5".to_string(),
+            state: "ready".to_string(),
+            log: None,
+            run: None,
+            branch: None,
+            title: None,
+        };
+
+        // When the board renders
+        let line = drawn(&row, 118);
+
+        // Then its STAGE, MODEL, CONTEXT, TOKENS and COMMIT columns are blank
+        assert_eq!(line.trim_end(), "  T5   ◇ ready");
+        assert_eq!(
+            super::wide(&line),
+            118,
+            "the row is not the width of the panel it is drawn in",
+        );
+        // And nothing was written where a run's columns would have been —
+        // the dash is `--once`'s answer, and a board of done rows padded
+        // with it is what this spec was written against.
+        assert!(!line.contains('—'));
+    }
+
+    #[test]
+    fn a_state_the_board_does_not_recognise_still_gets_a_row() {
+        // Given keeler-status printed a word the theme has no entry for
+        let row = Row {
+            id: "T1".to_string(),
+            state: "sulking".to_string(),
+            log: None,
+            run: None,
+            branch: None,
+            title: None,
+        };
+
+        // When the board renders
+        let cols = Columns::live(118, 17);
+        let line = &super::lines(&row, &cols, &THEME, Timestamp::default(), false, false)[0];
+
+        // Then the row shows "?" and the word, in the text colour
+        assert!(text(line).starts_with("  T1   ? sulking"));
+        assert_eq!(style_at(line, 7), Style::new().fg(crate::theme::TEXT));
+    }
+
+    #[test]
+    fn a_paused_tasks_second_line_says_how_to_resume() {
+        // Given T8 is paused
+        let row = Row {
+            id: "T8".to_string(),
+            state: "paused".to_string(),
+            log: None,
+            run: None,
+            branch: None,
+            title: None,
+        };
+
+        // When the board renders
+        let cols = Columns::live(60, 17);
+        let lines = super::lines(&row, &cols, &THEME, Timestamp::default(), false, false);
+
+        // Then the line under T8's row reads "    └─ resume: R"
+        assert_eq!(lines.len(), 2);
+        assert_eq!(text(&lines[1]).trim_end(), "    └─ resume: R");
+    }
+
+    #[test]
+    fn a_live_row_that_has_nothing_to_say_underneath_says_nothing() {
+        // A running task whose stream has not reached a tool call yet —
+        // the connector alone would be a line about the board rather than
+        // about the run.
+        let row = Row {
+            id: "T1".to_string(),
+            state: "running".to_string(),
+            log: None,
+            run: Some(RunView::default()),
+            branch: None,
+            title: None,
+        };
+
+        let cols = Columns::live(60, 17);
+
+        assert_eq!(
+            super::lines(&row, &cols, &THEME, Timestamp::default(), false, false).len(),
+            1,
+        );
+    }
+
     #[test]
     fn the_pane_shows_a_task_that_has_neither_a_run_nor_a_branch() {
         let row = Row {
@@ -605,6 +984,7 @@ mod tests {
             log: None,
             run: None,
             branch: None,
+            title: None,
         };
 
         assert_eq!(super::detail(&row), ["T1 — not spawned"]);

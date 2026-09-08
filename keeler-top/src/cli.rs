@@ -241,7 +241,12 @@ mod tests {
 
         let status = crate::status::parse("graph: s.md on HEAD\nT1     done\n").expect("a report");
         let now = Timestamp::default();
-        let board = Board::assemble(&status, &[], &mut Runs::default(), now);
+        let board = Board::assemble(
+            &status,
+            &crate::graph::Graph::default(),
+            &mut Runs::default(),
+            now,
+        );
 
         // `--once` is the frame, wherever stdout goes: it is what a script
         // asked for, and a terminal does not make it something else.
