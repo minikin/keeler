@@ -149,9 +149,9 @@ fn title_of(line: &str) -> Option<(String, String)> {
 /// heading, a term being defined — and a title read off one of those would
 /// put a stranger's words in a row nobody could trace them from.
 fn task_id(word: &str) -> bool {
-    word
-        .strip_prefix('T')
-        .is_some_and(|number| !number.is_empty() && number.chars().all(|digit| digit.is_ascii_digit()))
+    word.strip_prefix('T').is_some_and(|number| {
+        !number.is_empty() && number.chars().all(|digit| digit.is_ascii_digit())
+    })
 }
 
 /// Reads the script's report.

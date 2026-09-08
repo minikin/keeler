@@ -1798,7 +1798,7 @@ fn painted(board: &Board, width: u16, height: u16) -> Terminal<TestBackend> {
     let mut terminal =
         Terminal::new(TestBackend::new(width, height)).expect("a terminal to draw on");
     terminal
-        .draw(|frame| render(frame, board, &THEME, now(NOON)))
+        .draw(|frame| render(frame, board, THEME, now(NOON)))
         .expect("the board drew a frame");
     terminal
 }
@@ -1830,10 +1830,10 @@ fn under_of<'a>(frame: &'a [String], id: &str) -> &'a str {
         .iter()
         .position(|line| *line == row)
         .expect("the row this is under is in the frame");
-    frame
-        .get(index + 1)
-        .map(String::as_str)
-        .unwrap_or_else(|| panic!("nothing under {id}'s row in:\n{}", frame.join("\n")))
+    frame.get(index + 1).map_or_else(
+        || panic!("nothing under {id}'s row in:\n{}", frame.join("\n")),
+        String::as_str,
+    )
 }
 
 /// The board's binary, run the way `keeler keeler-top` runs it: the plugin
@@ -2177,7 +2177,10 @@ fn a_landed_feature_whose_branch_is_gone_still_renders() {
     for (index, id) in ["T1", "T2"].into_iter().enumerate() {
         let row = row_of(&frame, id);
         assert!(row.contains("done"), "{id} lost its state: {row:?}");
-        assert!(!row.contains('—'), "the frame padded a row with dashes: {row:?}");
+        assert!(
+            !row.contains('—'),
+            "the frame padded a row with dashes: {row:?}"
+        );
         assert_eq!(cells(&board.rows[index], now(NOON))[8], "—");
     }
 

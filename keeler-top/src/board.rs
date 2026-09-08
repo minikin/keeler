@@ -281,12 +281,7 @@ pub struct Board {
 impl Board {
     /// One tick's board, from the two reads and the streams.
     #[must_use]
-    pub fn assemble(
-        status: &Status,
-        graph: &Graph,
-        runs: &mut Runs,
-        answered: Timestamp,
-    ) -> Self {
+    pub fn assemble(status: &Status, graph: &Graph, runs: &mut Runs, answered: Timestamp) -> Self {
         let rows = status
             .tasks
             .iter()
@@ -361,18 +356,17 @@ impl Board {
         !self.rows.is_empty() && self.rows.iter().all(|row| row.state == DONE)
     }
 
-    /// The rows in the order the board draws them.
+    /// The rows in the order the board draws them, each with where the
+    /// report put it.
     #[must_use]
-    pub fn ordered(&self) -> Vec<&Row> {
-        order(&self.rows)
-            .into_iter()
-            .filter_map(|index| self.rows.get(index))
-            .collect()
+    pub fn ordered(&self) -> Vec<(usize, &Row)> {
+        ordered(&self.rows)
     }
 }
 
-/// The rows' indices in the order a watcher asks for them: what needs a
-/// human first, then what is running, then what is left.
+/// The rows in the order a watcher asks for them — what needs a human
+/// first, then what is running, then what is left — each paired with where
+/// the report put it, which is what the selection is counted in.
 ///
 /// The group is the state table's, and within a group the report's order
 /// holds — which is the spec's order, and the one order the person reading
@@ -380,21 +374,28 @@ impl Board {
 /// `T10` sorts before `T2` as text and after it as a number, and the report
 /// has already answered the question.
 #[must_use]
+pub fn ordered(rows: &[Row]) -> Vec<(usize, &Row)> {
+    let mut ordered: Vec<(usize, &Row)> = rows.iter().enumerate().collect();
+    ordered.sort_by_key(|(_, row)| Theme::group(&row.state));
+    ordered
+}
+
+/// The same order, as the report's own indices — which is what a test about
+/// the order itself reads.
+#[must_use]
 pub fn order(rows: &[Row]) -> Vec<usize> {
-    let mut order: Vec<usize> = (0..rows.len()).collect();
-    order.sort_by_key(|index| rows.get(*index).map_or(u8::MAX, |row| Theme::group(&row.state)));
-    order
+    ordered(rows).into_iter().map(|(index, _)| index).collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::{Board, Row, Runs, state_column};
     use crate::clock::Timestamp;
-    use crate::theme::Theme;
     use crate::git::{BranchFacts, Commit};
     use crate::graph::{GraphLine, GraphState};
     use crate::run::RunView;
     use crate::status::{StatusLine, parse};
+    use crate::theme::Theme;
 
     fn graph(state: GraphState, needs: &[&str]) -> GraphLine {
         GraphLine {
@@ -787,10 +788,13 @@ mod tests {
 
     /// A board over a report of nothing but states.
     fn board_of(states: &[(&str, &str)]) -> Board {
-        let mut report = "graph: s.md on HEAD\n".to_string();
-        for (id, state) in states {
-            report.push_str(&format!("{id:<6} {state}\n"));
-        }
+        let report: String = std::iter::once("graph: s.md on HEAD\n".to_string())
+            .chain(
+                states
+                    .iter()
+                    .map(|(id, state)| format!("{id:<6} {state}\n")),
+            )
+            .collect();
         Board::assemble(
             &parse(&report).expect("a report"),
             &crate::graph::Graph::default(),
@@ -822,7 +826,7 @@ mod tests {
             board_of(&[("T1", "done"), ("T2", "running")])
                 .ordered()
                 .into_iter()
-                .map(|row| row.id.as_str())
+                .map(|(_, row)| row.id.as_str())
                 .collect::<Vec<_>>(),
             ["T2", "T1"],
         );

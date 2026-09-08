@@ -212,7 +212,7 @@ const RESUME: &str = "resume: R";
 pub fn lines(
     row: &Row,
     cols: &Columns,
-    theme: &Theme,
+    theme: Theme,
     now: Timestamp,
     selected: bool,
     compact: bool,
@@ -228,7 +228,7 @@ pub fn lines(
 fn cells_of(
     row: &Row,
     cols: &Columns,
-    theme: &Theme,
+    theme: Theme,
     selected: bool,
     compact: bool,
 ) -> Vec<Span<'static>> {
@@ -236,7 +236,16 @@ fn cells_of(
     let mut spans = Vec::new();
     let last = cols.fields().len().saturating_sub(1);
     for (index, (field, place)) in cols.fields().iter().enumerate() {
-        let pieces = pieces(row, *field, place.width, theme, look, cols.finished(), compact, selected);
+        let pieces = pieces(
+            row,
+            *field,
+            place.width,
+            theme,
+            look,
+            cols.finished(),
+            compact,
+            selected,
+        );
         spans.extend(column(&pieces, place.width, theme.ellipsis()));
         // The marker carries its own trailing space, and the last column
         // has nothing after it to be separated from.
@@ -258,7 +267,7 @@ fn pieces(
     row: &Row,
     field: Field,
     width: u16,
-    theme: &Theme,
+    theme: Theme,
     look: crate::theme::Look,
     finished: bool,
     compact: bool,
@@ -276,7 +285,10 @@ fn pieces(
         Field::Context => context(row, theme),
         // Right-aligned, because it is read beside the number above it.
         Field::Tokens => vec![(
-            right(&said(row, RunView::tokens_column).unwrap_or_default(), width),
+            right(
+                &said(row, RunView::tokens_column).unwrap_or_default(),
+                width,
+            ),
             theme.style(TEXT),
         )],
         Field::Commit => commit(row, theme),
@@ -285,7 +297,7 @@ fn pieces(
 }
 
 /// What marks the selected row, and the nothing every other row gets.
-fn marker(theme: &Theme, selected: bool) -> String {
+fn marker(theme: Theme, selected: bool) -> String {
     if selected {
         theme.marker().to_string()
     } else {
@@ -307,13 +319,13 @@ fn said(row: &Row, column: fn(&RunView) -> String) -> Option<String> {
 }
 
 /// A column with one piece in it, in the ordinary text colour.
-fn plain(text: Option<String>, theme: &Theme) -> Vec<(String, Style)> {
+fn plain(text: Option<String>, theme: Theme) -> Vec<(String, Style)> {
     vec![(text.unwrap_or_default(), theme.style(TEXT))]
 }
 
 /// The context column: the bar in its two halves, then the share as a
 /// number with the flag slot after it.
-fn context(row: &Row, theme: &Theme) -> Vec<(String, Style)> {
+fn context(row: &Row, theme: Theme) -> Vec<(String, Style)> {
     let Some(percent) = row.run.as_ref().and_then(RunView::context_percent) else {
         return Vec::new();
     };
@@ -321,13 +333,16 @@ fn context(row: &Row, theme: &Theme) -> Vec<(String, Style)> {
     vec![
         (bar.filled, bar.fill),
         (bar.empty, bar.track),
-        (format!(" {}", Theme::percentage(percent)), theme.style(TEXT)),
+        (
+            format!(" {}", Theme::percentage(percent)),
+            theme.style(TEXT),
+        ),
     ]
 }
 
 /// The commit column: the branch's head, how far ahead it is, and what is
 /// not committed — the dirty count only when there is one.
-fn commit(row: &Row, theme: &Theme) -> Vec<(String, Style)> {
+fn commit(row: &Row, theme: Theme) -> Vec<(String, Style)> {
     let Some(branch) = &row.branch else {
         return Vec::new();
     };
@@ -344,7 +359,7 @@ fn commit(row: &Row, theme: &Theme) -> Vec<(String, Style)> {
 /// The last column: what the spec calls the task, what landed on a finished
 /// board — or, on a row collapsed to one line, the tool that row's second
 /// line would have named.
-fn title(row: &Row, theme: &Theme, finished: bool, compact: bool) -> Vec<(String, Style)> {
+fn title(row: &Row, theme: Theme, finished: bool, compact: bool) -> Vec<(String, Style)> {
     if compact && row.live() {
         return plain(said(row, RunView::tool_column), theme);
     }
@@ -358,7 +373,7 @@ fn title(row: &Row, theme: &Theme, finished: bool, compact: bool) -> Vec<(String
 /// Nothing at all for a row with nothing to put there — a closed task, or a
 /// running one whose stream has not reached a tool call yet. A connector
 /// with an empty line after it would be the board reporting on itself.
-fn under(row: &Row, cols: &Columns, theme: &Theme, now: Timestamp) -> Option<Line<'static>> {
+fn under(row: &Row, cols: &Columns, theme: Theme, now: Timestamp) -> Option<Line<'static>> {
     let pieces = if row.state == PAUSED {
         vec![(RESUME.to_string(), theme.style(TEXT))]
     } else if row.running() {
@@ -390,7 +405,7 @@ fn under(row: &Row, cols: &Columns, theme: &Theme, now: Timestamp) -> Option<Lin
 
 /// The tool a running row names under it: what was called, and what it was
 /// called on.
-fn tool(row: &Row, theme: &Theme) -> Option<Vec<(String, Style)>> {
+fn tool(row: &Row, theme: Theme) -> Option<Vec<(String, Style)>> {
     let call = row.run.as_ref()?.last_tool.as_ref()?;
     let mut pieces = vec![(call.name.clone(), theme.style(CYAN))];
     if !call.detail.is_empty() {
@@ -513,7 +528,7 @@ pub fn once(board: &Board, now: Timestamp) -> String {
 const BORDERS: u16 = 2;
 
 /// Draws one frame.
-pub fn render(frame: &mut ratatui::Frame, board: &Board, theme: &Theme, now: Timestamp) {
+pub fn render(frame: &mut ratatui::Frame, board: &Board, theme: Theme, now: Timestamp) {
     let area = frame.area();
     let rows = table(board, theme, now, area.width.saturating_sub(BORDERS));
     let panes = layout(area, rows.len());
@@ -538,13 +553,10 @@ fn inside(area: Rect) -> Rect {
 /// The tasks table: the heading, then every task's lines, in the order the
 /// board puts its rows in.
 #[must_use]
-pub fn table(board: &Board, theme: &Theme, now: Timestamp, width: u16) -> Vec<Line<'static>> {
+pub fn table(board: &Board, theme: Theme, now: Timestamp, width: u16) -> Vec<Line<'static>> {
     let cols = columns_of(board, width);
     let mut drawn = vec![Line::styled(cols.header(), theme.style(DIM))];
-    for index in crate::board::order(&board.rows) {
-        let Some(row) = board.rows.get(index) else {
-            continue;
-        };
+    for (index, row) in crate::board::ordered(&board.rows) {
         drawn.extend(lines(
             row,
             &cols,
@@ -831,19 +843,22 @@ mod tests {
     /// What a line reads as text, which is what a column's arithmetic shows
     /// up in.
     fn text(line: &ratatui::text::Line<'_>) -> String {
-        line.spans.iter().map(|span| span.content.as_ref()).collect()
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect()
     }
 
     /// The style one cell of a line is drawn in.
     fn style_at(line: &ratatui::text::Line<'_>, column: usize) -> Style {
         let mut seen = 0;
-        for span in &line.spans {
-            seen += usize::from(super::wide(&span.content));
-            if seen > column {
-                return span.style;
-            }
-        }
-        Style::default()
+        line.spans
+            .iter()
+            .find_map(|span| {
+                seen += usize::from(super::wide(&span.content));
+                (seen > column).then_some(span.style)
+            })
+            .expect("the cell asked about is inside the line")
     }
 
     #[test]
@@ -864,7 +879,9 @@ mod tests {
         // the edge is not drawn at all.
         let cut = super::column(&[plain("b33e05f"), plain(" +4 ~2")], 9, "…");
         assert_eq!(
-            cut.iter().map(|span| span.content.to_string()).collect::<Vec<_>>(),
+            cut.iter()
+                .map(|span| span.content.to_string())
+                .collect::<Vec<_>>(),
             ["b33e05f", " …"],
         );
         assert_eq!(
@@ -881,7 +898,7 @@ mod tests {
     /// this wide.
     fn drawn(row: &Row, width: u16) -> String {
         let cols = Columns::live(width, crate::layout::widest_state([row.state.as_str()]));
-        text(&super::lines(row, &cols, &THEME, Timestamp::default(), false, false)[0])
+        text(&super::lines(row, &cols, THEME, Timestamp::default(), false, false)[0])
     }
 
     #[test]
@@ -926,7 +943,7 @@ mod tests {
 
         // When the board renders
         let cols = Columns::live(118, 17);
-        let line = &super::lines(&row, &cols, &THEME, Timestamp::default(), false, false)[0];
+        let line = &super::lines(&row, &cols, THEME, Timestamp::default(), false, false)[0];
 
         // Then the row shows "?" and the word, in the text colour
         assert!(text(line).starts_with("  T1   ? sulking"));
@@ -947,11 +964,53 @@ mod tests {
 
         // When the board renders
         let cols = Columns::live(60, 17);
-        let lines = super::lines(&row, &cols, &THEME, Timestamp::default(), false, false);
+        let lines = super::lines(&row, &cols, THEME, Timestamp::default(), false, false);
 
         // Then the line under T8's row reads "    └─ resume: R"
         assert_eq!(lines.len(), 2);
         assert_eq!(text(&lines[1]).trim_end(), "    └─ resume: R");
+    }
+
+    #[test]
+    fn a_row_collapsed_to_one_line_shows_its_tool_where_its_title_goes() {
+        // The second line is what a compact row gives up, and the tool is
+        // what it was carrying — so it moves into the title's column rather
+        // than off the board. Which rows are collapsed, and when, is the
+        // panel's question and not this one's.
+        let row = Row {
+            id: "T3".to_string(),
+            state: "running".to_string(),
+            log: None,
+            run: Some(RunView {
+                last_tool: Some(crate::run::ToolCall {
+                    id: "toolu_1".to_string(),
+                    name: "Bash".to_string(),
+                    detail: "just dev".to_string(),
+                    at: None,
+                }),
+                ..RunView::default()
+            }),
+            branch: None,
+            title: Some("The fold reads the tool".to_string()),
+        };
+        let cols = Columns::live(118, 17);
+
+        let compact = super::lines(&row, &cols, THEME, Timestamp::default(), false, true);
+
+        assert_eq!(compact.len(), 1, "a collapsed row kept its second line");
+        assert!(
+            text(&compact[0]).trim_end().ends_with("Bash: just dev"),
+            "{:?}",
+            text(&compact[0]),
+        );
+        // And expanded it is the title again, with the tool underneath.
+        let expanded = super::lines(&row, &cols, THEME, Timestamp::default(), false, false);
+        assert_eq!(expanded.len(), 2);
+        assert!(
+            text(&expanded[0])
+                .trim_end()
+                .ends_with("The fold reads the tool"),
+        );
     }
 
     #[test]
@@ -971,7 +1030,7 @@ mod tests {
         let cols = Columns::live(60, 17);
 
         assert_eq!(
-            super::lines(&row, &cols, &THEME, Timestamp::default(), false, false).len(),
+            super::lines(&row, &cols, THEME, Timestamp::default(), false, false).len(),
             1,
         );
     }

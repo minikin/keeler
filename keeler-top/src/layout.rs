@@ -13,9 +13,6 @@
 //! takes the widest state on the board when that is wider than the table's
 //! seventeen, and every later column moves right by the difference.
 
-use ratatui::style::Style;
-use ratatui::text::Span;
-
 /// The columns of a row, in the order they are drawn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Field {
@@ -244,7 +241,7 @@ pub fn widest_state<'a>(states: impl IntoIterator<Item = &'a str>) -> u16 {
     states
         .into_iter()
         .map(state_cells)
-        .fold(STATE, |widest, cells| widest.max(cells))
+        .fold(STATE, std::cmp::Ord::max)
 }
 
 /// How many of the terminal's columns a string takes up.
@@ -310,12 +307,6 @@ pub fn right(text: &str, width: u16) -> String {
     format!("{}{cell}", " ".repeat(padding))
 }
 
-/// One column's text as a span, padded to its place.
-#[must_use]
-pub fn cell(text: &str, place: Place, style: Style) -> Span<'static> {
-    Span::styled(left(text, place.width), style)
-}
-
 #[cfg(test)]
 mod tests {
     use super::{Columns, Field, Place, cut, state_cells, widest_state};
@@ -363,7 +354,13 @@ mod tests {
         let columns = Columns::live(138, widest_state(["running", state, "done"]));
 
         assert_eq!(state_cells(state), 47);
-        assert_eq!(columns.place(Field::State), Some(Place { start: 7, width: 47 }));
+        assert_eq!(
+            columns.place(Field::State),
+            Some(Place {
+                start: 7,
+                width: 47
+            })
+        );
         for (field, start) in [
             (Field::Stage, 55),
             (Field::Model, 63),
@@ -436,8 +433,19 @@ mod tests {
         // not wrap round on the way there.
         let columns = Columns::live(20, 17);
 
-        assert_eq!(columns.place(Field::Title), Some(Place { start: 79, width: 0 }));
-        assert_eq!(Columns::live(0, u16::MAX).place(Field::Title).map(|place| place.width), Some(0));
+        assert_eq!(
+            columns.place(Field::Title),
+            Some(Place {
+                start: 79,
+                width: 0
+            })
+        );
+        assert_eq!(
+            Columns::live(0, u16::MAX)
+                .place(Field::Title)
+                .map(|place| place.width),
+            Some(0)
+        );
     }
 
     #[test]
@@ -457,10 +465,7 @@ mod tests {
 
     #[test]
     fn a_cell_is_padded_to_its_column_from_whichever_side_it_is_read() {
-        let place = Place {
-            start: 0,
-            width: 6,
-        };
+        let place = Place { start: 0, width: 6 };
 
         assert_eq!(super::left("12.1M", place.width), "12.1M ");
         assert_eq!(super::right("12.1M", place.width), " 12.1M");
@@ -496,7 +501,7 @@ mod tests {
             for (field, place) in columns.fields() {
                 if place.start > state.start {
                     proptest::prop_assert!(
-                        place.start >= state.start + state.width + 1,
+                        place.start > state.start + state.width,
                         "{field:?} starts inside the state column",
                     );
                 }

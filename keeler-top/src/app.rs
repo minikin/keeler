@@ -320,7 +320,7 @@ impl App {
         // pass is one. A board that went still and said nothing is one whose
         // watcher presses R again.
         self.says(Some(format!("keeler-top: resuming {id}…")));
-        surface.draw(&self.board, &self.theme, now)?;
+        surface.draw(&self.board, self.theme, now)?;
         let (Ok(said) | Err(said)) = self.dispatch.resume(&id);
         self.says(Some(sentence(&said)));
         Ok(())
@@ -539,7 +539,7 @@ pub trait Surface {
     /// # Errors
     ///
     /// Whatever the terminal refused.
-    fn draw(&mut self, board: &Board, theme: &Theme, now: Timestamp) -> Result<(), String>;
+    fn draw(&mut self, board: &Board, theme: Theme, now: Timestamp) -> Result<(), String>;
 
     /// Hands the terminal to something else for as long as `body` runs, and
     /// takes it back after.
@@ -551,7 +551,7 @@ pub trait Surface {
 }
 
 impl<B: Backend> Surface for Terminal<B> {
-    fn draw(&mut self, board: &Board, theme: &Theme, now: Timestamp) -> Result<(), String> {
+    fn draw(&mut self, board: &Board, theme: Theme, now: Timestamp) -> Result<(), String> {
         Terminal::draw(self, |frame| crate::frame::render(frame, board, theme, now))
             .map(drop)
             .map_err(|err| format!("keeler-top: drawing the board: {err}"))
@@ -587,7 +587,7 @@ impl<S: Screen, B: Backend> Live<S, B> {
 }
 
 impl<S: Screen, B: Backend> Surface for Live<S, B> {
-    fn draw(&mut self, board: &Board, theme: &Theme, now: Timestamp) -> Result<(), String> {
+    fn draw(&mut self, board: &Board, theme: Theme, now: Timestamp) -> Result<(), String> {
         Surface::draw(&mut self.terminal, board, theme, now)
     }
 
@@ -722,7 +722,7 @@ pub fn step(
     if feed.due(now) {
         feed.ask();
     }
-    surface.draw(&app.board, &app.theme, now)?;
+    surface.draw(&app.board, app.theme, now)?;
     let woke = events.next(TICK)?;
     if tick_due(woke, now.seconds_since(app.ticked)) {
         app.tick(now);
@@ -1179,7 +1179,7 @@ mod tests {
     struct Frames(Vec<Board>);
 
     impl Surface for Frames {
-        fn draw(&mut self, board: &Board, _theme: &Theme, _now: Timestamp) -> Result<(), String> {
+        fn draw(&mut self, board: &Board, _theme: Theme, _now: Timestamp) -> Result<(), String> {
             self.0.push(board.clone());
             Ok(())
         }
@@ -1523,13 +1523,13 @@ mod tests {
             Terminal::new(ratatui::backend::TestBackend::new(60, 6)).expect("a terminal"),
             Guard::new(Blind).expect("the blind screen entered"),
         );
-        live.draw(&board, &THEME, now).expect("a frame");
+        live.draw(&board, THEME, now).expect("a frame");
         assert!(!blank(&live.terminal));
 
         // What tmux left behind, in the one form a test backend has for it.
         live.terminal.backend_mut().clear().expect("the backend");
         live.away(&mut || {}).expect("the blind screen");
-        live.draw(&board, &THEME, now).expect("a frame");
+        live.draw(&board, THEME, now).expect("a frame");
 
         assert!(
             !blank(&live.terminal),
@@ -1545,7 +1545,7 @@ mod tests {
             Terminal::new(ratatui::backend::TestBackend::new(20, 3)).expect("a terminal");
         let board = app(RUNNING).board;
         let now = Timestamp::from_epoch_seconds(1_000);
-        Surface::draw(&mut terminal, &board, &THEME, now).expect("a frame");
+        Surface::draw(&mut terminal, &board, THEME, now).expect("a frame");
         let mut ran = false;
 
         Surface::away(&mut terminal, &mut || ran = true).expect("a terminal that answers");
