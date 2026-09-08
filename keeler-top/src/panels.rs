@@ -8,23 +8,27 @@
 //! glyph per task, in the order the report gave them, with the keys the
 //! board answers to against the same edge.
 //!
-//! The tasks panel is the rows, which `frame.rs` composes, and the detail
-//! panel is one row in full. What is here is the panel neither of those is:
-//! the one about the wave rather than about a task.
+//! The tasks panel is here too, and it is a panel and not a list: the rows
+//! are `frame.rs`'s, but which of them are drawn, on how many lines each,
+//! and where the drawing starts are questions about the box they go in.
+//! [`tasks`] answers all three — [`collapse`] and [`scrolled`] are the two
+//! decisions inside it, and each is a function of numbers with a test of
+//! its own. The detail panel is one row in full, which is somewhere else
+//! again.
 //!
 //! **What the lines say is decided apart from what they look like.**
 //! [`counts`], [`needing`], [`naming`], [`strip`] and [`hints`] are the
 //! reading; the spans built around them are the paint. Each is a function
 //! of the rows alone and has a test of its own, because a suite that
 //! asserted only on the drawn frame would be reading the arithmetic through
-//! the paint. None of them leaves this module — [`wave`] and [`title`] are
-//! the whole of what a frame asks the panel for.
+//! the paint. None of them leaves this module — [`wave`], [`tasks`] and
+//! [`title`] are the whole of what a frame asks the panels for.
 
 use ratatui::text::{Line, Span};
 
 use crate::board::{Board, Row};
 use crate::clock::Timestamp;
-use crate::layout::wide;
+use crate::layout::{Columns, wide};
 use crate::theme::{BLUE, DIM, GREEN, NEEDS_YOU, TEXT, Theme};
 
 /// What stands between two readings on a header line.
@@ -60,6 +64,12 @@ const FAILED: &str = "failed";
 /// What a board with nothing left to run has to say.
 const FINISHED: &str = "the feature is finished here — land it on main";
 
+/// What `z` does to a board whose rows are two-line, and what it does to
+/// one whose rows are not. One key, and the hint names the half of it the
+/// board is not in.
+const COMPACT: &str = "compact";
+const EXPAND: &str = "expand";
+
 /// The keys the board answers to, and what each of them does.
 const HINTS: [(&str, &str); 7] = [
     ("j/k", "move"),
@@ -67,9 +77,12 @@ const HINTS: [(&str, &str); 7] = [
     ("p", "pause"),
     ("R", "resume"),
     ("r", "refresh"),
-    ("z", "compact"),
+    ("z", COMPACT),
     ("q", "quit"),
 ];
+
+/// Which of them is the one whose word depends on the board it is drawn on.
+const TOGGLE: usize = 5;
 
 /// The three a finished board has a use for: every run is over, so there is
 /// no session to attach, nothing to pause and nothing to resume.
@@ -96,6 +109,134 @@ pub fn title(board: &Board, theme: Theme) -> Vec<Span<'static>> {
 #[must_use]
 pub fn wave(board: &Board, theme: Theme, now: Timestamp, width: u16) -> Vec<Line<'static>> {
     vec![first(board, theme, now, width), second(board, theme, width)]
+}
+
+/// The column heading, which takes a row of the panel like any other.
+const HEADING: usize = 1;
+
+/// The tasks panel: the heading, and as much of the board as `height` rows
+/// hold, wound so that the watched task is among them.
+///
+/// `height` is the panel's inner height, the heading's line included and
+/// its borders excluded — and it is the tallest the panel could be rather
+/// than the height it ends up with. The two are the same number whenever it
+/// matters: a panel shorter than that is one the detail pane has already
+/// been dropped from, and one taller has room for every line there is.
+#[must_use]
+pub fn tasks(
+    board: &Board,
+    cols: &Columns,
+    theme: Theme,
+    now: Timestamp,
+    height: u16,
+) -> Vec<Line<'static>> {
+    let room = usize::from(height).saturating_sub(HEADING);
+    let expanded = drawn(board, cols, theme, now, Collapse::None);
+    let collapse = collapse(board.compact, expanded.rows.len(), room);
+    let Drawn { rows, watched } = if collapse == Collapse::None {
+        expanded
+    } else {
+        drawn(board, cols, theme, now, collapse)
+    };
+    let mut lines = vec![Line::styled(
+        cols.header(theme.ellipsis()),
+        theme.style(DIM),
+    )];
+    lines.extend(
+        rows.into_iter()
+            .skip(scrolled(watched.start, watched.end, room))
+            .take(room),
+    );
+    lines
+}
+
+/// How many of the live rows give up the line under them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Collapse {
+    /// None: every live row says what it is doing underneath itself.
+    None,
+    /// All but the watched one — the panel's own answer when the rows have
+    /// outgrown it. The row somebody is reading keeps its second line
+    /// because what it is doing now is why they are reading it.
+    Crowded,
+    /// Every one of them, which is what `z` asks for: somebody who wants
+    /// the whole wave on one screen wants the watched row on one line too.
+    Whole,
+}
+
+impl Collapse {
+    /// Whether one row is drawn on a line of its own.
+    const fn takes(self, selected: bool) -> bool {
+        match self {
+            Self::None => false,
+            Self::Crowded => !selected,
+            Self::Whole => true,
+        }
+    }
+}
+
+/// The rows as lines, and where among them the watched task's own are.
+struct Drawn {
+    rows: Vec<Line<'static>>,
+    watched: std::ops::Range<usize>,
+}
+
+/// Every task's lines, in the order the board draws them, with the watched
+/// task's marked and painted.
+///
+/// The selection is a report index and the rows are in the board's order, so
+/// the two are compared here rather than counted: what `j` moved is a task,
+/// and where it ends up on the screen is this order's answer.
+fn drawn(board: &Board, cols: &Columns, theme: Theme, now: Timestamp, collapse: Collapse) -> Drawn {
+    let mut rows: Vec<Line<'static>> = Vec::new();
+    let mut watched = 0..0;
+    for (index, row) in crate::board::ordered(&board.rows) {
+        let selected = index == board.selected;
+        let lines = crate::frame::lines(row, cols, theme, now, selected, collapse.takes(selected));
+        if selected {
+            watched = rows.len()..rows.len().saturating_add(lines.len());
+        }
+        rows.extend(lines.into_iter().map(|line| {
+            if selected {
+                // A lighter ground and never reverse video, which would
+                // throw away the colours the row was drawn in.
+                line.style(theme.selection())
+            } else {
+                line
+            }
+        }));
+    }
+    Drawn { rows, watched }
+}
+
+/// How the live rows are drawn: what the watcher asked for with `z`, and
+/// otherwise whether they have outgrown the panel.
+///
+/// The hand answer wins outright, in both directions. A board collapsed by
+/// somebody who wanted the whole wave on one screen must not expand itself
+/// when two tasks finish, and one expanded by somebody reading a tool must
+/// not collapse when a third task starts — it scrolls instead.
+fn collapse(asked: Option<bool>, lines: usize, room: usize) -> Collapse {
+    match asked {
+        Some(true) => Collapse::Whole,
+        None if lines > room => Collapse::Crowded,
+        // A board expanded by hand, and one whose rows the panel has room
+        // for as they are: the same drawing, from two different answers.
+        Some(false) | None => Collapse::None,
+    }
+}
+
+/// Which row the panel starts drawing at, so that the watched task is on it.
+///
+/// Derived per frame and never stored: the offset is only ever about where
+/// the selection is, and a number kept between frames would be a second
+/// answer to disagree with when the rows above it change state and move.
+///
+/// Below the window, the task's last line is the panel's last row; above
+/// it, its first line is the first — which is what the `min` of the two
+/// says, and why one line says both.
+fn scrolled(first: usize, last: usize, room: usize) -> usize {
+    first.min(last.saturating_sub(room))
 }
 
 /// How many tasks are in each of the healthy states, in the state table's
@@ -173,8 +314,13 @@ fn strip(rows: &[Row], theme: Theme, finished: bool) -> Vec<Span<'static>> {
 }
 
 /// The keys the board answers to, as the second line names them.
-fn hints(finished: bool) -> &'static [(&'static str, &'static str)] {
-    if finished { &LANDED_HINTS } else { &HINTS }
+fn hints(finished: bool, compact: bool) -> Vec<(&'static str, &'static str)> {
+    if finished {
+        return LANDED_HINTS.to_vec();
+    }
+    let mut hints = HINTS.to_vec();
+    hints[TOGGLE].1 = if compact { EXPAND } else { COMPACT };
+    hints
 }
 
 /// The first line: the counts, and against the right edge whatever needs a
@@ -197,7 +343,13 @@ fn first(board: &Board, theme: Theme, now: Timestamp, width: u16) -> Line<'stati
 /// is room for both.
 fn second(board: &Board, theme: Theme, width: u16) -> Line<'static> {
     let strip = strip(&board.rows, theme, board.finished());
-    let hinted = hinted(theme, board.finished());
+    // The hint names what the *next press* does, so it reads the same
+    // answer the key does and not how the panel below happened to draw the
+    // rows. A hint taken from the drawing would offer "z expand" on a board
+    // the panel collapsed by itself — where the press expands nothing and
+    // takes the watched row's second line instead — and on a board of
+    // closed rows, which have no second line for either word to be about.
+    let hinted = hinted(theme, board.finished(), board.compact == Some(true));
     // The strip is one cell a task and the hints are the same seven on
     // every board there is: a wave too wide for both keeps the half that is
     // about the wave, and the keys are on the second line of the README.
@@ -252,13 +404,13 @@ fn needed(rows: &[Row], theme: Theme) -> Vec<Span<'static>> {
 
 /// The hints, as they are drawn: the key bright and what it does dim, so
 /// that a line of them reads as keys with words beside them.
-fn hinted(theme: Theme, finished: bool) -> Vec<Span<'static>> {
+fn hinted(theme: Theme, finished: bool, compact: bool) -> Vec<Span<'static>> {
     let mut spans = Vec::new();
-    for (key, does) in hints(finished) {
+    for (key, does) in hints(finished, compact) {
         if !spans.is_empty() {
             spans.push(separator(theme));
         }
-        spans.push(Span::styled(*key, theme.style(TEXT)));
+        spans.push(Span::styled(key, theme.style(TEXT)));
         spans.push(Span::styled(format!(" {does}"), theme.style(DIM)));
     }
     spans
@@ -295,7 +447,7 @@ fn separator(theme: Theme) -> Span<'static> {
 
 #[cfg(test)]
 mod tests {
-    use super::{counts, hints, naming, needing, strip};
+    use super::{Collapse, collapse, counts, hints, naming, needing, scrolled, strip};
     use crate::board::Row;
     use crate::theme::Theme;
 
@@ -471,12 +623,110 @@ mod tests {
         // pause and nothing to resume. `z` still works — it is the hint
         // that goes, not the key.
         assert_eq!(
-            hints(true).iter().map(|(key, _)| *key).collect::<Vec<_>>(),
+            hints(true, false)
+                .iter()
+                .map(|(key, _)| *key)
+                .collect::<Vec<_>>(),
             ["j/k", "r", "q"],
         );
         assert_eq!(
-            hints(false).iter().map(|(key, _)| *key).collect::<Vec<_>>(),
+            hints(false, false)
+                .iter()
+                .map(|(key, _)| *key)
+                .collect::<Vec<_>>(),
             ["j/k", "Enter", "p", "R", "r", "z", "q"],
         );
+    }
+
+    #[test]
+    fn the_toggles_hint_names_the_half_of_it_the_board_is_not_in() {
+        // `z` is one key and two answers, and the hint is what says which of
+        // them the next press gives: a board already collapsed offering
+        // "z compact" would be naming what the watcher is looking at.
+        assert!(hints(false, false).contains(&("z", "compact")));
+        assert!(hints(false, true).contains(&("z", "expand")));
+        // And a finished board offers neither: every run is over, so there
+        // is no second line for either half of the toggle to be about.
+        assert!(!hints(true, true).iter().any(|(key, _)| *key == "z"));
+        // Nothing else on the line moves with it.
+        assert!(hints(false, true).contains(&("p", "pause")));
+    }
+
+    #[test]
+    fn the_rows_collapse_when_they_outgrow_the_panel_and_when_the_watcher_says_so() {
+        // The panel's own rows are the room: a board whose rows fill it
+        // exactly has not outgrown anything.
+        assert_eq!(collapse(None, 7, 7), Collapse::None);
+        assert_eq!(collapse(None, 8, 7), Collapse::Crowded);
+        assert_eq!(collapse(None, 0, 0), Collapse::None);
+        // And `z` is the answer when it has been given, whichever way the
+        // arithmetic would have gone: it is the watcher's board.
+        assert_eq!(collapse(Some(true), 1, 7), Collapse::Whole);
+        assert_eq!(collapse(Some(false), 99, 7), Collapse::None);
+    }
+
+    #[test]
+    fn a_panel_that_collapsed_the_rows_itself_spares_the_one_being_read() {
+        // The two collapses differ in exactly one row. The panel's own is a
+        // board making room; the watcher's is a board being asked for the
+        // whole wave at once, and that includes the row they are on.
+        assert!(!Collapse::None.takes(false));
+        assert!(!Collapse::None.takes(true));
+        assert!(Collapse::Crowded.takes(false));
+        assert!(
+            !Collapse::Crowded.takes(true),
+            "the watched row lost its line"
+        );
+        assert!(Collapse::Whole.takes(false));
+        assert!(Collapse::Whole.takes(true));
+    }
+
+    #[test]
+    fn the_panel_winds_to_keep_the_watched_task_in_view() {
+        // Below the window: the task's last line is the panel's last row.
+        assert_eq!(scrolled(11, 13, 7), 6);
+        // Whole inside it: nothing moves, and the rows are drawn from the
+        // first — a panel that scrolled while its rows fitted would move
+        // the board under somebody reading it.
+        assert_eq!(scrolled(0, 2, 7), 0);
+        assert_eq!(scrolled(5, 7, 7), 0, "the last row that fits scrolled");
+        assert_eq!(scrolled(6, 8, 7), 1);
+        // Above it: the task's first line is the panel's first row.
+        assert_eq!(scrolled(2, 4, 1), 2);
+        // And a panel with room for nothing is laid out rather than
+        // panicking.
+        assert_eq!(scrolled(0, 0, 0), 0);
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig {
+            failure_persistence: Some(Box::new(
+                proptest::test_runner::FileFailurePersistence::WithSource("proptest-regressions"),
+            )),
+            ..proptest::prelude::ProptestConfig::default()
+        })]
+
+        /// The one thing the offset exists for: wherever the watched task's
+        /// lines are among the rows, and however short the panel, they are
+        /// the lines that are drawn.
+        #[test]
+        fn a_task_no_taller_than_the_panel_is_always_drawn_whole(
+            first in 0_usize..200,
+            span in 1_usize..3,
+            room in 1_usize..40,
+        ) {
+            let last = first + span;
+            let from = scrolled(first, last, room.max(span));
+            proptest::prop_assert!(from <= first, "the panel scrolled past the task's first line");
+            proptest::prop_assert!(
+                last <= from + room.max(span),
+                "the task's last line is below the panel's last row",
+            );
+            // And it never winds further than it has to: rows that fit are
+            // drawn from the first.
+            if last <= room.max(span) {
+                proptest::prop_assert_eq!(from, 0);
+            }
+        }
     }
 }
