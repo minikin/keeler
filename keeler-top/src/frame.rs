@@ -15,7 +15,7 @@ use ratatui::widgets::{Block, Paragraph};
 
 use crate::board::{Board, PAUSED, Row};
 use crate::clock::Timestamp;
-use crate::layout::{Bands, Columns, Field, bands, cut, right, wide, widest_state};
+use crate::layout::{Bands, Columns, Field, bands, cut, wide, widest_state};
 use crate::run::{DASH, RunView};
 use crate::theme::{BORDER, CYAN, DIM, GREEN, ORANGE, RED, TEXT, Theme, YELLOW};
 
@@ -284,17 +284,7 @@ fn pieces(
             look.style,
         )],
         Field::Stage => plain(row.run.as_ref().map(|run| run.stage.to_string()), theme),
-        Field::Model => plain(said(row, RunView::model_column), theme),
         Field::Context => context(row, theme, width),
-        // Right-aligned, because it is read beside the number above it.
-        Field::Tokens => vec![(
-            right(
-                &said(row, RunView::tokens_column).unwrap_or_default(),
-                width,
-                theme.ellipsis(),
-            ),
-            theme.style(TEXT),
-        )],
         Field::Commit => commit(row, theme),
         Field::Title => title(row, theme, finished, compact),
     }
@@ -479,13 +469,23 @@ pub struct Panes {
 /// it, so the two numbers stopped being the same one. What the tasks panel
 /// asks for is that plus its own two borders.
 ///
+/// `detail` is how many lines the pane about the selected task holds, or
+/// nothing when there is no task to draw one about.
+///
 /// `bands` is what the terminal has room for, and the height bands are the
 /// order the parts go in: the detail panel first, then the wave panel's
 /// second line, and the tasks panel is what is left — which is why it is
 /// never squeezed below five rows on any window the other two have already
 /// given way on.
+///
+/// **The detail panel is as tall as what it holds, and the tasks panel
+/// takes the rest.** A box of blank lines under four facts is the board
+/// spending the window on nothing while the rows above it scroll, and the
+/// rows are what a watcher came for. A board with no pane under it keeps
+/// hugging its rows: there is nothing below to make room for, and a tall
+/// empty box is the same waste drawn in the other panel.
 #[must_use]
-pub fn layout(area: Rect, lines: usize, bands: &Bands) -> Panes {
+pub fn layout(area: Rect, lines: usize, detail: Option<usize>, bands: &Bands) -> Panes {
     let wanted = u16::try_from(lines)
         .unwrap_or(u16::MAX)
         .saturating_add(BORDERS);
@@ -495,17 +495,39 @@ pub fn layout(area: Rect, lines: usize, bands: &Bands) -> Panes {
         .height
         .saturating_sub(wave_rows.saturating_add(FOOTER_ROWS));
     let roomy = paned(bands, body, wanted);
-    let [wave, tasks, detail, footer] = Layout::vertical([
+    let detail_rows = if roomy {
+        detail.map_or(0, |held| {
+            u16::try_from(held)
+                .unwrap_or(u16::MAX)
+                .saturating_add(BORDERS)
+                .min(body.saturating_sub(wanted))
+        })
+    } else {
+        0
+    };
+    let tasks_rows = if roomy && detail_rows > 0 {
+        body.saturating_sub(detail_rows)
+    } else if roomy {
+        wanted
+    } else {
+        body
+    };
+    // Five segments for four parts: the spare one between the rows and the
+    // pane is what a window taller than the board has to say is left over,
+    // and it is what keeps the footer on the terminal's last line rather
+    // than under whatever the panels happened to want.
+    let [wave, tasks, _spare, pane, footer] = Layout::vertical([
         Constraint::Length(wave_rows),
-        Constraint::Length(if roomy { wanted } else { body }),
+        Constraint::Length(tasks_rows),
         Constraint::Min(0),
+        Constraint::Length(detail_rows),
         Constraint::Length(FOOTER_ROWS),
     ])
     .areas(area);
     Panes {
         wave,
         tasks,
-        detail: roomy.then_some(detail),
+        detail: (detail_rows > 0).then_some(pane),
         footer,
     }
 }
@@ -568,7 +590,13 @@ pub fn render(frame: &mut ratatui::Frame, board: &Board, theme: Theme, now: Time
         .saturating_sub(FOOTER_ROWS)
         .saturating_sub(BORDERS);
     let rows = crate::panels::tasks(board, cols, theme, now, room);
-    let panes = layout(area, rows.len(), &bands);
+    // How tall the pane would like to be, measured before the window is
+    // divided: it is laid out for the most it could ever be given, and the
+    // count is what the panel is then sized to.
+    let held = board
+        .selected_row()
+        .map(|row| crate::detail::pane(row, board.slug(), theme, now, width, room).len());
+    let panes = layout(area, rows.len(), held, &bands);
     frame.render_widget(
         Paragraph::new(crate::panels::wave(board, theme, now, width, bands.wave))
             .block(panel(theme, crate::panels::title(board, theme))),
@@ -595,11 +623,11 @@ pub fn render(frame: &mut ratatui::Frame, board: &Board, theme: Theme, now: Time
             pane,
         );
     }
-    // Yellow, whatever the sentence: every line the board writes here is
-    // something that refused — a lever, or one of the two reads — relayed
-    // in the words whoever has to act on it needs.
+    // The keys, and whatever the last press refused — in yellow, whatever
+    // the sentence: every line the board writes there is something that
+    // refused, relayed in the words whoever has to act on it needs.
     frame.render_widget(
-        Paragraph::new(Line::styled(board.message.clone(), theme.style(YELLOW))),
+        Paragraph::new(crate::panels::footer(board, theme, panes.footer.width)),
         panes.footer,
     );
 }
@@ -849,26 +877,31 @@ mod tests {
         // four and the footer one, so the pane's own six leave nothing over
         // at twenty-four and have it at twenty-five.
         assert_eq!(
-            layout(Rect::new(0, 0, 100, 24), 15, &room(100, 24)).detail,
+            layout(Rect::new(0, 0, 100, 24), 15, Some(6), &room(100, 24)).detail,
             None
         );
         assert!(
-            layout(Rect::new(0, 0, 100, 24), 5, &room(100, 24))
+            layout(Rect::new(0, 0, 100, 24), 5, Some(6), &room(100, 24))
                 .detail
                 .is_some()
         );
         // And the rows never give way to it — on the terminal that has no
         // room, the tasks panel gets everything between the wave and the
         // footer.
-        let cramped = layout(Rect::new(0, 0, 100, 17), 5, &room(100, 17));
+        let cramped = layout(Rect::new(0, 0, 100, 17), 5, Some(6), &room(100, 17));
         assert_eq!(cramped.tasks.height, 12);
         assert_eq!(cramped.wave.height, 4);
         assert_eq!(cramped.footer.height, 1);
-        // A roomy one gives the tasks panel what it asked for and no more:
-        // the rows are drawn at the top of the board, not spread down it.
-        let roomy = layout(Rect::new(0, 0, 100, 40), 5, &room(100, 40));
-        assert_eq!(roomy.tasks.height, 7);
-        assert_eq!(roomy.detail.map(|pane| pane.height), Some(28));
+        // A roomy one gives the pane the six lines it holds and its two
+        // borders, and every line that leaves over goes to the rows.
+        let roomy = layout(Rect::new(0, 0, 100, 40), 5, Some(6), &room(100, 40));
+        assert_eq!(roomy.detail.map(|pane| pane.height), Some(8));
+        assert_eq!(roomy.tasks.height, 27);
+        // And a board with no task to draw a pane about keeps hugging its
+        // rows: there is nothing under them to make room for.
+        let alone = layout(Rect::new(0, 0, 100, 40), 5, None, &room(100, 40));
+        assert_eq!(alone.tasks.height, 7);
+        assert_eq!(alone.detail, None);
     }
 
     #[test]
@@ -876,7 +909,7 @@ mod tests {
         // The panel is its lines and its borders, and the line the height
         // band took from it is a row the tasks panel gets — not a row the
         // frame leaves empty.
-        let short = layout(Rect::new(0, 0, 100, 15), 9, &room(100, 15));
+        let short = layout(Rect::new(0, 0, 100, 15), 9, Some(6), &room(100, 15));
 
         assert_eq!(short.wave.height, 3);
         assert_eq!(short.tasks.height, 11);
@@ -889,11 +922,14 @@ mod tests {
         // Nothing the board can do about a window this size, but ending is
         // not one of the things it may do about it.
         for height in 0..=6 {
-            let panes = layout(Rect::new(0, 0, 20, height), 3, &room(20, height));
+            let panes = layout(Rect::new(0, 0, 20, height), 3, Some(6), &room(20, height));
             assert!(panes.tasks.height <= height);
             assert!(panes.wave.height <= height);
         }
-        assert_eq!(layout(Rect::new(0, 0, 0, 0), 0, &room(0, 0)).detail, None);
+        assert_eq!(
+            layout(Rect::new(0, 0, 0, 0), 0, Some(6), &room(0, 0)).detail,
+            None
+        );
     }
 
     #[test]
