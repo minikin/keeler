@@ -19,6 +19,7 @@ use crate::app::App;
 use crate::board::Board;
 use crate::clock::Timestamp;
 use crate::dispatch::{Dispatch, Shell};
+use crate::theme::Theme;
 
 /// What `keeler keeler-top` hands the binary, and what a person adds after
 /// it.
@@ -97,7 +98,7 @@ fn value(args: &mut impl Iterator<Item = String>, flag: &str) -> Result<PathBuf,
 /// refused — relayed in the words they refused in, because those are the
 /// words written for whoever has to act on them — and last, a stdout that
 /// is not a terminal.
-pub fn main(args: impl IntoIterator<Item = String>) -> Result<(), String> {
+pub fn main(args: impl IntoIterator<Item = String>, theme: Theme) -> Result<(), String> {
     let args = Args::parse(args)?;
     let shell: Arc<dyn Dispatch> = Arc::new(Shell::new(&args.plugin_root, &args.root, &args.spec));
     let report = shell.status()?;
@@ -105,7 +106,14 @@ pub fn main(args: impl IntoIterator<Item = String>) -> Result<(), String> {
         .ok_or_else(|| format!("keeler-top: keeler-status printed no board to read:\n{report}"))?;
     let graph = crate::graph::read(shell.as_ref(), &args.root, &status.git_ref, &status.rel)?;
     let now = Timestamp::now();
-    let mut app = App::new(Arc::clone(&shell), args.root.clone(), status, graph, now);
+    let mut app = App::new(
+        Arc::clone(&shell),
+        args.root.clone(),
+        status,
+        graph,
+        now,
+        theme,
+    );
     match shown(&app.board, now, args.once, std::io::stdout().is_terminal())? {
         Show::Frame(frame) => written(std::io::stdout().write_all(frame.as_bytes())),
         Show::Live => crate::app::run(&mut app, shell),
