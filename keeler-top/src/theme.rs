@@ -205,6 +205,13 @@ const DONE: u8 = 7;
 /// state that carries it, so the frame has to find it again to swap it, and
 /// the finding and the swapping must be looking for the same character.
 const ARROW: &str = "←";
+/// The last group whose tasks need a human: the three that stopped short of
+/// an answer, and the one somebody stopped on purpose.
+///
+/// The line the header divides on. Everything above it is a count of work
+/// going as it should; everything at or below it is named, task by task, in
+/// the half of the line that is empty when there is nothing to do.
+pub const NEEDS_YOU: u8 = 1;
 
 /// The borders a terminal that cannot draw a box gets.
 const ASCII_BORDER: border::Set<'static> = border::Set {
@@ -218,9 +225,15 @@ const ASCII_BORDER: border::Set<'static> = border::Set {
     horizontal_bottom: "-",
 };
 
+/// The word a state is classified by: its first, whatever the recipe wrote
+/// after it.
+fn word_of(state: &str) -> &str {
+    state.split_whitespace().next().unwrap_or_default()
+}
+
 /// A state's row of the table, or the fallback for a word it has none for.
 fn state_of(state: &str) -> &'static State {
-    let word = state.split_whitespace().next().unwrap_or_default();
+    let word = word_of(state);
     STATES
         .iter()
         .find(|entry| entry.word == word)
@@ -325,6 +338,23 @@ impl Theme {
     #[must_use]
     pub fn group(state: &str) -> u8 {
         state_of(state).group
+    }
+
+    /// Which row of the state table a state is on, and one past its last
+    /// row for a word the table has none for.
+    ///
+    /// The group is what the rows are ordered by, and it is deliberately
+    /// coarser than this: three states share group 0. The header names them
+    /// one at a time, so it needs the table's own order — and it needs to
+    /// tell two states apart to count them, which the group cannot do for
+    /// a word it has never heard of.
+    #[must_use]
+    pub fn rank(state: &str) -> usize {
+        let word = word_of(state);
+        STATES
+            .iter()
+            .position(|entry| entry.word == word)
+            .unwrap_or(STATES.len())
     }
 
     /// How many of the bar's eight cells a share fills: an eighth of the

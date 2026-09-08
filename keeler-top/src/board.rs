@@ -324,15 +324,15 @@ impl Board {
             .unwrap_or_default()
     }
 
-    /// The header line: which spec, read from which ref, and how long ago.
+    /// How old `keeler-status`'s answer is.
+    ///
+    /// Shown rather than the answer's own time: the slow read runs on its
+    /// own cadence, and a board whose recipe has stalled must not look like
+    /// a live one. Which spec and which ref the answer was about are the
+    /// wave panel's title; this is the one thing about it that moves.
     #[must_use]
-    pub fn header(&self, now: Timestamp) -> String {
-        format!(
-            "{} on {}   status {}s ago",
-            self.rel,
-            self.git_ref,
-            now.seconds_since(self.answered)
-        )
+    pub fn age(&self, now: Timestamp) -> String {
+        format!("status {}s ago", now.seconds_since(self.answered))
     }
 
     /// The row the detail pane is about, or nothing on a board with no
@@ -973,7 +973,7 @@ mod tests {
     }
 
     #[test]
-    fn the_header_names_the_spec_the_ref_and_the_age_of_the_answer() {
+    fn the_board_names_the_spec_the_ref_and_the_age_of_the_answer() {
         let status = parse("graph: specs/01-foo.md on feat/01-foo\n").expect("a report");
         let answered = Timestamp::from_epoch_seconds(1_000);
         let board = Board::assemble(
@@ -983,10 +983,15 @@ mod tests {
             answered,
         );
 
+        assert_eq!(board.rel, "specs/01-foo.md");
+        assert_eq!(board.git_ref, "feat/01-foo");
         assert_eq!(
-            board.header(Timestamp::from_epoch_seconds(1_004)),
-            "specs/01-foo.md on feat/01-foo   status 4s ago",
+            board.age(Timestamp::from_epoch_seconds(1_004)),
+            "status 4s ago",
         );
+        // Counted from the answer and not from the board's own clock: a
+        // read that never came back must not read as one a second old.
+        assert_eq!(board.age(answered), "status 0s ago");
         // A board with no tasks has no row to be about, and the pane asks
         // rather than indexing.
         assert_eq!(board.selected_row(), None);
