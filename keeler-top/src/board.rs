@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::clock::Timestamp;
-use crate::dispatch::{Dispatch, Exit};
+use crate::dispatch::{Exit, Records};
 use crate::git::{BranchFacts, branch_facts};
 use crate::graph::{Graph, GraphLine, GraphState};
 use crate::run::{DASH, RunView, fold};
@@ -345,12 +345,12 @@ impl Board {
     /// that read them when the selection moved would put a subprocess
     /// between `j` and the frame that answers it.
     #[must_use]
-    pub fn assemble(
+    pub fn assemble<R: Records + ?Sized>(
         status: &Status,
         graph: &Graph,
         runs: &mut Runs,
         answered: Timestamp,
-        dispatch: &dyn Dispatch,
+        records: &R,
     ) -> Self {
         let slug = slug_of(&status.rel);
         let rows = status
@@ -366,8 +366,8 @@ impl Board {
                     spawned_at: run.as_ref().and_then(|view| view.spawned_at),
                     run,
                     title: graph.title(&task.id),
-                    verdict: dispatch.verdict(slug, &task.id, &status.git_ref),
-                    exit: dispatch.exit(slug, &task.id),
+                    verdict: records.verdict(slug, &task.id, &status.git_ref),
+                    exit: records.exit(slug, &task.id),
                     // The distance is measured from the ref the report
                     // answered about, so the commit column and the state column
                     // are about one graph and not two.

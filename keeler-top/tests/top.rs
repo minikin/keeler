@@ -1785,7 +1785,7 @@ fn assemble_read(
     graph: &str,
     spec: &str,
     answered: &str,
-    dispatch: &dyn Dispatch,
+    records: &dyn Records,
 ) -> Board {
     let status =
         keeler_top::status::parse(report).expect("the fixture's report opens with a header");
@@ -1797,7 +1797,7 @@ fn assemble_read(
         },
         &mut Runs::default(),
         now(answered),
-        dispatch,
+        records,
     )
 }
 
@@ -1837,7 +1837,9 @@ impl Dispatch for Unread {
     fn attach(&self, _session: &str, _inside: bool) -> Result<(), String> {
         Err("keeler-top: nothing was asked of this dispatch.".to_string())
     }
+}
 
+impl Records for Unread {
     fn verdict(&self, _slug: &str, _id: &str, _git_ref: &str) -> Option<String> {
         self.verdict.clone()
     }
@@ -2538,7 +2540,7 @@ fn a_narrow_terminal_drops_the_detail_pane_before_it_drops_columns() {
 // ── T6
 
 use keeler_top::app::{Action, App, Events, StatusFeed, TICK, Woke, looping, on_key, step};
-use keeler_top::dispatch::{Dispatch, Exit};
+use keeler_top::dispatch::{Dispatch, Exit, Records};
 use keeler_top::terminal::{Guard, Screen};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::collections::VecDeque;
@@ -2627,9 +2629,11 @@ impl Dispatch for Reads {
     fn attach(&self, session: &str, _inside: bool) -> Result<(), String> {
         panic!("a board about the cadences attached to {session}")
     }
+}
 
-    // Neither read has anything to find: these boards are a wave still
-    // running, whose tasks have written no record and left no exit file.
+/// Neither read has anything to find: these boards are a wave still
+/// running, whose tasks have written no record and left no exit file.
+impl Records for Reads {
     fn verdict(&self, _slug: &str, _id: &str, _git_ref: &str) -> Option<String> {
         None
     }
@@ -3325,9 +3329,11 @@ impl Dispatch for Levers {
         }
         self.attach.clone()
     }
+}
 
-    // The levers are what these scenarios pull; the two file reads are the
-    // pane's, and a board of running tasks has neither to find.
+/// The levers are what these scenarios pull; the two file reads are the
+/// pane's, and a board of running tasks has neither to find.
+impl Records for Levers {
     fn verdict(&self, _slug: &str, _id: &str, _git_ref: &str) -> Option<String> {
         None
     }

@@ -41,6 +41,29 @@ pub struct Exit {
     pub at: Option<Timestamp>,
 }
 
+/// The two files a finished stage leaves beside a run.
+///
+/// A trait of its own, and a supertrait of [`Dispatch`] rather than part of
+/// it, because the two are asked at different moments and by different
+/// things. The levers below are pulled by a keypress; these are read while a
+/// row is being assembled, which is a function of a report and some files —
+/// so `board.rs` asks for this and is handed a whole dispatch by a loop that
+/// has one.
+pub trait Records {
+    /// The word on the `Verdict:` line of a task's review record, or nothing
+    /// where no record has been written yet.
+    ///
+    /// Read from the task's own branch while there is one and from `git_ref`
+    /// once the work has landed — which is where `keeler-status` looks for
+    /// the same file, and for the same reason: before a merge, the record
+    /// exists only on the branch that wrote it.
+    fn verdict(&self, slug: &str, id: &str, git_ref: &str) -> Option<String>;
+
+    /// What a task's run ended with, or nothing while it is still running —
+    /// or once `keeler-land` has taken the run directory with the worktree.
+    fn exit(&self, slug: &str, id: &str) -> Option<Exit>;
+}
+
 /// What the board asks the world for.
 ///
 /// `Send + Sync` because one of these calls runs on a thread: `keeler-status`
@@ -48,7 +71,7 @@ pub struct Exit {
 /// on a thread of its own and collected whenever it answers. Every
 /// implementation is a description of how to run something rather than
 /// something running, so the bound costs nothing to meet.
-pub trait Dispatch: Send + Sync {
+pub trait Dispatch: Records + Send + Sync {
     /// `keeler-status`'s report for the spec the board is watching.
     ///
     /// # Errors
@@ -94,19 +117,6 @@ pub trait Dispatch: Send + Sync {
     /// tmux's own reason — a session that has ended between the report and
     /// the keypress, a tmux that is not installed at all.
     fn attach(&self, session: &str, inside: bool) -> Result<(), String>;
-
-    /// The word on the `Verdict:` line of a task's review record, or nothing
-    /// where no record has been written yet.
-    ///
-    /// Read from the task's own branch while there is one and from `git_ref`
-    /// once the work has landed — which is where `keeler-status` looks for
-    /// the same file, and for the same reason: before a merge, the record
-    /// exists only on the branch that wrote it.
-    fn verdict(&self, slug: &str, id: &str, git_ref: &str) -> Option<String>;
-
-    /// What a task's run ended with, or nothing while it is still running —
-    /// or once `keeler-land` has taken the run directory with the worktree.
-    fn exit(&self, slug: &str, id: &str) -> Option<Exit>;
 }
 
 /// The implementation that runs things.
@@ -236,6 +246,16 @@ pub fn inside_tmux(tmux: Option<&OsStr>) -> bool {
     tmux.is_some_and(|value| !value.is_empty())
 }
 
+impl Records for Shell {
+    fn verdict(&self, slug: &str, id: &str, git_ref: &str) -> Option<String> {
+        crate::git::verdict(&self.root, slug, id, git_ref)
+    }
+
+    fn exit(&self, slug: &str, id: &str) -> Option<Exit> {
+        exit_file(&self.root.join(crate::board::run_file(slug, id, "exit")))
+    }
+}
+
 impl Dispatch for Shell {
     fn status(&self) -> Result<String, String> {
         run(self.status_command())
@@ -262,14 +282,6 @@ impl Dispatch for Shell {
     #[cfg_attr(test, mutants::skip)]
     fn in_tmux(&self) -> bool {
         inside_tmux(std::env::var_os("TMUX").as_deref())
-    }
-
-    fn verdict(&self, slug: &str, id: &str, git_ref: &str) -> Option<String> {
-        crate::git::verdict(&self.root, slug, id, git_ref)
-    }
-
-    fn exit(&self, slug: &str, id: &str) -> Option<Exit> {
-        exit_file(&self.root.join(crate::board::run_file(slug, id, "exit")))
     }
 
     fn attach(&self, session: &str, inside: bool) -> Result<(), String> {
@@ -503,7 +515,7 @@ mod tests {
 
     #[test]
     fn a_runs_exit_file_says_what_it_ended_with_and_when() {
-        use super::Dispatch as _;
+        use super::Records as _;
 
         let runs = Runs::new("exit");
         runs.write(".keeler/runs/01-foo/t1.exit", "0\n");
@@ -540,7 +552,7 @@ mod tests {
 
     #[test]
     fn the_two_reads_are_composed_from_the_root_the_recipe_passed() {
-        use super::Dispatch as _;
+        use super::Records as _;
 
         // The board is launched with the project's root and may be started
         // from anywhere inside it, so both paths are composed from that root

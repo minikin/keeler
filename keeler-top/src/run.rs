@@ -529,9 +529,7 @@ pub fn fold(view: &mut RunView, record: Record, worktree: &Path) {
             // The first stamp stands: a batch that holds two init records is
             // the run that ended and the run that replaced it, and the
             // reader has already told the board to throw the first away.
-            if view.spawned_at.is_none() {
-                view.spawned_at = at;
-            }
+            view.spawned_at = view.spawned_at.or(at);
         }
         Record::Assistant { message, at } => view.absorb(&message, at, worktree),
         Record::ToolResult(message) => view.absorb_tool_result(&message),

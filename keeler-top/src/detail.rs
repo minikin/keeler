@@ -658,6 +658,27 @@ mod tests {
     }
 
     #[test]
+    fn a_fact_too_long_for_a_narrow_panel_is_cut_where_the_panel_ends() {
+        // Across the pieces rather than inside one of them, as a row's
+        // columns are: a fact is several readings on one line, and a piece
+        // that starts past the edge is not drawn at all rather than drawn
+        // half a cell wide.
+        let lines = pane(&t3(), SLUG, THEME, now(), 24, 24);
+
+        for line in &lines {
+            assert!(
+                unicode_width::UnicodeWidthStr::width(text(line).as_str()) <= 24,
+                "a line ran past the panel: {:?}",
+                text(line),
+            );
+        }
+        // The line ends where the panel does, and what did not fit is gone
+        // whole: "07:52 in this tool" begins past the edge and is not drawn
+        // at all.
+        assert_eq!(text(&lines[0]), "state   ● running · gate");
+    }
+
+    #[test]
     fn a_state_the_recipe_wrote_a_reason_after_is_read_in_two_halves() {
         // The reason comes out of its brackets because the line it lands on
         // separates its facts with dots; what is not bracketed stays whole.

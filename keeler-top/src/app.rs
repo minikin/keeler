@@ -889,10 +889,12 @@ mod tests {
             self.note(&format!("attach {session} inside={inside}"));
             self.answered()
         }
+    }
 
-        // The two file reads: these scenarios are about the keys and the two
-        // cadences, and a board with no record and no exit file is what a
-        // wave still running looks like.
+    // These scenarios are about the keys and the two cadences, and a board
+    // whose tasks have written no record and left no exit file is what a
+    // wave still running looks like.
+    impl crate::dispatch::Records for Answers {
         fn verdict(&self, _slug: &str, _id: &str, _git_ref: &str) -> Option<String> {
             None
         }
