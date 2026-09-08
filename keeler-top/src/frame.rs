@@ -494,7 +494,7 @@ pub fn layout(area: Rect, lines: usize, bands: &Bands) -> Panes {
     let body = area
         .height
         .saturating_sub(wave_rows.saturating_add(FOOTER_ROWS));
-    let roomy = bands.detail && body >= wanted.saturating_add(DETAIL_MIN);
+    let roomy = paned(bands, body, wanted);
     let [wave, tasks, detail, footer] = Layout::vertical([
         Constraint::Length(wave_rows),
         Constraint::Length(if roomy { wanted } else { body }),
@@ -508,6 +508,17 @@ pub fn layout(area: Rect, lines: usize, bands: &Bands) -> Panes {
         detail: roomy.then_some(detail),
         footer,
     }
+}
+
+/// Whether this frame has a detail panel: a terminal inside the pane's own
+/// bands, and lines left over once the rows have every one they asked for.
+///
+/// Two conditions and one answer, because they are one question asked twice
+/// — is there room? — and the caller uses the answer twice: it is what the
+/// tasks panel is measured against as well as whether the pane is there at
+/// all.
+fn paned(bands: &Bands, body: u16, wanted: u16) -> bool {
+    bands.detail && body >= wanted.saturating_add(DETAIL_MIN)
 }
 
 /// The one line the footer takes.
