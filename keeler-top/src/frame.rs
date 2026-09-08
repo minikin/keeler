@@ -288,6 +288,7 @@ fn pieces(
             right(
                 &said(row, RunView::tokens_column).unwrap_or_default(),
                 width,
+                theme.ellipsis(),
             ),
             theme.style(TEXT),
         )],
@@ -374,14 +375,17 @@ fn title(row: &Row, theme: Theme, finished: bool, compact: bool) -> Vec<(String,
 /// running one whose stream has not reached a tool call yet. A connector
 /// with an empty line after it would be the board reporting on itself.
 fn under(row: &Row, cols: &Columns, theme: Theme, now: Timestamp) -> Option<Line<'static>> {
-    let pieces = if row.state == PAUSED {
-        vec![(RESUME.to_string(), theme.style(TEXT))]
+    // The elapsed belongs to the running row alone. A paused run's last
+    // tool call was never answered — the session was killed in the middle
+    // of it — so the clock on that call would go on counting beside
+    // `resume: R`, timing a wait that nobody is in.
+    let (pieces, elapsed) = if row.state == PAUSED {
+        (vec![(RESUME.to_string(), theme.style(TEXT))], String::new())
     } else if row.running() {
-        tool(row, theme)?
+        (tool(row, theme)?, row.elapsed_column(now))
     } else {
         return None;
     };
-    let elapsed = row.elapsed_column(now);
     let hangs = format!("{}{} ", " ".repeat(HANGS), theme.connector());
     // What is left once the connector and the elapsed have their cells: the
     // elapsed ends at the panel's inner right edge, so a command long
@@ -555,7 +559,10 @@ fn inside(area: Rect) -> Rect {
 #[must_use]
 pub fn table(board: &Board, theme: Theme, now: Timestamp, width: u16) -> Vec<Line<'static>> {
     let cols = columns_of(board, width);
-    let mut drawn = vec![Line::styled(cols.header(), theme.style(DIM))];
+    let mut drawn = vec![Line::styled(
+        cols.header(theme.ellipsis()),
+        theme.style(DIM),
+    )];
     for (index, row) in crate::board::ordered(&board.rows) {
         drawn.extend(lines(
             row,
@@ -781,10 +788,10 @@ mod tests {
 
     #[test]
     fn the_detail_pane_is_the_first_thing_a_small_terminal_does_without() {
-        // Five tasks want six lines, and the header and status line take
-        // one each: the pane needs six more on top of those eight.
+        // A table of five lines, and the header and status line taking one
+        // each: the pane needs six more on top of those seven.
         assert_eq!(layout(Rect::new(0, 0, 100, 12), 5).detail, None);
-        assert!(layout(Rect::new(0, 0, 100, 14), 5).detail.is_some());
+        assert!(layout(Rect::new(0, 0, 100, 13), 5).detail.is_some());
         // And the rows never give way to it — on the terminal that has no
         // room, the table gets everything between the two single lines.
         let cramped = layout(Rect::new(0, 0, 100, 12), 5);
@@ -952,23 +959,47 @@ mod tests {
 
     #[test]
     fn a_paused_tasks_second_line_says_how_to_resume() {
-        // Given T8 is paused
+        // Given T8 is paused — with the run its report still names, whose
+        // last tool call was never answered because the session was killed
+        // in the middle of it. The clock on that call is not a clock on the
+        // pause: the run is not waiting on the tool, it is not running at
+        // all, and a timer ticking beside "resume: R" would say it is.
         let row = Row {
             id: "T8".to_string(),
             state: "paused".to_string(),
             log: None,
-            run: None,
+            run: Some(RunView {
+                last_tool: Some(crate::run::ToolCall {
+                    id: "toolu_1".to_string(),
+                    name: "Bash".to_string(),
+                    detail: "just dev".to_string(),
+                    at: Some(Timestamp::from_epoch_seconds(1_000)),
+                }),
+                ..RunView::default()
+            }),
             branch: None,
             title: None,
         };
 
         // When the board renders
         let cols = Columns::live(60, 17);
-        let lines = super::lines(&row, &cols, THEME, Timestamp::default(), false, false);
+        let lines = super::lines(
+            &row,
+            &cols,
+            THEME,
+            Timestamp::from_epoch_seconds(1_134),
+            false,
+            false,
+        );
 
         // Then the line under T8's row reads "    └─ resume: R"
         assert_eq!(lines.len(), 2);
         assert_eq!(text(&lines[1]).trim_end(), "    └─ resume: R");
+        assert_eq!(
+            super::wide(&text(&lines[1])),
+            60,
+            "the line is not the width of the panel",
+        );
     }
 
     #[test]

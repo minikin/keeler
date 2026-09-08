@@ -397,7 +397,6 @@ fn refusal(answer: Result<(), String>) -> Option<String> {
 /// here, where a test presses one and reads the board afterwards, rather
 /// than inside a loop that needs a terminal to run at all.
 pub fn on_key(app: &mut App, key: KeyEvent) -> Action {
-    let selected = app.board.selected;
     match key.code {
         // Ctrl-C is here because raw mode is: the terminal no longer turns
         // it into a signal, so a board that ignored it would be one the
@@ -415,12 +414,14 @@ pub fn on_key(app: &mut App, key: KeyEvent) -> Action {
         // a run that can be started again, and `R` starts an agent.
         KeyCode::Char('R') if plain(key) => Action::Resume,
         KeyCode::Enter if plain(key) => Action::Attach,
+        // Down and up the board as it is drawn, which is not the order the
+        // report listed the tasks in — `Board::moved` says why.
         KeyCode::Char('j') | KeyCode::Down => {
-            app.select(selected.saturating_add(1));
+            app.select(app.board.moved(true));
             Action::Nothing
         }
         KeyCode::Char('k') | KeyCode::Up => {
-            app.select(selected.saturating_sub(1));
+            app.select(app.board.moved(false));
             Action::Nothing
         }
         _ => Action::Nothing,

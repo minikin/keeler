@@ -362,6 +362,30 @@ impl Board {
     pub fn ordered(&self) -> Vec<(usize, &Row)> {
         ordered(&self.rows)
     }
+
+    /// Where the selection lands when it moves one row down the board, or
+    /// up it — as the board is drawn, and not as the report listed them.
+    ///
+    /// The two orders stopped being the same when the rows began leading
+    /// with what needs a human: a selection that walked the report's would
+    /// jump about the screen, and nothing on the board would say why. The
+    /// answer is still a report index, because that is what the levers and
+    /// the detail pane read.
+    #[must_use]
+    pub fn moved(&self, down: bool) -> usize {
+        let order = self.ordered();
+        let last = order.len().saturating_sub(1);
+        let here = order
+            .iter()
+            .position(|(index, _)| *index == self.selected)
+            .unwrap_or_default();
+        let there = if down {
+            here.saturating_add(1).min(last)
+        } else {
+            here.saturating_sub(1)
+        };
+        order.get(there).map_or(self.selected, |(index, _)| *index)
+    }
 }
 
 /// The rows in the order a watcher asks for them — what needs a human
@@ -830,6 +854,37 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["T2", "T1"],
         );
+    }
+
+    #[test]
+    fn the_selection_moves_down_the_board_as_it_is_drawn() {
+        // The rows are drawn by group and the report lists them in the
+        // spec's order, so the two orders are different — and the one the
+        // selection walks has to be the one the eye follows. Counted in the
+        // report's indices, because that is what every lever reads.
+        let board = board_of(&[("T1", "done"), ("T2", "running"), ("T3", "passed")]);
+        assert_eq!(
+            board
+                .ordered()
+                .into_iter()
+                .map(|(_, row)| row.id.as_str())
+                .collect::<Vec<_>>(),
+            ["T2", "T3", "T1"],
+        );
+
+        // T1 is selected, and it is the last row on the board.
+        assert_eq!(board.moved(true), 0, "the selection left the board");
+        assert_eq!(board.moved(false), 2, "up from the last row is T3's");
+
+        let middle = Board {
+            selected: 2,
+            ..board.clone()
+        };
+        assert_eq!(middle.moved(true), 0, "down from T3 is T1, the last row");
+        assert_eq!(middle.moved(false), 1, "up from T3 is T2, the first");
+
+        // And a board with no rows has nowhere to move to.
+        assert_eq!(board_of(&[]).moved(true), 0);
     }
 
     #[test]

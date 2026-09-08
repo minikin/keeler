@@ -188,16 +188,19 @@ impl Columns {
     ///
     /// Composed from the same places the rows are, so a column that moved
     /// took its heading with it — a heading table of its own would be a
-    /// second layout to keep in step.
+    /// second layout to keep in step. And cut by the same mark the rows
+    /// under it are cut by: a `…` over columns cutting with `...` would put
+    /// the one glyph the ASCII theme exists to avoid at the top of the
+    /// board.
     #[must_use]
-    pub fn header(&self) -> String {
+    pub fn header(&self, ellipsis: &str) -> String {
         let mut header = String::new();
         for (field, place) in &self.places {
             let heading = self.heading(*field);
             let cell = if matches!(field, Field::Tokens) {
-                right(&heading, place.width)
+                right(&heading, place.width, ellipsis)
             } else {
-                left(&heading, place.width)
+                left(&heading, place.width, ellipsis)
             };
             header.push_str(&cell);
             if !matches!(field, Field::Mark) {
@@ -292,8 +295,8 @@ pub fn cut(text: &str, width: u16, ellipsis: &str) -> String {
 /// `text` in a column of `width`, cut with `ellipsis` if it does not fit and
 /// padded with spaces if it does not fill.
 #[must_use]
-pub fn left(text: &str, width: u16) -> String {
-    let cell = cut(text, width, "…");
+pub fn left(text: &str, width: u16, ellipsis: &str) -> String {
+    let cell = cut(text, width, ellipsis);
     let padding = usize::from(width).saturating_sub(usize::from(wide(&cell)));
     format!("{cell}{}", " ".repeat(padding))
 }
@@ -301,8 +304,8 @@ pub fn left(text: &str, width: u16) -> String {
 /// The same, against the column's right edge — which is how a number is
 /// read beside another number.
 #[must_use]
-pub fn right(text: &str, width: u16) -> String {
-    let cell = cut(text, width, "…");
+pub fn right(text: &str, width: u16, ellipsis: &str) -> String {
+    let cell = cut(text, width, ellipsis);
     let padding = usize::from(width).saturating_sub(usize::from(wide(&cell)));
     format!("{}{cell}", " ".repeat(padding))
 }
@@ -399,11 +402,11 @@ mod tests {
     fn the_header_names_the_columns_that_are_drawn() {
         // Given a finished board
         // Then the tasks header reads "  TASK STATE  LANDED"
-        assert_eq!(Columns::landed(118).header(), "  TASK STATE  LANDED");
+        assert_eq!(Columns::landed(118).header("…"), "  TASK STATE  LANDED");
         // And a live one names every column, the tokens right-aligned over
         // the numbers under them and the commit column saying which two
         // counts it carries.
-        let header = Columns::live(118, 17).header();
+        let header = Columns::live(118, 17).header("…");
         assert_eq!(
             header,
             "  TASK STATE             STAGE   MODEL     CONTEXT        TOKENS COMMIT +~     TITLE",
@@ -449,6 +452,21 @@ mod tests {
     }
 
     #[test]
+    fn the_header_is_cut_with_the_mark_the_terminal_can_draw() {
+        // The heading over a column is cut like everything else in it, and
+        // by the same mark: a heading that cut with `…` above rows cutting
+        // with `...` would put the one glyph the ASCII theme exists to
+        // avoid at the top of the board.
+        let columns = Columns::live(83, 17);
+
+        assert_eq!(columns.header("…").split_whitespace().last(), Some("TIT…"));
+        assert_eq!(
+            columns.header("...").split_whitespace().last(),
+            Some("T...")
+        );
+    }
+
+    #[test]
     fn a_value_wider_than_its_column_is_cut_with_whatever_says_so() {
         assert_eq!(cut("just dev", 8, "…"), "just dev");
         assert_eq!(cut("just dev", 7, "…"), "just d…");
@@ -467,9 +485,9 @@ mod tests {
     fn a_cell_is_padded_to_its_column_from_whichever_side_it_is_read() {
         let place = Place { start: 0, width: 6 };
 
-        assert_eq!(super::left("12.1M", place.width), "12.1M ");
-        assert_eq!(super::right("12.1M", place.width), " 12.1M");
-        assert_eq!(super::left("", place.width), "      ");
+        assert_eq!(super::left("12.1M", place.width, "…"), "12.1M ");
+        assert_eq!(super::right("12.1M", place.width, "…"), " 12.1M");
+        assert_eq!(super::left("", place.width, "…"), "      ");
     }
 
     proptest::proptest! {
