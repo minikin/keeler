@@ -405,6 +405,9 @@ pub fn on_key(app: &mut App, key: KeyEvent) -> Action {
     // on from is a refusal about a row they are no longer looking at. The
     // levers below say something of their own straight after this.
     app.says(None);
+    if viewing(app, key) {
+        return Action::Nothing;
+    }
     match key.code {
         // Ctrl-C is here because raw mode is: the terminal no longer turns
         // it into a signal, so a board that ignored it would be one the
@@ -415,34 +418,38 @@ pub fn on_key(app: &mut App, key: KeyEvent) -> Action {
         // The three levers, and the only keys here that carry a guard:
         // they are the ones that do something outside the board, and
         // Ctrl-P is a chord half the world has bound to "previous". The
-        // keys above and below move a cursor or end a session the person
-        // is looking at; this one kills a running agent.
+        // keys the loop is never told about move a cursor or redraw a row;
+        // this one kills a running agent.
         KeyCode::Char('p') if plain(key) => Action::Pause,
         // Shifted, as `keeler-resume` is the heavier of the two: `p` stops
         // a run that can be started again, and `R` starts an agent.
         KeyCode::Char('R') if plain(key) => Action::Resume,
         KeyCode::Enter if plain(key) => Action::Attach,
-        // Not a lever, and so no guard: it changes how the rows are drawn
-        // and nothing outside the board. `None` is the panel's own answer —
-        // collapse the live rows when they have outgrown it — and the first
-        // press is the watcher asking for the collapse, which is what
-        // somebody reaches for `z` to get.
-        KeyCode::Char('z') => {
-            app.board.compact = Some(!app.board.compact.unwrap_or(false));
-            Action::Nothing
-        }
-        // Down and up the board as it is drawn, which is not the order the
-        // report listed the tasks in — `Board::moved` says why.
-        KeyCode::Char('j') | KeyCode::Down => {
-            app.select(app.board.moved(true));
-            Action::Nothing
-        }
-        KeyCode::Char('k') | KeyCode::Up => {
-            app.select(app.board.moved(false));
-            Action::Nothing
-        }
         _ => Action::Nothing,
     }
+}
+
+/// The keys that change what the board shows and nothing else, and whether
+/// this was one of them.
+///
+/// Apart from the levers, and not only because they are the two questions a
+/// reader of `on_key` has: these do their whole work here, where the levers
+/// are decided here and carried out by the loop. None of them carries a
+/// guard for that same reason — there is nothing outside the board for a
+/// chord to set off by accident.
+fn viewing(app: &mut App, key: KeyEvent) -> bool {
+    match key.code {
+        // Down and up the board as it is drawn, which is not the order the
+        // report listed the tasks in — `Board::moved` says why.
+        KeyCode::Char('j') | KeyCode::Down => app.select(app.board.moved(true)),
+        KeyCode::Char('k') | KeyCode::Up => app.select(app.board.moved(false)),
+        // `None` is the panel's own answer — collapse the live rows when
+        // they have outgrown it — so the first press is the watcher asking
+        // for the collapse, which is what somebody reaches for `z` to get.
+        KeyCode::Char('z') => app.board.compact = Some(!app.board.compact.unwrap_or(false)),
+        _ => return false,
+    }
+    true
 }
 
 /// Whether a key was pressed on its own.
