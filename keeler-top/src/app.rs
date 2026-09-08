@@ -134,7 +134,7 @@ impl App {
         theme: Theme,
     ) -> Self {
         let mut runs = Runs::default();
-        let board = Board::assemble(&status, &graph, &mut runs, answered);
+        let board = Board::assemble(&status, &graph, &mut runs, answered, dispatch.as_ref());
         Self {
             board,
             theme,
@@ -182,6 +182,7 @@ impl App {
             &self.graph,
             &mut self.runs,
             self.board.answered,
+            self.dispatch.as_ref(),
         );
         self.adopt(fresh);
     }
@@ -203,7 +204,13 @@ impl App {
             Ok(status) => {
                 self.status = status;
                 self.status_said = None;
-                let fresh = Board::assemble(&self.status, &self.graph, &mut self.runs, now);
+                let fresh = Board::assemble(
+                    &self.status,
+                    &self.graph,
+                    &mut self.runs,
+                    now,
+                    self.dispatch.as_ref(),
+                );
                 self.adopt(fresh);
             }
             Err(refused) => {
@@ -881,6 +888,17 @@ mod tests {
         fn attach(&self, session: &str, inside: bool) -> Result<(), String> {
             self.note(&format!("attach {session} inside={inside}"));
             self.answered()
+        }
+
+        // The two file reads: these scenarios are about the keys and the two
+        // cadences, and a board with no record and no exit file is what a
+        // wave still running looks like.
+        fn verdict(&self, _slug: &str, _id: &str, _git_ref: &str) -> Option<String> {
+            None
+        }
+
+        fn exit(&self, _slug: &str, _id: &str) -> Option<crate::dispatch::Exit> {
+            None
         }
     }
 

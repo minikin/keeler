@@ -30,6 +30,10 @@ pub enum Record {
     Init {
         /// The model as the init record spells it, `[1m]` suffix and all.
         model: String,
+        /// When the record was written, which is when the run was spawned:
+        /// the runner opens the stream and the CLI writes this record into
+        /// it, so there is no earlier line to read a start from.
+        at: Option<Timestamp>,
     },
     /// One content block of one assistant message.
     Assistant {
@@ -76,6 +80,11 @@ enum Wire {
         model: String,
         #[serde(default)]
         parent_tool_use_id: Option<String>,
+        // Read here for the same reason it is read on an assistant record:
+        // the CLI stamps the envelope, and this envelope is where a run
+        // begins.
+        #[serde(default)]
+        timestamp: Option<String>,
     },
     #[serde(rename = "assistant")]
     Assistant {
@@ -116,7 +125,11 @@ impl From<Wire> for Record {
                 subtype,
                 model,
                 parent_tool_use_id: None,
-            } if subtype == "init" => Self::Init { model },
+                timestamp,
+            } if subtype == "init" => Self::Init {
+                model,
+                at: timestamp.as_deref().and_then(Timestamp::parse),
+            },
             Wire::Assistant {
                 message,
                 parent_tool_use_id: None,
@@ -279,6 +292,7 @@ mod tests {
     fn init() -> Record {
         Record::Init {
             model: "claude-opus-5[1m]".to_string(),
+            at: None,
         }
     }
 
@@ -514,10 +528,36 @@ mod tests {
         assert_eq!(
             super::parse_line(br#"{"type":"system","subtype":"init"}"#),
             Some(Record::Init {
-                model: String::new()
+                model: String::new(),
+                at: None,
             }),
         );
         assert!(init().is_init());
         assert!(!Record::Other.is_init());
+    }
+
+    #[test]
+    fn the_init_records_stamp_is_when_the_run_was_spawned() {
+        // The record the runner's stream opens with, so its stamp is the
+        // only line in the file that says when the run began — and a stamp
+        // this cannot read costs that and nothing else.
+        assert_eq!(
+            super::parse_line(
+                br#"{"type":"system","subtype":"init","model":"m","timestamp":"2026-09-07T11:19:00.000Z"}"#
+            ),
+            Some(Record::Init {
+                model: "m".to_string(),
+                at: crate::clock::Timestamp::parse("2026-09-07T11:19:00.000Z"),
+            }),
+        );
+        assert_eq!(
+            super::parse_line(
+                br#"{"type":"system","subtype":"init","model":"m","timestamp":"noon"}"#
+            ),
+            Some(Record::Init {
+                model: "m".to_string(),
+                at: None,
+            }),
+        );
     }
 }

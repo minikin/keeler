@@ -8,6 +8,7 @@ pub mod app;
 pub mod board;
 pub mod cli;
 pub mod clock;
+pub mod detail;
 pub mod dispatch;
 pub mod frame;
 pub mod git;
@@ -34,6 +35,51 @@ pub mod theme;
 /// one of them deleting the other's files halfway through, which is a
 /// failing gate nobody can reproduce. The instant the process started, and
 /// a serial that only goes up, are what the pid is missing.
+/// A dispatch that runs nothing and reads nothing.
+///
+/// Here for the reason [`fixture_dir`] is: three test modules assemble a
+/// board, and what they are about is the rows rather than the two files a
+/// run leaves beside them. The scenarios that *are* about those files hand
+/// [`board::Board::assemble`] a double that answers.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy)]
+struct Unasked;
+
+#[cfg(test)]
+impl dispatch::Dispatch for Unasked {
+    fn status(&self) -> Result<String, String> {
+        Err("keeler-top: nothing was asked of this dispatch.".to_string())
+    }
+
+    fn graph(&self, _spec: &std::path::Path) -> Result<String, String> {
+        Err("keeler-top: nothing was asked of this dispatch.".to_string())
+    }
+
+    fn kill(&self, _session: &str) -> Result<(), String> {
+        Err("keeler-top: nothing was asked of this dispatch.".to_string())
+    }
+
+    fn resume(&self, _task: &str) -> Result<String, String> {
+        Err("keeler-top: nothing was asked of this dispatch.".to_string())
+    }
+
+    fn in_tmux(&self) -> bool {
+        false
+    }
+
+    fn attach(&self, _session: &str, _inside: bool) -> Result<(), String> {
+        Err("keeler-top: nothing was asked of this dispatch.".to_string())
+    }
+
+    fn verdict(&self, _slug: &str, _id: &str, _git_ref: &str) -> Option<String> {
+        None
+    }
+
+    fn exit(&self, _slug: &str, _id: &str) -> Option<dispatch::Exit> {
+        None
+    }
+}
+
 #[cfg(test)]
 fn fixture_dir(name: &str) -> std::path::PathBuf {
     static SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);

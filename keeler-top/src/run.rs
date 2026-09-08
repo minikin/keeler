@@ -316,6 +316,14 @@ pub struct RunView {
     pub output_by_message: HashMap<String, u64>,
     /// The run's last few words, oldest first — what the detail pane shows.
     pub texts: VecDeque<String>,
+    /// When this run began: the stamp on the init record it opened with.
+    ///
+    /// The **first** one, and a restart is what makes that worth saying. A
+    /// resumed task is a new run in the same file, and the reader throws the
+    /// view away when it sees one — so the first init this view is folded
+    /// from is always the first of the run it is about, never of the run
+    /// before it.
+    pub spawned_at: Option<Timestamp>,
 }
 
 impl RunView {
@@ -516,7 +524,15 @@ fn text_of(block: &serde_json::Value) -> Option<&str> {
 /// started as, what it has done, and what that has cost.
 pub fn fold(view: &mut RunView, record: Record, worktree: &Path) {
     match record {
-        Record::Init { model } => view.model = Some(model),
+        Record::Init { model, at } => {
+            view.model = Some(model);
+            // The first stamp stands: a batch that holds two init records is
+            // the run that ended and the run that replaced it, and the
+            // reader has already told the board to throw the first away.
+            if view.spawned_at.is_none() {
+                view.spawned_at = at;
+            }
+        }
         Record::Assistant { message, at } => view.absorb(&message, at, worktree),
         Record::ToolResult(message) => view.absorb_tool_result(&message),
         Record::Other => {}
@@ -698,6 +714,7 @@ mod tests {
             &mut view,
             Record::Init {
                 model: "claude-opus-5[1m]".to_string(),
+                at: Timestamp::parse("2026-09-07T11:19:00Z"),
             },
             Path::new(WORKTREE),
         );
@@ -710,8 +727,43 @@ mod tests {
 
         assert_eq!(view.stage, Stage::Reading);
         // The init record is not nothing — it names the model, and the
-        // window the context column divides by comes from that name.
+        // window the context column divides by comes from that name, and
+        // its stamp is when the run was spawned.
         assert_eq!(view.model.as_deref(), Some("claude-opus-5[1m]"));
+        assert_eq!(view.spawned_at, Timestamp::parse("2026-09-07T11:19:00Z"));
+    }
+
+    #[test]
+    fn a_second_init_in_one_batch_does_not_move_the_spawn_time() {
+        // Two inits in one poll is the run that ended and the run that
+        // replaced it, read from the start of a truncated file — and the
+        // reader has already told the board to throw the first view away.
+        // The stamp the second run keeps is its own.
+        let mut view = RunView::default();
+        for stamp in ["2026-09-07T11:19:00Z", "2026-09-07T12:30:00Z"] {
+            fold(
+                &mut view,
+                Record::Init {
+                    model: "claude-opus-5[1m]".to_string(),
+                    at: Timestamp::parse(stamp),
+                },
+                Path::new(WORKTREE),
+            );
+        }
+
+        assert_eq!(view.spawned_at, Timestamp::parse("2026-09-07T11:19:00Z"));
+        // And an init whose stamp could not be read leaves nothing behind
+        // rather than a spawn at the epoch.
+        let mut unstamped = RunView::default();
+        fold(
+            &mut unstamped,
+            Record::Init {
+                model: String::new(),
+                at: None,
+            },
+            Path::new(WORKTREE),
+        );
+        assert_eq!(unstamped.spawned_at, None);
     }
 
     #[test]

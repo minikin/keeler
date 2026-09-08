@@ -489,6 +489,22 @@ impl Theme {
         self.pick("→", "->")
     }
 
+    /// What stands where the board has nothing to say.
+    ///
+    /// The theme's own, and not [`crate::run::DASH`]: that one belongs to
+    /// `--once`, which is a frozen plain-text surface with no theme to ask,
+    /// and this one is drawn on a screen that may not be able to draw it.
+    #[must_use]
+    pub fn dash(&self) -> &'static str {
+        self.pick("—", "-")
+    }
+
+    /// What the detail panel's sections are divided by.
+    #[must_use]
+    pub fn rule(&self) -> &'static str {
+        self.pick("─", "-")
+    }
+
     /// The glyph set this terminal can draw.
     const fn pick(self, unicode: &'static str, ascii: &'static str) -> &'static str {
         if self.ascii { ascii } else { unicode }
@@ -732,6 +748,8 @@ mod tests {
                     ASCII.separator(),
                     ASCII.ellipsis(),
                     ASCII.leads_to(),
+                    ASCII.dash(),
+                    ASCII.rule(),
                     border.top_left,
                     border.top_right,
                     border.bottom_left,
@@ -761,8 +779,10 @@ mod tests {
                 ASCII.separator(),
                 ASCII.ellipsis(),
                 ASCII.leads_to(),
+                ASCII.dash(),
+                ASCII.rule(),
             ],
-            [">", "`-", "<-", "-", "...", "->"],
+            [">", "`-", "<-", "-", "...", "->", "-", "-"],
         );
         assert_eq!(
             [border.top_left, border.horizontal_top, border.vertical_left],
@@ -810,8 +830,10 @@ mod tests {
                 COLOURED.separator(),
                 COLOURED.ellipsis(),
                 COLOURED.leads_to(),
+                COLOURED.dash(),
+                COLOURED.rule(),
             ],
-            ["└─", "←", "·", "…", "→"],
+            ["└─", "←", "·", "…", "→", "—", "─"],
         );
     }
 
