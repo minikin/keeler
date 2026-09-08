@@ -372,7 +372,7 @@ impl Board {
         records: &R,
     ) -> Self {
         let slug = slug_of(&status.rel);
-        let rows = status
+        let rows: Vec<Row> = status
             .tasks
             .iter()
             .map(|task| {
@@ -406,12 +406,18 @@ impl Board {
                 }
             })
             .collect();
+        // The row the board opens on is the first one it draws, which is not
+        // the first the report named: ordering puts what needs a human at the
+        // top and the done tasks at the bottom. Opening on the report's first
+        // row means opening on the last drawn one, with `j` already spent —
+        // the key a watcher reaches for first doing nothing at all.
+        let selected = order(&rows).first().copied().unwrap_or_default();
         Self {
             rel: status.rel.clone(),
             git_ref: status.git_ref.clone(),
             answered,
             rows,
-            selected: 0,
+            selected,
             compact: None,
             message: String::new(),
         }
@@ -938,6 +944,29 @@ mod tests {
     }
 
     #[test]
+    fn the_board_opens_on_the_first_row_it_draws() {
+        // Given a wave whose first task in the report is the last one drawn:
+        // ordering puts what needs a human first, and a done task last.
+        let board = board_of(&[("T1", "done"), ("T2", "running"), ("T3", "failed (exit 2)")]);
+
+        // Then the row the board opens on is the one at the top of the panel,
+        // not the one the report happened to name first. Opening on the last
+        // row is opening with `j` already spent: the key the watcher reaches
+        // for first does nothing, and the pane is about the task with the
+        // least to say.
+        assert_eq!(
+            board.selected_row().map(|row| row.id.as_str()),
+            Some("T3"),
+            "the board opened on a row that is not the first it draws",
+        );
+        assert_eq!(
+            board.moved(true),
+            board.ordered()[1].0,
+            "j has nowhere to go"
+        );
+    }
+
+    #[test]
     fn a_board_with_no_rows_has_nothing_to_order_and_has_not_finished() {
         assert_eq!(super::order(&[]), Vec::<usize>::new());
         // And a spec whose tasks are still to be written has not finished
@@ -982,9 +1011,9 @@ mod tests {
             ["T2", "T3", "T1"],
         );
 
-        // T1 is selected, and it is the last row on the board.
-        assert_eq!(board.moved(true), 0, "the selection left the board");
-        assert_eq!(board.moved(false), 2, "up from the last row is T3's");
+        // T2 is selected, because it is the first row drawn.
+        assert_eq!(board.moved(true), 2, "down from T2 is T3's");
+        assert_eq!(board.moved(false), 1, "up from the first row is itself");
 
         let middle = Board {
             selected: 2,
