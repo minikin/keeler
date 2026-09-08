@@ -567,15 +567,25 @@ const BORDERS: u16 = 2;
 pub fn render(frame: &mut ratatui::Frame, board: &Board, theme: Theme, now: Timestamp) {
     let area = frame.area();
     let width = area.width.saturating_sub(BORDERS);
-    let rows = table(board, theme, now, width);
-    let panes = layout(area, rows.len());
+    let cols = columns_of(board, theme, width);
+    // The tallest the tasks panel could be: what is left once the wave
+    // panel and the footer have their lines, less its own borders. Measured
+    // before the rows are composed, because it is what decides whether they
+    // are composed collapsed — and what the panel ends up being given is
+    // decided from the answer, one line below.
+    let room = area
+        .height
+        .saturating_sub(WAVE_ROWS.saturating_add(FOOTER_ROWS))
+        .saturating_sub(BORDERS);
+    let tasks = crate::panels::tasks(board, &cols, theme, now, room);
+    let panes = layout(area, tasks.lines.len());
     frame.render_widget(
-        Paragraph::new(crate::panels::wave(board, theme, now, width))
+        Paragraph::new(crate::panels::wave(board, theme, now, width, tasks.compact))
             .block(panel(theme, crate::panels::title(board, theme))),
         panes.wave,
     );
     frame.render_widget(
-        Paragraph::new(rows).block(panel(theme, named("tasks", theme.style(ORANGE)))),
+        Paragraph::new(tasks.lines).block(panel(theme, named("tasks", theme.style(ORANGE)))),
         panes.tasks,
     );
     // Both, or neither. A spec whose tasks are still to be written has no
@@ -615,32 +625,6 @@ fn panel(theme: Theme, title: Vec<Span<'static>>) -> Block<'static> {
 /// A title that is one word: the panel's name and nothing after it.
 fn named(name: &str, style: Style) -> Vec<Span<'static>> {
     vec![Span::styled(name.to_string(), style)]
-}
-
-/// The tasks table: the heading, then every task's lines, in the order the
-/// board puts its rows in.
-#[must_use]
-pub fn table(board: &Board, theme: Theme, now: Timestamp, width: u16) -> Vec<Line<'static>> {
-    let cols = columns_of(board, theme, width);
-    let mut drawn = vec![Line::styled(
-        cols.header(theme.ellipsis()),
-        theme.style(DIM),
-    )];
-    drawn.extend(rows(board, &cols, theme, now));
-    drawn
-}
-
-/// Every task's lines, in the order the board draws them, with the selected
-/// task's marked.
-///
-/// The selection is a report index and the rows are in the board's order,
-/// so the two are compared here rather than counted: what `j` moved is a
-/// task, and where it ends up on the screen is this order's answer.
-fn rows(board: &Board, cols: &Columns, theme: Theme, now: Timestamp) -> Vec<Line<'static>> {
-    crate::board::ordered(&board.rows)
-        .into_iter()
-        .flat_map(|(index, row)| lines(row, cols, theme, now, index == board.selected, false))
-        .collect()
 }
 
 /// The columns this board's rows are drawn through: the finished view's

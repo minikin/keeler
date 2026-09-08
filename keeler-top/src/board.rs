@@ -273,6 +273,15 @@ pub struct Board {
     pub rows: Vec<Row>,
     /// Which row the detail pane is about.
     pub selected: usize,
+    /// Whether the live rows are drawn on one line: what the watcher last
+    /// asked of them with `z`, and `None` for the automatic answer — which
+    /// only the frame can give, since it is the one that knows how tall the
+    /// panel is.
+    ///
+    /// Here beside `selected` and for the same reason that one is here: the
+    /// renderer is handed a board and nothing else, so a view decision it
+    /// cannot read is a view decision it cannot draw.
+    pub compact: Option<bool>,
     /// The line under the table: what the last keypress did, or why it did
     /// nothing.
     pub message: String,
@@ -306,6 +315,7 @@ impl Board {
             answered,
             rows,
             selected: 0,
+            compact: None,
             message: String::new(),
         }
     }

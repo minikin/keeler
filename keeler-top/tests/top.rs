@@ -5095,3 +5095,315 @@ fn the_ascii_theme_replaces_every_non_ascii_glyph() {
         watched.join("\n"),
     );
 }
+
+// ── 11-T5
+
+use keeler_top::theme::SELECTED_BG;
+use ratatui::style::Modifier;
+
+/// A terminal whose tasks panel is twenty rows tall, its column heading
+/// among them: the wave panel's four lines and the footer's one leave
+/// twenty-two, and the panel's own borders take two of those.
+const TALL: u16 = 27;
+
+/// And one whose tasks panel is eight, by the same arithmetic — which is
+/// fewer rows than twelve tasks have lines, and so the terminal the scroll
+/// scenario is about.
+const SHORT: u16 = 15;
+
+/// What every task below is in the middle of: a command long enough that a
+/// collapsed row, which shows the tool where the title goes, has to cut it.
+const COLLAPSING: &str = "just dev 2>&1 | tail -35 && cargo mutants --workspace";
+
+/// One running task's report line, its stream holding that command.
+fn spawned(runfiles: &Runfiles, id: &str) -> String {
+    let log = runfiles.stream(
+        &id.to_lowercase(),
+        &[
+            INIT.to_string(),
+            stamped_tool_use(
+                "toolu_1",
+                "Bash",
+                serde_json::json!({ "command": COLLAPSING }),
+            ),
+        ],
+    );
+    running(id, &log)
+}
+
+/// A wave of running tasks, T1 upward, each with a line to hang under it.
+fn spawned_wave(runfiles: &Runfiles, how_many: usize) -> Vec<String> {
+    (1..=how_many)
+        .map(|task| spawned(runfiles, &format!("T{task}")))
+        .collect()
+}
+
+/// A board of two tasks — T3 running with a tool under it, T1 done — with
+/// one of them watched. The two are in different groups, so the rows are
+/// drawn T3 and then T1 whichever of them is selected.
+fn watching(runfiles: &Runfiles, selected: usize) -> Board {
+    let mut board = assemble_titled(
+        &report(&["T1     done".to_string(), spawned(runfiles, "T3")]),
+        "T1 done\nT3 ready\n",
+        TITLES,
+        NOON,
+    );
+    board.selected = selected;
+    board
+}
+
+/// What a cell is drawn with beyond its colours.
+///
+/// Asked because reverse video is how the selected row used to be marked,
+/// and the whole of what this spec says about that is that it must not be.
+fn modifier_at(terminal: &Terminal<TestBackend>, x: u16, y: u16) -> Modifier {
+    terminal.backend().buffer()[(x, y)].modifier
+}
+
+/// The board's own columns: everything the panels' borders do not take.
+fn inner(width: u16) -> std::ops::Range<u16> {
+    1..width - 1
+}
+
+#[test]
+fn the_selected_row_carries_a_marker_in_its_own_colour_and_a_lighter_background() {
+    // Given T3 (running) is selected
+    let runfiles = Runfiles::new("t5-selection");
+    let board = watching(&runfiles, 1);
+
+    // When the board renders
+    let terminal = painted(&board, WIDE.0, WIDE.1);
+    let frame = lines_of(&terminal, WIDE.0, WIDE.1);
+    let y = y_of(&frame, "T3");
+
+    // Then T3's row begins with "▸" in orange
+    assert_eq!(cell_at(&terminal, 1, y), ("▸".to_string(), ORANGE));
+    // And both of T3's lines have the selection background
+    for line in [y, y + 1] {
+        for x in inner(WIDE.0) {
+            assert_eq!(
+                ground_at(&terminal, x, line),
+                SELECTED_BG,
+                "the cell at {x},{line} is not on the selected row's ground:\n{}",
+                frame.join("\n"),
+            );
+        }
+    }
+    // And no other row has it
+    let other = y_of(&frame, "T1");
+    for x in inner(WIDE.0) {
+        assert_eq!(
+            ground_at(&terminal, x, other),
+            Color::Reset,
+            "the cell at {x},{other} is on a row nobody selected",
+        );
+    }
+    // And no cell uses reverse video: reversing a row throws away the
+    // colours it was drawn in, which are the reading it exists to give.
+    for y in 0..WIDE.1 {
+        for x in 0..WIDE.0 {
+            assert!(
+                !modifier_at(&terminal, x, y).contains(Modifier::REVERSED),
+                "the cell at {x},{y} is drawn in reverse video",
+            );
+        }
+    }
+}
+
+#[test]
+fn the_marker_takes_the_rows_colour() {
+    // Given T1 (done) is selected in a live view
+    let runfiles = Runfiles::new("t5-dim-marker");
+    let board = watching(&runfiles, 0);
+
+    // When the board renders
+    let terminal = painted(&board, WIDE.0, WIDE.1);
+    let frame = lines_of(&terminal, WIDE.0, WIDE.1);
+
+    // Then the marker is dim
+    assert_eq!(
+        cell_at(&terminal, 1, y_of(&frame, "T1")),
+        ("▸".to_string(), DIM),
+    );
+    // And the running row it left carries none.
+    assert!(
+        inside(row_of(&frame, "T3")).starts_with("  T3"),
+        "{:?}",
+        row_of(&frame, "T3"),
+    );
+}
+
+#[test]
+fn j_and_k_move_over_tasks_not_lines() {
+    // Given T3 (two lines) is selected and T5 (two lines) is next
+    let runfiles = Runfiles::new("t5-move");
+    let mut app = app_over(
+        &Arc::new(Reads::answering("")),
+        &report(&[spawned(&runfiles, "T3"), spawned(&runfiles, "T5")]),
+    );
+    assert_eq!(app.board.selected, 0, "the board opened on some other row");
+
+    // When the user presses j
+    assert_eq!(on_key(&mut app, press(KeyCode::Char('j'))), Action::Nothing);
+
+    // Then T5 is selected and its marker is on its first line
+    assert_eq!(
+        app.board.selected, 1,
+        "one press moved one line rather than one task",
+    );
+    let frame = drawn(&app.board, WIDE.0, WIDE.1);
+    assert!(
+        inside(row_of(&frame, "T5")).starts_with("▸ T5"),
+        "{:?}",
+        row_of(&frame, "T5"),
+    );
+    assert!(
+        !inside(under_of(&frame, "T5")).contains('▸'),
+        "the marker is on the line under the row: {:?}",
+        under_of(&frame, "T5"),
+    );
+    assert!(
+        inside(row_of(&frame, "T3")).starts_with("  T3"),
+        "the marker stayed on the row it left: {:?}",
+        row_of(&frame, "T3"),
+    );
+    // And k comes back over the same task, in one press.
+    on_key(&mut app, press(KeyCode::Char('k')));
+    assert_eq!(app.board.selected, 0);
+}
+
+#[test]
+fn rows_that_outgrow_the_panel_collapse_to_one_line_except_the_selected() {
+    // Given 14 running tasks, T3 selected, and a tasks panel 20 rows tall
+    let runfiles = Runfiles::new("t5-collapse");
+    let mut board = assemble(&report(&spawned_wave(&runfiles, 14)), "", NOON);
+    board.selected = 2;
+
+    // When the board renders
+    let frame = drawn(&board, WIDE.0, TALL);
+    assert!(
+        frame[TASKS_TOP].starts_with('┌') && frame[TASKS_TOP + 21].starts_with('└'),
+        "the tasks panel is not twenty rows tall:\n{}",
+        frame.join("\n"),
+    );
+
+    // Then T3 takes two lines and the other running tasks one
+    assert!(
+        inside(under_of(&frame, "T3")).starts_with("    └─ Bash: just dev"),
+        "the watched row lost the line that says what it is doing: {:?}",
+        under_of(&frame, "T3"),
+    );
+    for task in (1..=14).filter(|task| *task != 3) {
+        let id = format!("T{task}");
+        assert!(
+            !inside(under_of(&frame, &id)).starts_with("    └─"),
+            "{id} kept its second line on a panel with no room for it:\n{}",
+            frame.join("\n"),
+        );
+    }
+    // And each collapsed row shows its tool in the TITLE column as
+    // "Bash: just dev…" — cut where the column ends, since the second line
+    // it came off had the panel's whole width to say it in.
+    let title: String = inside(row_of(&frame, "T1")).chars().skip(79).collect();
+    assert!(title.starts_with("Bash: just dev"), "{title:?}");
+    assert!(title.trim_end().ends_with('…'), "{title:?}");
+}
+
+#[test]
+fn z_toggles_compact_by_hand() {
+    // Given nine tasks that fit two-line
+    let runfiles = Runfiles::new("t5-compact-key");
+    let mut app = app_over(
+        &Arc::new(Reads::answering("")),
+        &report(&spawned_wave(&runfiles, 9)),
+    );
+    assert!(
+        inside(under_of(&drawn(&app.board, WIDE.0, WIDE.1), "T1")).starts_with("    └─"),
+        "the board did not open with the rows two-line",
+    );
+
+    // When the user presses z
+    assert_eq!(on_key(&mut app, press(KeyCode::Char('z'))), Action::Nothing);
+    let frame = drawn(&app.board, WIDE.0, WIDE.1);
+
+    // Then every live row is one line
+    for task in 1..=9 {
+        let id = format!("T{task}");
+        assert!(
+            !inside(under_of(&frame, &id)).starts_with("    └─"),
+            "{id} kept its second line:\n{}",
+            frame.join("\n"),
+        );
+    }
+    // And the hints read "z expand"
+    assert!(
+        inside(&frame[WAVE_TOP + 2]).ends_with("z expand · q quit"),
+        "{:?}",
+        frame[WAVE_TOP + 2],
+    );
+
+    // And pressing z again restores the second lines
+    on_key(&mut app, press(KeyCode::Char('z')));
+    let back = drawn(&app.board, WIDE.0, WIDE.1);
+    assert!(
+        inside(under_of(&back, "T1")).starts_with("    └─ Bash: just dev"),
+        "{:?}",
+        under_of(&back, "T1"),
+    );
+    assert!(
+        inside(&back[WAVE_TOP + 2]).ends_with("z compact · q quit"),
+        "{:?}",
+        back[WAVE_TOP + 2],
+    );
+}
+
+#[test]
+fn a_short_panel_scrolls_to_keep_the_selection_visible() {
+    // Given 12 tasks, all running, and a tasks panel 8 rows tall
+    let runfiles = Runfiles::new("t5-scroll");
+    let mut app = app_over(
+        &Arc::new(Reads::answering("")),
+        &report(&spawned_wave(&runfiles, 12)),
+    );
+
+    // When the user presses j until T12 is selected
+    for _ in 0..11 {
+        on_key(&mut app, press(KeyCode::Char('j')));
+    }
+    assert_eq!(app.board.selected, 11);
+    let frame = drawn(&app.board, WIDE.0, SHORT);
+
+    // Then T12's row is drawn inside the tasks panel, its second line with
+    // it and the panel's bottom border under that
+    assert!(
+        inside(row_of(&frame, "T12")).starts_with("▸ T12"),
+        "{:?}",
+        row_of(&frame, "T12"),
+    );
+    assert!(
+        inside(under_of(&frame, "T12")).starts_with("    └─"),
+        "the watched task's second line fell off the panel:\n{}",
+        frame.join("\n"),
+    );
+    assert!(
+        frame[TASKS_TOP + 9].starts_with('└'),
+        "the tasks panel is not eight rows tall:\n{}",
+        frame.join("\n"),
+    );
+
+    // And the first row drawn is T7
+    assert!(
+        inside(&frame[TASKS_TOP + 2]).starts_with("  T7 "),
+        "{:?}",
+        frame[TASKS_TOP + 2],
+    );
+    for task in 1..=6 {
+        assert!(
+            !frame
+                .iter()
+                .any(|line| inside(line).trim_start().starts_with(&format!("T{task} "))),
+            "T{task} was drawn on a panel that had scrolled past it:\n{}",
+            frame.join("\n"),
+        );
+    }
+}

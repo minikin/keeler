@@ -236,8 +236,9 @@ impl App {
     }
 
     /// Puts a freshly assembled board in place of the one on screen, keeping
-    /// the one thing a re-assembly knows nothing about — which row the
-    /// person is looking at — and saying again whatever there is to say.
+    /// the two things a re-assembly knows nothing about — which row the
+    /// person is looking at, and how they asked for the rows to be drawn —
+    /// and saying again whatever there is to say.
     ///
     /// The selection is clamped rather than kept, because the rows are the
     /// report's and the report can lose one — a task whose spec line was
@@ -247,6 +248,7 @@ impl App {
         let message = self.said();
         self.board = Board {
             selected,
+            compact: self.board.compact,
             message,
             ..fresh
         };
@@ -420,6 +422,15 @@ pub fn on_key(app: &mut App, key: KeyEvent) -> Action {
         // a run that can be started again, and `R` starts an agent.
         KeyCode::Char('R') if plain(key) => Action::Resume,
         KeyCode::Enter if plain(key) => Action::Attach,
+        // Not a lever, and so no guard: it changes how the rows are drawn
+        // and nothing outside the board. `None` is the panel's own answer —
+        // collapse the live rows when they have outgrown it — and the first
+        // press is the watcher asking for the collapse, which is what
+        // somebody reaches for `z` to get.
+        KeyCode::Char('z') => {
+            app.board.compact = Some(!app.board.compact.unwrap_or(false));
+            Action::Nothing
+        }
         // Down and up the board as it is drawn, which is not the order the
         // report listed the tasks in — `Board::moved` says why.
         KeyCode::Char('j') | KeyCode::Down => {
@@ -954,6 +965,38 @@ mod tests {
         on_key(&mut app, press(KeyCode::Char('j')));
 
         assert_eq!(app.board.selected, 0, "the pane left the board");
+    }
+
+    #[test]
+    fn z_collapses_the_rows_and_the_press_after_it_expands_them() {
+        let mut app = app(THREE);
+
+        assert_eq!(app.board.compact, None, "the board did not open automatic");
+        assert_eq!(on_key(&mut app, press(KeyCode::Char('z'))), Action::Nothing);
+        assert_eq!(app.board.compact, Some(true));
+        on_key(&mut app, press(KeyCode::Char('z')));
+        assert_eq!(app.board.compact, Some(false));
+        on_key(&mut app, press(KeyCode::Char('z')));
+        assert_eq!(
+            app.board.compact,
+            Some(true),
+            "the toggle stopped after one round",
+        );
+    }
+
+    #[test]
+    fn a_tick_keeps_what_the_watcher_asked_of_the_rows() {
+        // The rows are re-assembled every second from the two reads, and
+        // neither of them knows anything about `z`. A board that took the
+        // fresh answer whole would expand itself a second after it was
+        // collapsed — which is the same reason the selection is carried
+        // over, and the same place it is carried over in.
+        let mut app = app(THREE);
+        on_key(&mut app, press(KeyCode::Char('z')));
+
+        app.tick(Timestamp::from_epoch_seconds(1_001));
+
+        assert_eq!(app.board.compact, Some(true));
     }
 
     #[test]
