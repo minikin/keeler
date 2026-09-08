@@ -15,12 +15,16 @@
 //! U+007F: the states, the bar, the marker, the connector, the borders and
 //! the four punctuation marks.
 //!
-//! A glyph the theme does not own is not the theme's to swap, and there
-//! are two. `board.rs` composes `blocked ← T1` as one string, so the `←`
-//! reaches the frame inside the state's own text rather than through
-//! [`Theme::waits_on`] — a frame that wants the ASCII set has to compose
-//! that text itself. And `run.rs`'s `DASH` belongs to `--once`, which is a
-//! frozen plain-text surface and has no theme at all.
+//! One of those glyphs arrives by a road of its own. `board.rs` composes
+//! `blocked ← T1` as a single string, because the state column is one
+//! reading and not two, so the `←` reaches the frame inside the state's own
+//! words rather than through [`Theme::waits_on`]. [`Theme::state_text`] is
+//! where it is swapped, and the frame measures its state column through
+//! that same call — `<-` is two cells where `←` is one.
+//!
+//! And one glyph the theme does not own at all: `run.rs`'s `DASH` belongs
+//! to `--once`, which is a frozen plain-text surface and has no theme to
+//! ask.
 //!
 //! **The state table is the whole of what the board believes about
 //! `keeler-status`'s vocabulary.** It classifies by the leading word and

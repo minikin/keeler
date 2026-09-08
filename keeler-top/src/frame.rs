@@ -489,9 +489,16 @@ pub fn layout(area: Rect, lines: usize) -> Panes {
 /// The detail pane's lines for one row: which task and what it is doing,
 /// the command whole rather than cut to a column, the run's last words
 /// oldest first, and the commits its branch has made.
+///
+/// The state goes through the theme for the reason the row above it does:
+/// the arrow a blocked task carries is inside its words, and a pane that
+/// wrote `blocked ← T6` under a row reading `blocked <- T6` would be the
+/// same board disagreeing with itself on one screen. The `—` is not the
+/// theme's — it is spec 10's separator, and T6's fact block is what
+/// replaces it.
 #[must_use]
-pub fn detail(row: &Row) -> Vec<String> {
-    let mut lines = vec![format!("{} — {}", row.id, row.state)];
+pub fn detail(row: &Row, theme: Theme) -> Vec<String> {
+    let mut lines = vec![format!("{} — {}", row.id, theme.state_text(&row.state))];
     if let Some(run) = &row.run {
         lines.push(run.tool_column());
         lines.push(String::new());
@@ -554,7 +561,10 @@ pub fn render(frame: &mut ratatui::Frame, board: &Board, theme: Theme, now: Time
     frame.render_widget(Paragraph::new(board.header(now)), panes.header);
     frame.render_widget(Paragraph::new(rows), inside);
     if let Some(pane) = panes.detail {
-        let lines = board.selected_row().map(detail).unwrap_or_default();
+        let lines = board
+            .selected_row()
+            .map(|row| detail(row, theme))
+            .unwrap_or_default();
         frame.render_widget(Paragraph::new(lines.join("\n")), pane);
     }
     frame.render_widget(Paragraph::new(board.message.clone()), panes.status);
@@ -1177,6 +1187,23 @@ mod tests {
             title: None,
         };
 
-        assert_eq!(super::detail(&row), ["T1 — not spawned"]);
+        assert_eq!(super::detail(&row, THEME), ["T1 — not spawned"]);
+    }
+
+    // ── 11-T3
+
+    #[test]
+    fn the_pane_says_a_blocked_task_in_the_glyphs_the_row_above_it_uses() {
+        // The arrow reaches the pane inside the state's own words, as it
+        // reaches the row: a pane reading `blocked ← T6` under a row reading
+        // `blocked <- T6` would be one board disagreeing with itself on one
+        // screen — and mojibake on the terminal the ASCII set exists for.
+        let row = row_of("blocked ← T6", None, None);
+
+        assert_eq!(
+            super::detail(&row, Theme::new(true, true)),
+            ["T3 — blocked <- T6"],
+        );
+        assert_eq!(super::detail(&row, THEME), ["T3 — blocked ← T6"]);
     }
 }

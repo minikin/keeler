@@ -2278,7 +2278,10 @@ fn the_detail_pane_shows_the_selected_tasks_last_five_texts_and_its_last_command
     );
 
     // When T1 is selected
-    let pane = detail(board.selected_row().expect("the first row is selected"));
+    let pane = detail(
+        board.selected_row().expect("the first row is selected"),
+        THEME,
+    );
 
     // Then the pane shows the last five texts, oldest first, and the
     // command in full
@@ -2323,7 +2326,10 @@ fn the_detail_pane_lists_the_branchs_commits_since_the_feature_branch() {
     );
 
     // When T1 is selected
-    let pane = detail(board.selected_row().expect("the first row is selected"));
+    let pane = detail(
+        board.selected_row().expect("the first row is selected"),
+        THEME,
+    );
 
     // Then the pane lists both subjects with their short hashes, newest first
     let listed: Vec<&String> = pane
@@ -3764,8 +3770,7 @@ fn inside(line: &str) -> &str {
 /// What is in one cell of a drawn frame: the character, and the colour it
 /// is drawn in.
 fn cell_at(terminal: &Terminal<TestBackend>, x: u16, y: u16) -> (String, Color) {
-    let buffer = terminal.backend().buffer().clone();
-    let cell = &buffer[(x, y)];
+    let cell = &terminal.backend().buffer()[(x, y)];
     (cell.symbol().to_string(), cell.fg)
 }
 
@@ -4210,7 +4215,14 @@ fn every_state_report() -> String {
 }
 
 /// The graph's answer for the two states `keeler-status` has no word for.
-const READY_AND_BLOCKED: &str = "T5 ready\nT7 blocked T6\n";
+///
+/// T7 waits on five tasks, which makes it the widest state on this board —
+/// wider than `incomplete (no review record)`, and the one state whose
+/// width the theme changes, since `<-` is two cells where `←` is one.
+const READY_AND_BLOCKED: &str = "T5 ready\nT7 blocked T6 T4 T9 T10 T11\n";
+
+/// What that state comes to, whole.
+const BLOCKED: &str = "blocked <- T6, T4, T9, T10, T11";
 
 #[test]
 fn each_state_has_its_glyph_and_colour() {
@@ -4315,10 +4327,12 @@ fn the_context_bar_fills_cells_and_colours_by_threshold() {
     // Given context at 41%, 65% and 84%
     let runfiles = Runfiles::new("t3-context-bar");
     let board = assemble(
-        &report(&[("T1", 410_000_u64), ("T2", 650_000), ("T3", 840_000)].map(|(id, used)| {
-            let log = runfiles.stream(&id.to_lowercase(), &context_stream(used));
-            format!("{id:<6} running          log {log}  worktree /nowhere")
-        })),
+        &report(
+            &[("T1", 410_000_u64), ("T2", 650_000), ("T3", 840_000)].map(|(id, used)| {
+                let log = runfiles.stream(&id.to_lowercase(), &context_stream(used));
+                format!("{id:<6} running          log {log}  worktree /nowhere")
+            }),
+        ),
         "",
         NOON,
     );
@@ -4481,7 +4495,7 @@ fn glyph_board(runfiles: &Runfiles) -> Board {
 fn the_ascii_theme_replaces_every_non_ascii_glyph() {
     // Given KEELER_TOP_ASCII=1
     let runfiles = Runfiles::new("t3-ascii");
-    let board = glyph_board(&runfiles);
+    let mut board = glyph_board(&runfiles);
 
     // When the board renders
     let terminal = painted_through(&board, Theme::new(true, true), 120, 30);
@@ -4520,18 +4534,46 @@ fn the_ascii_theme_replaces_every_non_ascii_glyph() {
     // And "←" and "…" are drawn as "<-" and "..." — the arrow reaches the
     // frame inside the state's own words rather than through the theme, and
     // the mark that says a title was cut is three cells here and not one.
+    //
+    // Whole, and that is the second half of it: T7's is the widest state on
+    // this board, and the two cells `<-` takes where `←` took one are two a
+    // column measured in the other set would not have given it. What would
+    // be cut is the last task a blocked one is waiting on.
     assert!(
-        inside(row_of(&frame, "T7")).contains("- blocked <- T6"),
-        "{:?}",
+        inside(row_of(&frame, "T7")).contains(&format!("- {BLOCKED}")),
+        "the widest state was measured in glyphs this terminal will not draw: {:?}",
         row_of(&frame, "T7"),
     );
     assert!(running.ends_with("..."), "{running:?}");
     // And no glyph the theme owns is above U+007F: every line of the table
-    // is drawn out of the ASCII set, its heading included.
+    // is drawn out of the ASCII set, its heading included. The pane below
+    // the table is spec 10's plain text and still carries its own `—`,
+    // which no theme owns and T6's fact block is what replaces.
     for line in &frame[..=row_at(&frame, "T1")] {
         assert!(
             line.is_ascii(),
             "the table drew a glyph this terminal cannot:\n{line:?}",
         );
     }
+    // What that pane does owe the theme is the state, which carries the
+    // arrow inside its own words: a pane reading "blocked ← T6" under a row
+    // reading "blocked <- T6" would be one board disagreeing with itself on
+    // one screen.
+    board.selected = board
+        .rows
+        .iter()
+        .position(|row| row.id == "T7")
+        .expect("the report named T7");
+    let watched = lines_of(
+        &painted_through(&board, Theme::new(true, true), 120, 30),
+        120,
+        30,
+    );
+    assert!(
+        watched
+            .iter()
+            .any(|line| line.contains(&format!("T7 — {BLOCKED}"))),
+        "the pane kept a glyph the row beside it swapped:\n{}",
+        watched.join("\n"),
+    );
 }
