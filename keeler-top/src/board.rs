@@ -19,10 +19,11 @@ use std::path::PathBuf;
 
 use crate::clock::Timestamp;
 use crate::git::{BranchFacts, branch_facts};
-use crate::graph::{GraphLine, GraphState};
+use crate::graph::{Graph, GraphLine, GraphState};
 use crate::run::{DASH, RunView, fold};
 use crate::status::{Status, StatusLine};
 use crate::stream::StreamReader;
+use crate::theme::Theme;
 
 /// The recipe's word for a task nobody has spawned — and the one word of
 /// its vocabulary the graph can improve on.
@@ -33,6 +34,15 @@ const NOT_SPAWNED: &str = "not spawned";
 /// The one state the board's levers divide on: `p` and `Enter` need a
 /// session, and `R` is for a task that has none.
 pub const RUNNING: &str = "running";
+
+/// The recipe's word for a task somebody stopped on purpose. Live, like
+/// `running`, in the one sense the frame cares about: the row carries a
+/// second line, because there is something to say under it.
+pub const PAUSED: &str = "paused";
+
+/// The recipe's word for a task that landed. A board of nothing else is a
+/// finished view, which is a different board.
+pub const DONE: &str = "done";
 
 /// One task, as the board shows it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,6 +59,11 @@ pub struct Row {
     pub run: Option<RunView>,
     /// What the task's branch and worktree say, while they are there.
     pub branch: Option<BranchFacts>,
+    /// What the spec's Tasks section calls this task, for the rows that
+    /// have room for it — and nothing for a task line that does not give
+    /// one, which is a blank column rather than a board complaining about
+    /// somebody's prose.
+    pub title: Option<String>,
 }
 
 impl Row {
@@ -56,6 +71,16 @@ impl Row {
     #[must_use]
     pub fn running(&self) -> bool {
         self.state == RUNNING
+    }
+
+    /// Whether the row carries a second line: a run that is happening now,
+    /// or one somebody stopped and can start again.
+    ///
+    /// Every other state is closed or waiting, and a connector under one of
+    /// those would be a line saying nothing is happening.
+    #[must_use]
+    pub fn live(&self) -> bool {
+        self.running() || self.state == PAUSED
     }
 
     /// The tmux session the run is in: `keeler-<slug>-<tid>`, the name
@@ -256,20 +281,16 @@ pub struct Board {
 impl Board {
     /// One tick's board, from the two reads and the streams.
     #[must_use]
-    pub fn assemble(
-        status: &Status,
-        graph: &[GraphLine],
-        runs: &mut Runs,
-        answered: Timestamp,
-    ) -> Self {
+    pub fn assemble(status: &Status, graph: &Graph, runs: &mut Runs, answered: Timestamp) -> Self {
         let rows = status
             .tasks
             .iter()
             .map(|task| Row {
                 id: task.id.clone(),
-                state: state_column(&task.state, graph.iter().find(|line| line.id == task.id)),
+                state: state_column(&task.state, graph.line(&task.id)),
                 log: task.log.clone(),
                 run: runs.refresh(task),
+                title: graph.title(&task.id),
                 // The distance is measured from the ref the report
                 // answered about, so the commit column and the state column
                 // are about one graph and not two.
@@ -320,6 +341,74 @@ impl Board {
     pub fn selected_row(&self) -> Option<&Row> {
         self.rows.get(self.selected)
     }
+
+    /// Whether every task has landed, which is a different board: the live
+    /// columns have nothing left to say, so the row is the id, the word and
+    /// what landed, and `done` stops being the background and becomes the
+    /// answer.
+    ///
+    /// A board with no rows at all is not finished. A spec whose tasks are
+    /// still to be written has nothing to have finished, and the header
+    /// congratulating somebody on it would be the board's own arithmetic
+    /// talking.
+    #[must_use]
+    pub fn finished(&self) -> bool {
+        !self.rows.is_empty() && self.rows.iter().all(|row| row.state == DONE)
+    }
+
+    /// The rows in the order the board draws them, each with where the
+    /// report put it.
+    #[must_use]
+    pub fn ordered(&self) -> Vec<(usize, &Row)> {
+        ordered(&self.rows)
+    }
+
+    /// Where the selection lands when it moves one row down the board, or
+    /// up it — as the board is drawn, and not as the report listed them.
+    ///
+    /// The two orders stopped being the same when the rows began leading
+    /// with what needs a human: a selection that walked the report's would
+    /// jump about the screen, and nothing on the board would say why. The
+    /// answer is still a report index, because that is what the levers and
+    /// the detail pane read.
+    #[must_use]
+    pub fn moved(&self, down: bool) -> usize {
+        let order = self.ordered();
+        let last = order.len().saturating_sub(1);
+        let here = order
+            .iter()
+            .position(|(index, _)| *index == self.selected)
+            .unwrap_or_default();
+        let there = if down {
+            here.saturating_add(1).min(last)
+        } else {
+            here.saturating_sub(1)
+        };
+        order.get(there).map_or(self.selected, |(index, _)| *index)
+    }
+}
+
+/// The rows in the order a watcher asks for them — what needs a human
+/// first, then what is running, then what is left — each paired with where
+/// the report put it, which is what the selection is counted in.
+///
+/// The group is the state table's, and within a group the report's order
+/// holds — which is the spec's order, and the one order the person reading
+/// the board already has in their head. Stable rather than sorted by id:
+/// `T10` sorts before `T2` as text and after it as a number, and the report
+/// has already answered the question.
+#[must_use]
+pub fn ordered(rows: &[Row]) -> Vec<(usize, &Row)> {
+    let mut ordered: Vec<(usize, &Row)> = rows.iter().enumerate().collect();
+    ordered.sort_by_key(|(_, row)| Theme::group(&row.state));
+    ordered
+}
+
+/// The same order, as the report's own indices — which is what a test about
+/// the order itself reads.
+#[must_use]
+pub fn order(rows: &[Row]) -> Vec<usize> {
+    ordered(rows).into_iter().map(|(index, _)| index).collect()
 }
 
 #[cfg(test)]
@@ -330,6 +419,7 @@ mod tests {
     use crate::graph::{GraphLine, GraphState};
     use crate::run::RunView;
     use crate::status::{StatusLine, parse};
+    use crate::theme::Theme;
 
     fn graph(state: GraphState, needs: &[&str]) -> GraphLine {
         GraphLine {
@@ -358,6 +448,7 @@ mod tests {
             log: Some(std::path::PathBuf::from("/r/.keeler/runs/01-foo/t1.log")),
             run,
             branch,
+            title: None,
         }
     }
 
@@ -641,7 +732,7 @@ mod tests {
         let slug = |rel: &str| {
             Board::assemble(
                 &parse(&format!("graph: {rel} on HEAD\n")).expect("a report"),
-                &[],
+                &crate::graph::Graph::default(),
                 &mut Runs::default(),
                 Timestamp::default(),
             )
@@ -658,11 +749,239 @@ mod tests {
         assert_eq!(slug(""), "");
     }
 
+    // ── 11-T2
+
+    /// A board of nothing but states, in the report's order.
+    fn rows_of(states: &[(&str, &str)]) -> Vec<Row> {
+        states
+            .iter()
+            .map(|(id, state)| Row {
+                id: (*id).to_string(),
+                state: (*state).to_string(),
+                ..row(None, None)
+            })
+            .collect()
+    }
+
+    /// The ids in the order the board draws them.
+    fn ordered(rows: &[Row]) -> Vec<&str> {
+        super::order(rows)
+            .into_iter()
+            .map(|index| rows[index].id.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn rows_are_ordered_by_what_needs_a_human_first() {
+        // Given one task in each of the ten states, in the report's order
+        let rows = rows_of(&[
+            ("T1", "done"),
+            ("T2", "incomplete (no review record)"),
+            ("T3", "running"),
+            ("T4", "died"),
+            ("T5", "ready"),
+            ("T6", "passed"),
+            ("T7", "blocked ← T6"),
+            ("T8", "paused"),
+            ("T9", "failed (exit 2)"),
+            ("T10", "not spawned"),
+        ]);
+
+        // When the rows are ordered
+        // Then they appear in the order T2, T4, T9, T8, T3, T6, T5, T7, T10, T1
+        assert_eq!(
+            ordered(&rows),
+            ["T2", "T4", "T9", "T8", "T3", "T6", "T5", "T7", "T10", "T1"],
+        );
+    }
+
+    #[test]
+    fn within_a_group_the_reports_order_holds() {
+        // Given the report lists T5 before T3 and both are running
+        let rows = rows_of(&[("T5", "running"), ("T3", "running")]);
+
+        // When the board renders
+        // Then T5's row is above T3's — and the ids are not what decides
+        // it: sorted as text, T10 would come before T2.
+        assert_eq!(ordered(&rows), ["T5", "T3"]);
+        assert_eq!(
+            ordered(&rows_of(&[("T10", "running"), ("T2", "running")])),
+            ["T10", "T2"],
+        );
+    }
+
+    /// A board over a report of nothing but states.
+    fn board_of(states: &[(&str, &str)]) -> Board {
+        let report: String = std::iter::once("graph: s.md on HEAD\n".to_string())
+            .chain(
+                states
+                    .iter()
+                    .map(|(id, state)| format!("{id:<6} {state}\n")),
+            )
+            .collect();
+        Board::assemble(
+            &parse(&report).expect("a report"),
+            &crate::graph::Graph::default(),
+            &mut Runs::default(),
+            Timestamp::default(),
+        )
+    }
+
+    #[test]
+    fn a_board_with_no_rows_has_nothing_to_order_and_has_not_finished() {
+        assert_eq!(super::order(&[]), Vec::<usize>::new());
+        // And a spec whose tasks are still to be written has not finished
+        // anything: the finished view's congratulation would be the board's
+        // own arithmetic talking.
+        let board = board_of(&[]);
+        assert!(!board.finished());
+        assert!(board.ordered().is_empty());
+    }
+
+    #[test]
+    fn a_finished_board_is_one_where_every_task_has_landed() {
+        assert!(board_of(&[("T1", "done"), ("T2", "done")]).finished());
+        assert!(!board_of(&[("T1", "done"), ("T2", "running")]).finished());
+        // The word and nothing near it: a task nobody has spawned has not
+        // landed, whatever group the two share.
+        assert!(!board_of(&[("T1", "done"), ("T2", "not spawned")]).finished());
+        // And the order the board draws them in is the rows themselves.
+        assert_eq!(
+            board_of(&[("T1", "done"), ("T2", "running")])
+                .ordered()
+                .into_iter()
+                .map(|(_, row)| row.id.as_str())
+                .collect::<Vec<_>>(),
+            ["T2", "T1"],
+        );
+    }
+
+    #[test]
+    fn the_selection_moves_down_the_board_as_it_is_drawn() {
+        // The rows are drawn by group and the report lists them in the
+        // spec's order, so the two orders are different — and the one the
+        // selection walks has to be the one the eye follows. Counted in the
+        // report's indices, because that is what every lever reads.
+        let board = board_of(&[("T1", "done"), ("T2", "running"), ("T3", "passed")]);
+        assert_eq!(
+            board
+                .ordered()
+                .into_iter()
+                .map(|(_, row)| row.id.as_str())
+                .collect::<Vec<_>>(),
+            ["T2", "T3", "T1"],
+        );
+
+        // T1 is selected, and it is the last row on the board.
+        assert_eq!(board.moved(true), 0, "the selection left the board");
+        assert_eq!(board.moved(false), 2, "up from the last row is T3's");
+
+        let middle = Board {
+            selected: 2,
+            ..board.clone()
+        };
+        assert_eq!(middle.moved(true), 0, "down from T3 is T1, the last row");
+        assert_eq!(middle.moved(false), 1, "up from T3 is T2, the first");
+
+        // And a board with no rows has nowhere to move to.
+        assert_eq!(board_of(&[]).moved(true), 0);
+    }
+
+    #[test]
+    fn a_row_carries_the_title_the_spec_gives_its_task_and_no_other() {
+        let status = parse("graph: s.md on HEAD\nT1     done\nT2     done\n").expect("a report");
+        let graph = crate::graph::Graph {
+            lines: Vec::new(),
+            titles: crate::graph::titles("- [x] **T1 — The theme.** x\n"),
+        };
+
+        let board = Board::assemble(&status, &graph, &mut Runs::default(), Timestamp::default());
+
+        assert_eq!(board.rows[0].title.as_deref(), Some("The theme"));
+        assert_eq!(board.rows[1].title, None, "a title nobody wrote was found");
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig {
+            failure_persistence: Some(Box::new(
+                proptest::test_runner::FileFailurePersistence::WithSource("proptest-regressions"),
+            )),
+            ..proptest::prelude::ProptestConfig::default()
+        })]
+
+        /// Given any list of tasks with any states in any report order:
+        /// every task in a lower-numbered group precedes every task in a
+        /// higher one, within a group the report's order holds, and
+        /// ordering twice gives the same result.
+        #[test]
+        fn any_set_of_tasks_orders_by_group_then_report_order(
+            states in proptest::collection::vec(state(), 0..12),
+        ) {
+            let rows: Vec<Row> = states
+                .iter()
+                .enumerate()
+                .map(|(index, state)| Row {
+                    id: format!("T{index}"),
+                    state: state.clone(),
+                    ..row(None, None)
+                })
+                .collect();
+
+            let order = super::order(&rows);
+
+            // Every row, exactly once: a board that dropped one would be a
+            // task nobody is watching.
+            let mut seen = order.clone();
+            seen.sort_unstable();
+            proptest::prop_assert_eq!(seen, (0..rows.len()).collect::<Vec<_>>());
+            for pair in order.windows(2) {
+                let (first, next) = (&rows[pair[0]], &rows[pair[1]]);
+                let (low, high) = (Theme::group(&first.state), Theme::group(&next.state));
+                proptest::prop_assert!(low <= high);
+                if low == high {
+                    proptest::prop_assert!(pair[0] < pair[1], "the report's order was lost");
+                }
+            }
+            // Ordering the ordered board again moves nothing.
+            let again: Vec<Row> = order.iter().map(|index| rows[*index].clone()).collect();
+            proptest::prop_assert_eq!(
+                super::order(&again),
+                (0..again.len()).collect::<Vec<_>>(),
+            );
+        }
+    }
+
+    /// A state as the board is shown one: the recipe's vocabulary, the
+    /// graph's two words, and one the theme has no row for.
+    fn state() -> impl proptest::prelude::Strategy<Value = String> {
+        proptest::prelude::Strategy::prop_map(
+            proptest::sample::select(vec![
+                "failed (exit 2)",
+                "died",
+                "incomplete (no review record)",
+                "paused",
+                "running",
+                "passed",
+                "ready",
+                "blocked ← T1",
+                "not spawned",
+                "done",
+                "sulking",
+            ]),
+            str::to_string,
+        )
+    }
+
     #[test]
     fn the_header_names_the_spec_the_ref_and_the_age_of_the_answer() {
         let status = parse("graph: specs/01-foo.md on feat/01-foo\n").expect("a report");
         let answered = Timestamp::from_epoch_seconds(1_000);
-        let board = Board::assemble(&status, &[], &mut Runs::default(), answered);
+        let board = Board::assemble(
+            &status,
+            &crate::graph::Graph::default(),
+            &mut Runs::default(),
+            answered,
+        );
 
         assert_eq!(
             board.header(Timestamp::from_epoch_seconds(1_004)),
