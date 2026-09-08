@@ -987,6 +987,63 @@ mod tests {
         assert_eq!(board_of(&[]).moved(true), 0);
     }
 
+    /// A dispatch that answers both reads and remembers what it was asked.
+    #[derive(Debug, Default)]
+    struct Asked {
+        verdicts: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl crate::dispatch::Records for Asked {
+        fn verdict(&self, slug: &str, id: &str, git_ref: &str) -> Option<String> {
+            self.verdicts
+                .lock()
+                .expect("the asks")
+                .push(format!("{slug} {id} {git_ref}"));
+            Some("pass".to_string())
+        }
+
+        fn exit(&self, _slug: &str, id: &str) -> Option<crate::dispatch::Exit> {
+            Some(crate::dispatch::Exit {
+                code: i32::from(id == "T9"),
+                at: None,
+            })
+        }
+    }
+
+    #[test]
+    fn the_record_is_asked_for_only_where_one_could_be() {
+        // Two `git show`s a row a tick is what this read costs, and a task
+        // nobody has spawned has no branch to hold a record and no tick to
+        // have merged one — so the answer cannot exist and the board does
+        // not go looking for it every second.
+        let status = parse(
+            "graph: specs/01-foo.md on feat/01-foo\n\
+             T1     running          log /r/t1.log  worktree /w/r-01-foo-t1\n\
+             T2     done\n\
+             T3     not spawned\n",
+        )
+        .expect("a report");
+        let asked = Asked::default();
+
+        let board = Board::assemble(
+            &status,
+            &crate::graph::Graph::default(),
+            &mut Runs::default(),
+            Timestamp::default(),
+            &asked,
+        );
+
+        assert_eq!(
+            *asked.verdicts.lock().expect("the asks"),
+            ["01-foo T1 feat/01-foo", "01-foo T2 feat/01-foo"],
+        );
+        assert_eq!(board.rows[2].verdict, None, "T3 was asked about after all");
+        // The exit file is a stat rather than a subprocess, so it is read
+        // for every row — and it reaches the row it was read for.
+        assert_eq!(board.rows[0].exit.map(|exit| exit.code), Some(0));
+        assert_eq!(board.rows[2].exit.map(|exit| exit.code), Some(0));
+    }
+
     #[test]
     fn a_row_carries_the_title_the_spec_gives_its_task_and_no_other() {
         let status = parse("graph: s.md on HEAD\nT1     done\nT2     done\n").expect("a report");

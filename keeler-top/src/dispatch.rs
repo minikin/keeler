@@ -487,7 +487,8 @@ mod tests {
         }
     }
 
-    /// A run directory under a project root of its own, removed on drop.
+    /// A project root of its own, with the run directory a spec's tasks
+    /// write into — removed on drop.
     struct Runs(std::path::PathBuf);
 
     impl Runs {
@@ -499,7 +500,27 @@ mod tests {
         }
 
         fn write(&self, rel: &str, body: &str) {
-            std::fs::write(self.0.join(rel), body).unwrap();
+            let path = self.0.join(rel);
+            std::fs::create_dir_all(path.parent().expect("a file has a parent")).unwrap();
+            std::fs::write(path, body).unwrap();
+        }
+
+        /// git with a fixed identity and no user config, so a global
+        /// `commit.gpgsign` cannot hang the suite waiting for a key.
+        fn git(&self, args: &[&str]) {
+            let output = Command::new("git")
+                .args(["-c", "user.email=probe@keeler", "-c", "user.name=probe"])
+                .args(args)
+                .current_dir(&self.0)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_SYSTEM", "/dev/null")
+                .output()
+                .expect("failed to run git");
+            assert!(
+                output.status.success(),
+                "git {args:?} failed:\n{}",
+                String::from_utf8_lossy(&output.stderr),
+            );
         }
 
         fn shell(&self) -> super::Shell {
@@ -569,6 +590,19 @@ mod tests {
         // And a root that is not a repository answers no verdict rather
         // than ending the board.
         assert_eq!(elsewhere.verdict("01-foo", "T3", "main"), None);
+
+        // The record is read from that same root, through the queries
+        // `git.rs` makes — which is the whole of what this method is.
+        runs.git(&["init", "-qb", "main"]);
+        runs.write("reviews/01-foo/t3.md", "Task: t3\nVerdict: pass\n");
+        runs.git(&["add", "reviews"]);
+        runs.git(&["commit", "-qm", "T3's review record"]);
+
+        assert_eq!(
+            runs.shell().verdict("01-foo", "T3", "main"),
+            Some("pass".to_string()),
+        );
+        assert_eq!(runs.shell().verdict("01-foo", "T4", "main"), None);
     }
 
     #[test]

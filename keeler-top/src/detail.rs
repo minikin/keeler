@@ -299,8 +299,11 @@ fn commits(row: &Row, theme: Theme, room: usize, width: u16) -> Vec<Line<'static
     // this for. Which is also why a section that could hold nothing but that
     // count draws nothing at all — `… +9 more` under a rule and above no
     // commit at all is the pane reporting its own arithmetic.
+    //
+    // A branch with no commits needs no clause of its own: it is over
+    // nothing, and the empty slice below is the same empty answer.
     let over = branch.commits.len() > room;
-    if branch.commits.is_empty() || room == 0 || (over && room < 2) {
+    if room == 0 || (over && room < 2) {
         return Vec::new();
     }
     let shown = if over {
@@ -641,6 +644,34 @@ mod tests {
         assert_eq!(pane[9], "Bash: just dev");
     }
 
+    /// The commits section alone, as text, for the room a scenario gives it.
+    fn listed(commits: usize, room: usize) -> Vec<String> {
+        super::commits(&t3_saying(&[], commits), THEME, room, WIDE)
+            .iter()
+            .map(text)
+            .collect()
+    }
+
+    #[test]
+    fn a_commits_section_with_room_for_nothing_but_its_count_says_nothing() {
+        // Two lines is where the list starts saying anything when it has to
+        // be cut: one commit, and the count of the ones it did not draw.
+        assert_eq!(
+            listed(9, 2),
+            ["b33e050 feat(10-keeler-top): T3 step 0", "… +8 more"]
+        );
+        // One line is not enough for that, and `… +9 more` under a rule and
+        // above no commit at all is the pane reporting its own arithmetic.
+        assert_eq!(listed(9, 1), Vec::<String>::new());
+        assert_eq!(listed(9, 0), Vec::<String>::new());
+        // But a list that fits in one line is a list: nothing was cut, so
+        // there is nothing to say about what was.
+        assert_eq!(listed(1, 1), ["b33e050 feat(10-keeler-top): T3 step 0"]);
+        // And a branch that has made no commits says nothing, however much
+        // room it is given.
+        assert_eq!(listed(0, 5), Vec::<String>::new());
+    }
+
     #[test]
     fn a_pane_with_no_room_for_a_commit_draws_no_commits_at_all() {
         // Not a scenario of its own: it is what the one above does not say
@@ -656,6 +687,16 @@ mod tests {
             pane.join("\n"),
         );
         assert_eq!(pane[6], "── last command ──".to_string() + &"─".repeat(82));
+
+        // And the command is kept down to the panel that has room for the
+        // fact block and it and nothing else — four lines and two, exactly.
+        let exact = shown(&row, 6);
+        assert_eq!(exact.len(), 6);
+        assert!(exact[4].starts_with("── last command ──"), "{:?}", exact[4]);
+        assert_eq!(exact[5], "Bash: just dev");
+        // A row shorter than that keeps the fact block, which is what the
+        // pane is for, and says nothing else.
+        assert_eq!(shown(&row, 5).len(), 4);
     }
 
     /// T1 as the landed scenarios describe it: done, its worktree gone, its
