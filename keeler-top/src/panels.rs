@@ -36,7 +36,7 @@ use crate::theme::{BLUE, DIM, GREEN, NEEDS_YOU, TEXT, Theme};
 /// Three spaces, and not one: two counts a space apart are read as one
 /// phrase, and the whole of what this line does is let the eye take them in
 /// separately.
-const GAP: &str = "   ";
+const GAP: &str = "     ";
 
 /// How many glyphs of the outcome strip stand together before a space.
 ///
@@ -120,9 +120,15 @@ pub fn wave(
     width: u16,
     lines: u16,
 ) -> Vec<Line<'static>> {
-    let mut panel = vec![first(board, theme, now, width)];
+    let indent = |line: Line<'static>| {
+        let mut spans = vec![Span::raw("  ")];
+        spans.extend(line.spans);
+        Line::from(spans)
+    };
+    let inner = width.saturating_sub(4);
+    let mut panel = vec![indent(first(board, theme, now, inner))];
     if lines > 1 {
-        panel.push(second(board, theme, width));
+        panel.push(indent(second(board, theme, inner)));
     }
     panel
 }
@@ -147,12 +153,21 @@ pub fn tasks(
     height: u16,
 ) -> Vec<Line<'static>> {
     let room = usize::from(height).saturating_sub(HEADING);
-    let expanded = drawn(board, cols, theme, now, Collapse::None);
+    // The blank lines are the first thing a short panel gives up, before
+    // any live row gives up the line under it: a board that has stopped
+    // saying what a task is doing has lost more than one that has stopped
+    // looking roomy.
+    let expanded = drawn(board, cols, theme, now, Collapse::None, false);
     let collapse = collapse(board.compact, expanded.rows.len(), room);
     let Drawn { rows, watched } = if collapse == Collapse::None {
-        expanded
+        let airy = drawn(board, cols, theme, now, Collapse::None, true);
+        if airy.rows.len() <= room {
+            airy
+        } else {
+            expanded
+        }
     } else {
-        drawn(board, cols, theme, now, collapse)
+        drawn(board, cols, theme, now, collapse, false)
     };
     let mut lines = vec![Line::styled(
         cols.header(theme.ellipsis()),
@@ -203,10 +218,25 @@ struct Drawn {
 /// The selection is a report index and the rows are in the board's order, so
 /// the two are compared here rather than counted: what `j` moved is a task,
 /// and where it ends up on the screen is this order's answer.
-fn drawn(board: &Board, cols: &Columns, theme: Theme, now: Timestamp, collapse: Collapse) -> Drawn {
+fn drawn(
+    board: &Board,
+    cols: &Columns,
+    theme: Theme,
+    now: Timestamp,
+    collapse: Collapse,
+    air: bool,
+) -> Drawn {
     let mut rows: Vec<Line<'static>> = Vec::new();
     let mut watched = 0..0;
+    let mut first = true;
     for (index, row) in crate::board::ordered(&board.rows) {
+        // A blank line between tasks, so a task and the line under it read
+        // as one block and the next task as another. Never above the first
+        // or below the last, and never inside a task.
+        if air && !first {
+            rows.push(ratatui::text::Line::default());
+        }
+        first = false;
         let selected = index == board.selected;
         let lines = crate::frame::lines(row, cols, theme, now, selected, collapse.takes(selected));
         if selected {
@@ -322,8 +352,12 @@ fn strip(rows: &[Row], theme: Theme, finished: bool) -> Vec<Span<'static>> {
     for (index, row) in rows.iter().enumerate() {
         let look = theme.look(&row.state, finished);
         spans.push(Span::styled(look.glyph, look.style));
-        if (index + 1) % GROUP == 0 && index + 1 < rows.len() {
-            spans.push(Span::raw(" "));
+        if index + 1 < rows.len() {
+            // A glyph and a space is two cells, so a group of five is ten;
+            // two more make the stride twelve, and every group after the
+            // first begins on that grid however wide a terminal draws the
+            // glyphs themselves.
+            spans.push(Span::raw(if (index + 1) % GROUP == 0 { "  " } else { " " }));
         }
     }
     spans
@@ -677,9 +711,11 @@ mod tests {
             false,
         );
 
-        assert_eq!(ten, "✓✓●⊘◐ ‖○·◇✗");
-        // A space after every fifth glyph and none after the last, however
-        // the fives come out.
+        assert_eq!(ten, "✓ ✓ ● ⊘ ◐  ‖ ○ · ◇ ✗");
+        // A space between the glyphs and two after every fifth, so the
+        // groups start on a grid of twelve however wide a terminal draws
+        // the glyphs themselves; none after the last, however the fives
+        // come out.
         assert_eq!(glyphs(&[("T1", "done")], false), "✓");
         assert_eq!(
             glyphs(
@@ -692,7 +728,7 @@ mod tests {
                 ],
                 false,
             ),
-            "✓✓✓✓✓",
+            "✓ ✓ ✓ ✓ ✓",
         );
         assert_eq!(glyphs(&[], false), "");
     }
@@ -861,7 +897,7 @@ mod tests {
             118,
         ));
         assert!(
-            two.contains("✗ T1 exit 2 · ⊘ T2 died   status 60s ago"),
+            two.contains("✗ T1 exit 2 · ⊘ T2 died     status 60s ago"),
             "{two:?}"
         );
     }
@@ -881,7 +917,7 @@ mod tests {
 
         assert_eq!(
             text(u16::MAX, super::Given::First),
-            "● 1 running   ✓ 1 done"
+            "● 1 running     ✓ 1 done"
         );
         // A window a cell short of both gives up one whole, from the end it
         // was told: the counts from the left, so that what stands at the

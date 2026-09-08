@@ -250,7 +250,7 @@ fn cells_of(
         // The marker carries its own trailing space, and the last column
         // has nothing after it to be separated from.
         if index < last && !matches!(field, Field::Mark) {
-            spans.push(Span::raw(" "));
+            spans.push(Span::raw(" ".repeat(crate::layout::GAP as usize)));
         }
     }
     spans
@@ -1014,7 +1014,7 @@ mod tests {
         let line = drawn(&row, 118);
 
         // Then its STAGE, MODEL, CONTEXT, TOKENS and COMMIT columns are blank
-        assert_eq!(line.trim_end(), "  T5   ◇ ready");
+        assert_eq!(line.trim_end(), "  T5    ◇ ready");
         assert_eq!(
             super::wide(&line),
             118,
@@ -1047,8 +1047,8 @@ mod tests {
         let line = &super::lines(&row, &cols, THEME, Timestamp::default(), false, false)[0];
 
         // Then the row shows "?" and the word, in the text colour
-        assert!(text(line).starts_with("  T1   ? sulking"));
-        assert_eq!(style_at(line, 7), Style::new().fg(crate::theme::TEXT));
+        assert!(text(line).starts_with("  T1    ? sulking"));
+        assert_eq!(style_at(line, 8), Style::new().fg(crate::theme::TEXT));
     }
 
     #[test]
@@ -1252,7 +1252,7 @@ mod tests {
         // is exactly where the two surfaces part company.
         assert_eq!(
             text(&lines[0]).trim_end(),
-            "  T3   ● running         reading"
+            "  T3    ● running          reading"
         );
     }
 }

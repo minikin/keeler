@@ -84,8 +84,9 @@ const COMMIT: u16 = 13;
 /// `✓ done`, which is the whole of a finished row's state column.
 const LANDED_STATE: u16 = 6;
 
-/// One space after every column but the marker.
-const GAP: u16 = 1;
+/// Two spaces after every column but the marker: one leaves a long
+/// state running into its stage, and the eye reads the two as one phrase.
+pub const GAP: u16 = 2;
 
 /// The narrowest a title is worth drawing in: two words and the mark that
 /// says the rest was cut. Below that the column says less than the cells it
@@ -329,7 +330,9 @@ impl Columns {
             };
             header.push_str(&cell);
             if !matches!(field, Field::Mark) {
-                header.push(' ');
+                for _ in 0..GAP {
+                    header.push(' ');
+                }
             }
         }
         header.trim_end().to_string()
@@ -527,13 +530,13 @@ mod tests {
             [
                 (Field::Mark, 0, 2),
                 (Field::Task, 2, 4),
-                (Field::State, 7, 17),
-                (Field::Stage, 25, 7),
-                (Field::Model, 33, 9),
-                (Field::Context, 43, 14),
-                (Field::Tokens, 58, 6),
-                (Field::Commit, 65, 13),
-                (Field::Title, 79, 39),
+                (Field::State, 8, 17),
+                (Field::Stage, 27, 7),
+                (Field::Model, 36, 9),
+                (Field::Context, 47, 14),
+                (Field::Tokens, 63, 6),
+                (Field::Commit, 71, 13),
+                (Field::Title, 86, 32),
             ],
         );
         assert_eq!(columns.width(), 118);
@@ -552,17 +555,17 @@ mod tests {
         assert_eq!(
             columns.place(Field::State),
             Some(Place {
-                start: 7,
+                start: 8,
                 width: 47
             })
         );
         for (field, start) in [
-            (Field::Stage, 55),
-            (Field::Model, 63),
-            (Field::Context, 73),
-            (Field::Tokens, 88),
-            (Field::Commit, 95),
-            (Field::Title, 109),
+            (Field::Stage, 57),
+            (Field::Model, 66),
+            (Field::Context, 77),
+            (Field::Tokens, 93),
+            (Field::Commit, 101),
+            (Field::Title, 116),
         ] {
             assert_eq!(
                 columns.place(field).map(|place| place.start),
@@ -581,8 +584,8 @@ mod tests {
             [
                 (Field::Mark, 0, 2),
                 (Field::Task, 2, 4),
-                (Field::State, 7, 6),
-                (Field::Title, 14, 104),
+                (Field::State, 8, 6),
+                (Field::Title, 16, 102),
             ],
         );
         assert!(columns.finished());
@@ -593,15 +596,15 @@ mod tests {
     #[test]
     fn the_header_names_the_columns_that_are_drawn() {
         // Given a finished board
-        // Then the tasks header reads "  TASK STATE  LANDED"
-        assert_eq!(Columns::landed(118).header("…"), "  TASK STATE  LANDED");
+        // Then the tasks header reads "  TASK  STATE   LANDED"
+        assert_eq!(Columns::landed(118).header("…"), "  TASK  STATE   LANDED");
         // And a live one names every column, the tokens right-aligned over
         // the numbers under them and the commit column saying which two
         // counts it carries.
         let header = Columns::live(118, 17).header("…");
         assert_eq!(
             header,
-            "  TASK STATE             STAGE   MODEL     CONTEXT        TOKENS COMMIT +~     TITLE",
+            "  TASK  STATE              STAGE    MODEL      CONTEXT         TOKENS  COMMIT +~      TITLE",
         );
         for (field, heading) in [
             (Field::Task, "TASK"),
@@ -633,7 +636,7 @@ mod tests {
         // heading a column it fits in: a window with no room for a title
         // worth reading has no title at all. The landed columns have no
         // bands — there is one column after the word, and it is what landed.
-        let columns = Columns::landed(18);
+        let columns = Columns::landed(20);
 
         assert_eq!(columns.header("…").split_whitespace().last(), Some("LAN…"));
         assert_eq!(
@@ -685,7 +688,7 @@ mod tests {
     }
 
     /// The same, as the names alone — which is what a band drops.
-    fn drawn_at(width: u16, state: u16) -> Vec<Field> {
+    pub(super) fn drawn_at(width: u16, state: u16) -> Vec<Field> {
         columns_at(width, state)
             .into_iter()
             .map(|(field, _)| field)
@@ -709,19 +712,20 @@ mod tests {
     fn the_row_gives_up_a_column_at_a_time_as_the_window_narrows() {
         // The bands the spec's table works out to, each named by the
         // narrowest window that still has it.
-        assert_eq!(drawn_at(93, 17), EVERYTHING);
+        assert_eq!(drawn_at(100, 17), EVERYTHING);
         assert_eq!(drawn_at(200, 17), EVERYTHING);
-        // From 80 the row is whole without a title.
-        assert_eq!(drawn_at(92, 17), EVERYTHING[..8]);
-        assert_eq!(drawn_at(80, 17), EVERYTHING[..8]);
-        // From 71 the bar collapses to its percentage, and the column stays.
-        assert_eq!(drawn_at(79, 17), EVERYTHING[..8]);
-        assert_eq!(drawn_at(71, 17), EVERYTHING[..8]);
-        // From 54 the model and the tokens are gone, and from 48 the
-        // percentage that was left, and from 34 the commit facts. What is
+        // From 77 the row is whole without a title, and from 83 its bar is
+        // the percentage alone.
+        assert_eq!(drawn_at(99, 17), EVERYTHING[..8]);
+        assert_eq!(drawn_at(77, 17), EVERYTHING[..8]);
+
+        assert_eq!(drawn_at(84, 17), EVERYTHING[..8]);
+        assert_eq!(drawn_at(83, 17), EVERYTHING[..8]);
+        // From 76 the model and the tokens are gone, and from 57 the
+        // percentage that was left, and from 50 the commit facts. What is
         // left is which task is in what trouble and how far it got.
         assert_eq!(
-            drawn_at(70, 17),
+            drawn_at(76, 17),
             [
                 Field::Mark,
                 Field::Task,
@@ -732,7 +736,7 @@ mod tests {
             ],
         );
         assert_eq!(
-            drawn_at(53, 17),
+            drawn_at(56, 17),
             [
                 Field::Mark,
                 Field::Task,
@@ -741,11 +745,11 @@ mod tests {
                 Field::Commit,
             ],
         );
-        assert_eq!(drawn_at(47, 17), EVERYTHING[..4]);
+        assert_eq!(drawn_at(49, 17), EVERYTHING[..4]);
         // And a window too narrow even for those overflows rather than
         // dropping them: a row nobody can read whole still says which task
         // is in what trouble.
-        assert_eq!(drawn_at(33, 17), EVERYTHING[..4]);
+        assert_eq!(drawn_at(44, 17), EVERYTHING[..4]);
         assert_eq!(drawn_at(0, 17), EVERYTHING[..4]);
     }
 
@@ -758,14 +762,14 @@ mod tests {
                 .map(|(_, cells)| cells)
         };
 
-        assert_eq!(context(80), Some(super::CONTEXT));
-        assert_eq!(context(79), Some(super::PERCENTAGE));
-        assert_eq!(context(54), Some(super::PERCENTAGE));
-        assert_eq!(context(53), None);
+        assert_eq!(context(86), Some(super::CONTEXT));
+        assert_eq!(context(85), Some(super::PERCENTAGE));
+        assert_eq!(context(58), Some(super::PERCENTAGE));
+        assert_eq!(context(57), None);
         // And the heading follows the column it is over.
         assert_eq!(
-            Columns::live(69, 17).header("…"),
-            "  TASK STATE             STAGE   MODEL     CTX   TOKENS COMMIT +~",
+            Columns::live(80, 17).header("…"),
+            "  TASK  STATE              STAGE    MODEL      CTX    TOKENS  COMMIT +~",
         );
     }
 
