@@ -1,6 +1,6 @@
 # Spec 11 — keeler-top looks like a board
 
-**Status:** Approved
+**Status:** Implemented
 **Effort:** Large
 **Module:** `keeler-top/src/frame.rs`, `keeler-top/src/theme.rs` (new), `keeler-top/src/board.rs` (row order, new facts), `keeler-top/src/graph.rs` (task titles), `keeler-top/src/run.rs` (percentage as a number, spawn time), `keeler-top/src/app.rs` (compact toggle, scroll), `keeler-top/src/dispatch.rs` (review record and exit file reads), `keeler-top/src/main.rs` (theme from the environment), `keeler-top/tests/top.rs`, `crap-baseline.json` (refreshed at fan-in)
 
