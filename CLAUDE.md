@@ -51,6 +51,15 @@ here instead — project-specific instructions, in the file meant for them.
   in this repository silently skips the xtask member and reports success
   having tested nothing.
 
+## The demo board
+
+`python3 demo/board.py` builds a throwaway repository whose board shows
+every state at once, so `keeler-top` can be filmed or looked at after a
+change to the frame without spending an agent on a wave;
+`--clean` takes it away again. It is repository machinery — never
+installed, never reached by a recipe — and `demo/README.md` says what it
+fabricates and what is real.
+
 ## Comments
 
 **A comment that restates the code is not allowed.** Delete it. A comment
