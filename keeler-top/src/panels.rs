@@ -1,0 +1,484 @@
+//! The wave panel: what the whole wave is doing, in two lines.
+//!
+//! A watcher of a wave asks, in this order: *is anything stuck? what is
+//! running, and how far along? what is left?* The first line answers the
+//! first and the third — the healthy counts on the left, and against the
+//! right edge the tasks that need a human, which is **empty when there are
+//! none**, and that emptiness is itself the reading. The second is one
+//! glyph per task, in the order the report gave them, with the keys the
+//! board answers to against the same edge.
+//!
+//! The tasks panel is the rows, which `frame.rs` composes, and the detail
+//! panel is one row in full. What is here is the panel neither of those is:
+//! the one about the wave rather than about a task.
+//!
+//! **Two builders are public because they are the whole of the reading.**
+//! [`counts`] and [`needing`] decide what the line says; the spans around
+//! them decide what it looks like. A test that asserted only on the drawn
+//! frame would be reading the arithmetic through the paint.
+
+use ratatui::text::{Line, Span};
+
+use crate::board::{Board, Row};
+use crate::clock::Timestamp;
+use crate::layout::wide;
+use crate::theme::{BLUE, DIM, GREEN, NEEDS_YOU, TEXT, Theme};
+
+/// What stands between two readings on a header line.
+///
+/// Three spaces, and not one: two counts a space apart are read as one
+/// phrase, and the whole of what this line does is let the eye take them in
+/// separately.
+const GAP: &str = "   ";
+
+/// How many glyphs of the outcome strip stand together before a space.
+///
+/// A thirty-task wave is a wall of glyphs with nothing to count from, and
+/// fives are what makes "the fourteenth" a thing the eye can find.
+const GROUP: usize = 5;
+
+/// The healthy states the counts cover, in the state table's order.
+///
+/// The word is the state's own, spelled as the header shows it — the theme
+/// classifies by the leading word alone, so `not spawned` is one entry here
+/// and one row of that table.
+const COUNTED: [&str; 6] = [
+    "running",
+    "passed",
+    "ready",
+    "blocked",
+    "not spawned",
+    "done",
+];
+
+/// The one state whose reason belongs on the header line.
+const FAILED: &str = "failed";
+
+/// What a board with nothing left to run has to say.
+const FINISHED: &str = "the feature is finished here — land it on main";
+
+/// The keys the board answers to, and what each of them does.
+const HINTS: [(&str, &str); 7] = [
+    ("j/k", "move"),
+    ("Enter", "attach"),
+    ("p", "pause"),
+    ("R", "resume"),
+    ("r", "refresh"),
+    ("z", "compact"),
+    ("q", "quit"),
+];
+
+/// The three a finished board has a use for: every run is over, so there is
+/// no session to attach, nothing to pause and nothing to resume.
+const LANDED_HINTS: [(&str, &str); 3] = [("j/k", "move"), ("r", "refresh"), ("q", "quit")];
+
+/// The panel's title: which spec the board is about, and the ref the report
+/// answered from.
+///
+/// The word alone carries the panel's colour, and what follows it is dim: a
+/// title is read as a label first and as a path second, and a path in the
+/// label's colour makes the two one long blue sentence.
+#[must_use]
+pub fn title(board: &Board, theme: Theme) -> Vec<Span<'static>> {
+    vec![
+        Span::styled("wave", theme.style(BLUE)),
+        Span::styled(
+            format!("  {} on {}", board.rel, board.git_ref),
+            theme.style(DIM),
+        ),
+    ]
+}
+
+/// The panel's two lines, laid out for the width inside its borders.
+#[must_use]
+pub fn wave(board: &Board, theme: Theme, now: Timestamp, width: u16) -> Vec<Line<'static>> {
+    vec![first(board, theme, now, width), second(board, theme, width)]
+}
+
+/// How many tasks are in each of the healthy states, in the state table's
+/// order, with the states nobody is in left out.
+///
+/// Left out rather than shown as a zero: the line is read at a glance for
+/// what the wave is doing, and six tallies of which four say nothing are
+/// four things between the reader and the two that do.
+#[must_use]
+pub fn counts(rows: &[Row]) -> Vec<(&'static str, usize)> {
+    COUNTED
+        .into_iter()
+        .map(|word| {
+            let how_many = rows
+                .iter()
+                .filter(|row| Theme::rank(&row.state) == Theme::rank(word))
+                .count();
+            (word, how_many)
+        })
+        .filter(|(_, how_many)| *how_many > 0)
+        .collect()
+}
+
+/// The tasks a human has to do something about, in the state table's order
+/// and, within one state, in the order the report gave them.
+///
+/// Which tasks those are is the group's answer, and what order they come in
+/// is the table's: three states share group 0, and the header names them one
+/// at a time. A state the table has no row for is grouped with the running
+/// tasks and so is not among them — the board cannot read the word, and a
+/// state it cannot read must not be promoted to the half of the line that
+/// means somebody is needed.
+#[must_use]
+pub fn needing(rows: &[Row]) -> Vec<&Row> {
+    let mut needing: Vec<&Row> = rows
+        .iter()
+        .filter(|row| Theme::group(&row.state) <= NEEDS_YOU)
+        .collect();
+    needing.sort_by_key(|row| Theme::rank(&row.state));
+    needing
+}
+
+/// What an exception is called on the header line: the exit code for a task
+/// that failed, and the state's own word for every other.
+///
+/// Only `failed` carries a reason short enough to belong up here, and it is
+/// the one that says *which* failure. `incomplete (no review record, box
+/// not ticked)` is a sentence, and the row is where it is read.
+#[must_use]
+pub fn naming(state: &str) -> &str {
+    let word = state.split_whitespace().next().unwrap_or_default();
+    if word != FAILED {
+        return word;
+    }
+    state
+        .split_once('(')
+        .and_then(|(_, reason)| reason.strip_suffix(')'))
+        .unwrap_or(word)
+}
+
+/// The outcome strip: one glyph per task, in the order the report gave
+/// them, counted off in fives.
+///
+/// The report's order and not the board's, deliberately. The rows lead with
+/// what needs a human, and they move as states change; the strip is the
+/// spec read left to right, and a glyph that stays where it was is what
+/// makes a second glance at it worth anything.
+#[must_use]
+pub fn strip(rows: &[Row], theme: Theme, finished: bool) -> Vec<Span<'static>> {
+    let mut spans = Vec::with_capacity(rows.len());
+    for (index, row) in rows.iter().enumerate() {
+        let look = theme.look(&row.state, finished);
+        spans.push(Span::styled(look.glyph, look.style));
+        if (index + 1) % GROUP == 0 && index + 1 < rows.len() {
+            spans.push(Span::raw(" "));
+        }
+    }
+    spans
+}
+
+/// The keys the board answers to, as the second line names them.
+#[must_use]
+pub fn hints(finished: bool) -> &'static [(&'static str, &'static str)] {
+    if finished { &LANDED_HINTS } else { &HINTS }
+}
+
+/// The first line: the counts, and against the right edge whatever needs a
+/// human and how old the report is.
+fn first(board: &Board, theme: Theme, now: Timestamp, width: u16) -> Line<'static> {
+    let mut left = tally(&board.rows, theme, board.finished());
+    if board.finished() {
+        left.push(Span::raw(GAP));
+        left.push(Span::styled(FINISHED, theme.style(GREEN)));
+    }
+    let mut right = needed(&board.rows, theme);
+    if !right.is_empty() {
+        right.push(Span::raw(GAP));
+    }
+    right.push(Span::styled(board.age(now), theme.style(DIM)));
+    spread(left, right, width)
+}
+
+/// The second: the strip, and the hints against the right edge — when there
+/// is room for both.
+fn second(board: &Board, theme: Theme, width: u16) -> Line<'static> {
+    let strip = strip(&board.rows, theme, board.finished());
+    let hinted = hinted(theme, board.finished());
+    // The strip is one cell a task and the hints are the same seven on
+    // every board there is: a wave too wide for both keeps the half that is
+    // about the wave, and the keys are on the second line of the README.
+    if measured(&strip)
+        .saturating_add(wide(GAP))
+        .saturating_add(measured(&hinted))
+        > width
+    {
+        return Line::from(strip);
+    }
+    spread(strip, hinted, width)
+}
+
+/// The counts, as they are drawn: the glyph in the state's colour, and how
+/// many there are in the ordinary text one.
+///
+/// Only the glyph, because the right half of this line is the one that
+/// means *act* and it is coloured throughout — six coloured tallies beside
+/// it would spend that signal on work going as it should.
+fn tally(rows: &[Row], theme: Theme, finished: bool) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    for (word, how_many) in counts(rows) {
+        if !spans.is_empty() {
+            spans.push(Span::raw(GAP));
+        }
+        let look = theme.look(word, finished);
+        spans.push(Span::styled(look.glyph, look.style));
+        spans.push(Span::styled(
+            format!(" {how_many} {word}"),
+            theme.style(TEXT),
+        ));
+    }
+    spans
+}
+
+/// What needs a human, as it is drawn: each task in its state's colour,
+/// because the colour is what says which kind of trouble it is in.
+fn needed(rows: &[Row], theme: Theme) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    for row in needing(rows) {
+        if !spans.is_empty() {
+            spans.push(separator(theme));
+        }
+        let look = theme.look(&row.state, false);
+        spans.push(Span::styled(
+            format!("{} {} {}", look.glyph, row.id, naming(&row.state)),
+            look.style,
+        ));
+    }
+    spans
+}
+
+/// The hints, as they are drawn: the key bright and what it does dim, so
+/// that a line of them reads as keys with words beside them.
+fn hinted(theme: Theme, finished: bool) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    for (key, does) in hints(finished) {
+        if !spans.is_empty() {
+            spans.push(separator(theme));
+        }
+        spans.push(Span::styled(*key, theme.style(TEXT)));
+        spans.push(Span::styled(format!(" {does}"), theme.style(DIM)));
+    }
+    spans
+}
+
+/// One line of the panel: what is read from the left, and what sits against
+/// its right edge, with the room between them as the gap.
+///
+/// One space when they do not both fit, rather than none: two readings run
+/// together are one unreadable reading, and the panel cuts what overflows
+/// its edge either way.
+fn spread(left: Vec<Span<'static>>, right: Vec<Span<'static>>, width: u16) -> Line<'static> {
+    let between = width
+        .saturating_sub(measured(&left))
+        .saturating_sub(measured(&right))
+        .max(1);
+    let mut spans = left;
+    spans.push(Span::raw(" ".repeat(usize::from(between))));
+    spans.extend(right);
+    Line::from(spans)
+}
+
+/// How many cells a run of spans takes.
+fn measured(spans: &[Span<'static>]) -> u16 {
+    spans
+        .iter()
+        .fold(0, |total, span| total.saturating_add(wide(&span.content)))
+}
+
+/// What stands between two things on one line.
+fn separator(theme: Theme) -> Span<'static> {
+    Span::styled(format!(" {} ", theme.separator()), theme.style(DIM))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{counts, hints, naming, needing, strip};
+    use crate::board::Row;
+    use crate::theme::Theme;
+
+    /// The theme these are composed through: colours on, glyphs drawable.
+    /// Said outright rather than read from the process, which is the whole
+    /// reason the theme is a value.
+    const THEME: Theme = Theme::new(true, false);
+
+    /// A board of nothing but ids and states, in the report's order.
+    fn rows_of(states: &[(&str, &str)]) -> Vec<Row> {
+        states
+            .iter()
+            .map(|(id, state)| Row {
+                id: (*id).to_string(),
+                state: (*state).to_string(),
+                log: None,
+                run: None,
+                branch: None,
+                title: None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_counts_are_the_healthy_states_the_board_has_a_task_in() {
+        let counted = counts(&rows_of(&[
+            ("T1", "running"),
+            ("T2", "running"),
+            ("T3", "passed"),
+            ("T4", "done"),
+            ("T5", "done"),
+            ("T6", "done"),
+        ]));
+
+        assert_eq!(counted, [("running", 2), ("passed", 1), ("done", 3)]);
+        // In the state table's order, whatever order the report was in.
+        assert_eq!(
+            counts(&rows_of(&[("T1", "done"), ("T2", "running")])),
+            [("running", 1), ("done", 1)],
+        );
+        // The reason after a state is not part of what is counted, and the
+        // graph's two words are counted like the recipe's own.
+        assert_eq!(
+            counts(&rows_of(&[
+                ("T1", "blocked ← T2, T3"),
+                ("T2", "ready"),
+                ("T3", "not spawned"),
+            ])),
+            [("ready", 1), ("blocked", 1), ("not spawned", 1)],
+        );
+        assert_eq!(counts(&[]), []);
+    }
+
+    #[test]
+    fn a_state_the_table_has_no_row_for_is_counted_as_nothing() {
+        // The fallback shares its group with the running tasks, so a count
+        // taken by group would report a word the board cannot read as work
+        // in progress. It is neither: the board does not know what it is.
+        let counted = counts(&rows_of(&[("T1", "sulking"), ("T2", "running")]));
+
+        assert_eq!(counted, [("running", 1)]);
+    }
+
+    #[test]
+    fn what_needs_a_human_is_named_in_the_state_tables_order() {
+        // Given the report in some order of its own
+        let rows = rows_of(&[
+            ("T9", "failed (exit 2)"),
+            ("T8", "paused"),
+            ("T4", "died"),
+            ("T2", "incomplete (no review record)"),
+            ("T3", "running"),
+            ("T1", "done"),
+        ]);
+
+        let named: Vec<&str> = needing(&rows).iter().map(|row| row.id.as_str()).collect();
+
+        assert_eq!(named, ["T9", "T4", "T2", "T8"]);
+        // And within one state the report's order holds: `sort_by_key` is
+        // stable, and the report's order is the spec's.
+        let two = rows_of(&[("T5", "died"), ("T1", "died")]);
+        assert_eq!(
+            needing(&two)
+                .iter()
+                .map(|row| row.id.as_str())
+                .collect::<Vec<_>>(),
+            ["T5", "T1"],
+        );
+        // Nothing else is on it — a word the table has no row for least of
+        // all.
+        assert!(needing(&rows_of(&[("T1", "sulking"), ("T2", "passed")])).is_empty());
+    }
+
+    #[test]
+    fn an_exception_names_the_exit_code_and_otherwise_its_states_own_word() {
+        assert_eq!(naming("failed (exit 2)"), "exit 2");
+        assert_eq!(naming("failed (exit 137)"), "exit 137");
+        // A reason nobody wrote, and a state whose reason is a sentence the
+        // row carries rather than the header.
+        assert_eq!(naming("failed"), "failed");
+        assert_eq!(
+            naming("incomplete (no review record, box not ticked)"),
+            "incomplete"
+        );
+        assert_eq!(naming("died"), "died");
+        assert_eq!(naming("paused"), "paused");
+        assert_eq!(naming(""), "");
+    }
+
+    /// The strip as characters, which is what its shape shows up in.
+    fn glyphs(states: &[(&str, &str)], finished: bool) -> String {
+        strip(&rows_of(states), THEME, finished)
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect()
+    }
+
+    #[test]
+    fn the_strip_is_one_glyph_a_task_counted_off_in_fives() {
+        // Given one task in each state, in the report's order
+        let ten = glyphs(
+            &[
+                ("T1", "done"),
+                ("T2", "done"),
+                ("T3", "running"),
+                ("T4", "died"),
+                ("T5", "passed"),
+                ("T6", "paused"),
+                ("T7", "blocked ← T5"),
+                ("T8", "not spawned"),
+                ("T9", "ready"),
+                ("T10", "failed (exit 2)"),
+            ],
+            false,
+        );
+
+        assert_eq!(ten, "✓✓●⊘◐ ‖○·◇✗");
+        // A space after every fifth glyph and none after the last, however
+        // the fives come out.
+        assert_eq!(glyphs(&[("T1", "done")], false), "✓");
+        assert_eq!(
+            glyphs(
+                &[
+                    ("T1", "done"),
+                    ("T2", "done"),
+                    ("T3", "done"),
+                    ("T4", "done"),
+                    ("T5", "done"),
+                ],
+                false,
+            ),
+            "✓✓✓✓✓",
+        );
+        assert_eq!(glyphs(&[], false), "");
+    }
+
+    #[test]
+    fn a_finished_boards_strip_is_the_finished_views_green() {
+        let live = strip(&rows_of(&[("T1", "done")]), THEME, false);
+        let landed = strip(&rows_of(&[("T1", "done")]), THEME, true);
+
+        assert_eq!(live[0].content, landed[0].content);
+        assert_eq!(
+            landed[0].style,
+            ratatui::style::Style::new().fg(crate::theme::GREEN),
+        );
+        assert_ne!(live[0].style, landed[0].style);
+    }
+
+    #[test]
+    fn a_finished_board_offers_only_the_keys_it_has_a_use_for() {
+        // Every run is over: there is no session to attach to, nothing to
+        // pause and nothing to resume. `z` still works — it is the hint
+        // that goes, not the key.
+        assert_eq!(
+            hints(true).iter().map(|(key, _)| *key).collect::<Vec<_>>(),
+            ["j/k", "r", "q"],
+        );
+        assert_eq!(
+            hints(false).iter().map(|(key, _)| *key).collect::<Vec<_>>(),
+            ["j/k", "Enter", "p", "R", "r", "z", "q"],
+        );
+    }
+}

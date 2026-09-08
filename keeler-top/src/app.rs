@@ -397,6 +397,12 @@ fn refusal(answer: Result<(), String>) -> Option<String> {
 /// here, where a test presses one and reads the board afterwards, rather
 /// than inside a loop that needs a terminal to run at all.
 pub fn on_key(app: &mut App, key: KeyEvent) -> Action {
+    // Whatever the last key had to say was about the last key. It outlives
+    // the ticks in between — that is what [`App::key_said`] is for — but not
+    // the press after it: a refusal still under a board somebody has moved
+    // on from is a refusal about a row they are no longer looking at. The
+    // levers below say something of their own straight after this.
+    app.says(None);
     match key.code {
         // Ctrl-C is here because raw mode is: the terminal no longer turns
         // it into a signal, so a board that ignored it would be one the

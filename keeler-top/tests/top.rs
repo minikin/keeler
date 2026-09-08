@@ -1809,12 +1809,13 @@ fn painted(board: &Board, width: u16, height: u16) -> Terminal<TestBackend> {
 ///
 /// Found by the id and not by the left margin: the row opens with the
 /// marker column, which is the marker on the selected row and two cells of
-/// nothing on every other.
+/// nothing on every other — and the panel's own border before either.
 fn row_of<'a>(frame: &'a [String], id: &str) -> &'a str {
     frame
         .iter()
         .find(|line| {
-            line.trim_start()
+            inside(line)
+                .trim_start()
                 .trim_start_matches(['▸', '>'])
                 .trim_start()
                 .starts_with(&format!("{id} "))
@@ -2025,11 +2026,19 @@ fn the_header_names_the_ref_keeler_status_answered_from_and_the_age_of_that_answ
     // When the board renders
     let frame = drawn(&board, 100, 12);
 
-    // Then the header reads "specs/01-foo.md on feat/01-foo" and "status 4s ago"
+    // Then the header reads "specs/01-foo.md on feat/01-foo" and "status 4s
+    // ago" — the ref on the wave panel's title, and the age of the answer
+    // against the right edge of the line under it, which is where spec 11
+    // put the two halves of spec 10's one header line.
     assert!(
-        frame[0].contains("specs/01-foo.md on feat/01-foo") && frame[0].contains("status 4s ago"),
-        "the header names neither the ref nor the age: {:?}",
+        frame[0].contains("specs/01-foo.md on feat/01-foo"),
+        "the header does not name the ref: {:?}",
         frame[0],
+    );
+    assert!(
+        inside(&frame[1]).ends_with("status 4s ago"),
+        "the header does not name the age of the answer: {:?}",
+        frame[1],
     );
 }
 
@@ -2232,19 +2241,15 @@ fn a_long_command_is_cut_to_the_column_with_an_ellipsis() {
         !row.contains(&command),
         "the whole command was written into the row: {row:?}",
     );
-    let under = frame
-        .iter()
-        .find(|line| line.contains("└─"))
-        .expect("a running row hangs its tool under it");
+    // Found by the row it hangs under and not by the connector: a panel's
+    // own bottom border opens with the same two characters.
+    let under = under_of(&frame, "T1");
     assert!(
         under.contains(&format!("Bash: {command}")),
         "a panel with room for the command cut it anyway: {under:?}",
     );
     let narrow = drawn(&board, 80, 24);
-    let cut = narrow
-        .iter()
-        .find(|line| line.contains("└─"))
-        .expect("a running row hangs its tool under it");
+    let cut = under_of(&narrow, "T1");
     assert!(
         cut.contains("Bash: just dev 2>&1 | tail -35 #") && cut.contains('…'),
         "the command was not cut to the panel: {cut:?}",
@@ -2253,7 +2258,7 @@ fn a_long_command_is_cut_to_the_column_with_an_ellipsis() {
     // And the detail pane shows it whole
     let whole = format!("Bash: {command}");
     assert!(
-        frame.contains(&whole),
+        frame.iter().any(|line| line.contains(&whole)),
         "the pane did not show the command whole:\n{}",
         frame.join("\n"),
     );
@@ -2302,7 +2307,7 @@ fn the_detail_pane_shows_the_selected_tasks_last_five_texts_and_its_last_command
     // And it is drawn where the pane is.
     let frame = drawn(&board, 120, 24);
     assert!(
-        frame.contains(&"Bash: just dev".to_string()),
+        frame.iter().any(|line| line.contains("Bash: just dev")),
         "the pane was not drawn:\n{}",
         frame.join("\n"),
     );
@@ -2383,11 +2388,12 @@ fn a_missing_stream_file_shows_the_state_alone() {
 
 #[test]
 fn a_narrow_terminal_drops_the_detail_pane_before_it_drops_columns() {
-    // Given a terminal 100 columns wide and 16 lines tall — spec 10 asked
-    // this at twelve, and spec 11 gives a live task a second line, so five
-    // running tasks and a heading are eleven lines rather than six. The
-    // scenario is about which part goes first when there is not room for
-    // everything, and eleven lines and no pane is exactly that.
+    // Given a terminal 100 columns wide and 20 lines tall — spec 10 asked
+    // this at twelve, and spec 11 gives a live task a second line and puts
+    // the rows in a panel with a wave panel above it, so five running tasks
+    // and a heading are thirteen lines rather than six. The scenario is
+    // about which part goes first when there is not room for everything,
+    // and thirteen lines and no pane is exactly that.
     let runfiles = Runfiles::new("narrow");
     let lines: Vec<String> = (1..=5)
         .map(|task| {
@@ -2410,7 +2416,7 @@ fn a_narrow_terminal_drops_the_detail_pane_before_it_drops_columns() {
     let board = assemble(&report(&lines), "T1 ready\n", NOON);
 
     // When the board renders
-    let frame = drawn(&board, 100, 16);
+    let frame = drawn(&board, 100, 20);
 
     // Then every task row is shown with state and stage, and the tool on
     // the line under it — which is where spec 11 moved it
@@ -2436,9 +2442,9 @@ fn a_narrow_terminal_drops_the_detail_pane_before_it_drops_columns() {
     );
 
     // And the detail pane is absent
-    assert_eq!(layout(Rect::new(0, 0, 100, 16), 11).detail, None);
+    assert_eq!(layout(Rect::new(0, 0, 100, 20), 11).detail, None);
     assert!(
-        !frame.iter().any(|line| line.starts_with("T1 — running")),
+        !frame.iter().any(|line| inside(line).starts_with("T1 — ")),
         "the pane was drawn on a terminal with no room for it:\n{}",
         frame.join("\n"),
     );
@@ -2717,7 +2723,7 @@ fn j_and_k_move_the_selection_and_the_detail_pane_follows() {
     let pane = |id: &str| {
         frame
             .iter()
-            .any(|line| line.starts_with(&format!("{id} —")))
+            .any(|line| inside(line).starts_with(&format!("{id} —")))
     };
     assert!(
         pane("T2") && !pane("T1") && !pane("T3"),
@@ -2883,9 +2889,9 @@ fn keeler_status_is_re_read_every_five_seconds_and_on_r() {
     // Then keeler-status runs again and the header's age resets
     assert_eq!(reads.started(), 1, "r asked nobody anything");
     assert!(
-        app.board.header(two).ends_with("status 0s ago"),
+        app.board.age(two) == "status 0s ago",
         "the header still shows the age of the answer r replaced: {}",
-        app.board.header(two),
+        app.board.age(two),
     );
 
     // And without r it runs again when the answer is five seconds old
@@ -2966,7 +2972,7 @@ fn a_slow_keeler_status_does_not_stall_the_board() {
     opener.send(()).expect("the read is still waiting");
     settle(&mut app, &mut feed, later);
     assert!(
-        app.board.header(later).ends_with("status 0s ago"),
+        app.board.age(later) == "status 0s ago",
         "the answer arrived and the header did not take it",
     );
 }
@@ -3759,11 +3765,16 @@ fn enter_on_a_task_with_no_session_says_so() {
 use keeler_top::git::BranchFacts;
 use ratatui::style::Color;
 
-/// The panel's own line: the frame's, without the cell the panel's left
-/// border takes. Every offset in the spec's column table is measured from
-/// there.
+/// The panel's own line: the frame's, without the cells its borders take.
+/// Every offset in the spec's column table is measured from there.
+///
+/// Trailing blanks go with them. A panel pads its lines to its inner width
+/// so that what stands against its right edge is against the edge and not
+/// near it, and a scenario about what a row says has no business reading
+/// that padding.
 fn inside(line: &str) -> &str {
-    line.strip_prefix(' ').unwrap_or(line)
+    let body = line.strip_prefix(['│', '|', ' ']).unwrap_or(line);
+    body.strip_suffix(['│', '|']).unwrap_or(body).trim_end()
 }
 
 /// What is in one cell of a drawn frame: the character, and the colour it
@@ -3772,6 +3783,18 @@ fn cell_at(terminal: &Terminal<TestBackend>, x: u16, y: u16) -> (String, Color) 
     let buffer = terminal.backend().buffer().clone();
     let cell = &buffer[(x, y)];
     (cell.symbol().to_string(), cell.fg)
+}
+
+/// The tasks panel's column heading, found by what it says rather than by
+/// where it is: the panel sits under the wave panel, whose own lines are
+/// somebody else's scenario to move.
+fn heading_of(frame: &[String]) -> &str {
+    frame
+        .iter()
+        .map(String::as_str)
+        .map(inside)
+        .find(|line| line.starts_with("  TASK "))
+        .unwrap_or_else(|| panic!("no column heading in:\n{}", frame.join("\n")))
 }
 
 /// Which line of a frame a task's row is on.
@@ -3889,7 +3912,11 @@ fn the_running_tasks_second_line() {
         frame[under],
     );
     // And "02:14" ends at the panel's inner right edge
-    assert!(frame[under].ends_with("02:14"), "{:?}", frame[under]);
+    assert!(
+        inside(&frame[under]).ends_with("02:14"),
+        "{:?}",
+        frame[under]
+    );
     assert_eq!(cell_at(&terminal, 118, y).0, "4");
     // And "Bash" is cyan, the command plain, the "└─" dim
     assert_eq!(
@@ -3952,15 +3979,19 @@ fn closed_and_waiting_tasks_take_one_line() {
     ] {
         let row = row_at(&frame, id);
         assert!(row_of(&frame, id).contains(state), "{id} lost its state");
+        // The connector hangs four cells in, under the state's glyph — the
+        // panel's own bottom border opens with the same two characters at
+        // the left edge, which is why the indent is part of what is asked.
         assert!(
-            !frame[row + 1].contains("└─"),
+            !inside(&frame[row + 1]).starts_with("    └─"),
             "{id}'s row hangs a line under it:\n{}",
             frame.join("\n"),
         );
     }
     // And the table is the heading and one line per task, nothing more: the
-    // last row of eight is on the frame's ninth line, the header above it.
-    assert_eq!(row_at(&frame, "T1"), 9, "the rows are not eight lines");
+    // wave panel takes four lines and the tasks panel's border and heading
+    // two more, so the last row of eight is the frame's fourteenth line.
+    assert_eq!(row_at(&frame, "T1"), 13, "the rows are not eight lines");
 }
 
 #[test]
@@ -3988,7 +4019,7 @@ fn a_states_reason_is_never_cut() {
     );
     // And every later column in every row starts 30 cells further right
     // than the table says — 47 cells of state where the table has 17.
-    let header = inside(&frame[1]);
+    let header = heading_of(&frame);
     for (heading, start) in [("STAGE", 55), ("MODEL", 63), ("TOKENS", 88), ("TITLE", 109)] {
         assert_eq!(
             header.find(heading),
@@ -4085,7 +4116,7 @@ fn the_finished_view_lists_each_tasks_title() {
     let frame = lines_of(&terminal, 120, 24);
 
     // Then the tasks header reads "  TASK STATE  LANDED"
-    assert_eq!(inside(&frame[1]), "  TASK STATE  LANDED");
+    assert_eq!(heading_of(&frame), "  TASK STATE  LANDED");
     // And T1's row reads "  T1   ✓ done <title>" with "✓ done" green
     assert_eq!(
         inside(row_of(&frame, "T1")),
@@ -4149,4 +4180,446 @@ fn once_is_untouched() {
         assert!(!line.contains("└─") && !line.contains('│'), "{line:?}");
     }
     assert_eq!(lines.len(), 11, "not a heading and ten rows:\n{table}");
+}
+
+// ── 11-T4
+
+use keeler_top::theme::{BLUE, BORDER, GREEN, ORANGE, RED, VIOLET};
+
+/// The terminal these scenarios draw on: wide enough for every column and
+/// tall enough for all three panels, so what they read back is the board
+/// whole rather than one a band has already cut down.
+const WIDE: (u16, u16) = (120, 40);
+
+/// Which line of that frame each panel opens on, and which one the footer
+/// is — the arithmetic of a one-task board, said once here rather than
+/// counted off in six scenarios.
+///
+/// The wave panel is its two lines and its borders; the tasks panel is the
+/// column heading, T3's row and the line under it, and its borders; the
+/// detail panel takes what is left above the footer.
+const WAVE_TOP: usize = 0;
+const TASKS_TOP: usize = 4;
+const DETAIL_TOP: usize = 9;
+const FOOTER: usize = 39;
+
+/// A report of one running task per id, with no paths at all — the header
+/// is about how many tasks are in each state, not about what any of them is
+/// doing.
+fn running_report(how_many: usize) -> String {
+    let lines: Vec<String> = (1..=how_many)
+        .map(|task| format!("T{task:<5} running"))
+        .collect();
+    report(&lines)
+}
+
+/// Where a glyph is on a drawn line, counted in cells — which is what a
+/// scenario asking the colour of one has to hand [`cell_at`].
+///
+/// Not `str::find`: every glyph the state table owns is three bytes and one
+/// cell, so a byte offset would answer about some other column.
+fn cell_of(line: &str, glyph: char) -> u16 {
+    let at = line
+        .chars()
+        .position(|drawn| drawn == glyph)
+        .unwrap_or_else(|| panic!("no {glyph} on the line {line:?}"));
+    u16::try_from(at).expect("a line is not that wide")
+}
+
+#[test]
+fn the_frame_is_three_bordered_panels_and_a_footer() {
+    // Given a running wave and a 120x40 terminal
+    let runfiles = Runfiles::new("t4-panels");
+    let board = t3_board(&runfiles);
+
+    // When the board renders
+    let frame = drawn(&board, WIDE.0, WIDE.1);
+
+    // Then three boxes are drawn with box-drawing borders, titled
+    // "wave  <spec> on <ref>", "tasks" and the selected task's id on their
+    // top borders
+    for (top, title) in [
+        (WAVE_TOP, "wave  specs/01-foo.md on feat/01-foo"),
+        (TASKS_TOP, "tasks"),
+        (DETAIL_TOP, "T3"),
+    ] {
+        assert!(
+            frame[top].starts_with('┌') && frame[top].ends_with('┐'),
+            "line {top} is not a box's top border: {:?}",
+            frame[top],
+        );
+        assert!(
+            frame[top].contains(title),
+            "line {top} does not name {title:?}: {:?}",
+            frame[top],
+        );
+    }
+    for bottom in [WAVE_TOP + 3, TASKS_TOP + 4, FOOTER - 1] {
+        assert!(
+            frame[bottom].starts_with('└') && frame[bottom].ends_with('┘'),
+            "line {bottom} is not a box's bottom border: {:?}",
+            frame[bottom],
+        );
+    }
+    // And the last line of the frame is reserved for messages — outside
+    // every box, which is what lets a refusal be written without moving a
+    // row.
+    assert!(
+        !frame[FOOTER].starts_with(['│', '└']),
+        "the footer is inside a panel: {:?}",
+        frame[FOOTER],
+    );
+}
+
+#[test]
+fn panel_borders_are_neutral_and_titles_carry_the_colour() {
+    // Given the board renders
+    let runfiles = Runfiles::new("t4-borders");
+    let board = t3_board(&runfiles);
+
+    let terminal = painted(&board, WIDE.0, WIDE.1);
+
+    // Then every border cell is drawn in the chrome border colour
+    let right = WIDE.0 - 1;
+    for (x, y, glyph) in [
+        (0, 0, "┌"),
+        (right, 0, "┐"),
+        (0, 2, "│"),
+        (right, 2, "│"),
+        (0, 3, "└"),
+        (60, 3, "─"),
+        (right, 3, "┘"),
+        (0, 4, "┌"),
+        (right, 8, "┘"),
+        (0, 9, "┌"),
+        (right, 38, "┘"),
+    ] {
+        assert_eq!(
+            cell_at(&terminal, x, y),
+            (glyph.to_string(), BORDER),
+            "the cell at {x},{y} is not a border in the chrome colour",
+        );
+    }
+    // And "wave" is blue, "tasks" is orange and the detail title is green
+    for (line, letter, colour) in [
+        (WAVE_TOP, "w", BLUE),
+        (TASKS_TOP, "t", ORANGE),
+        (DETAIL_TOP, "T", GREEN),
+    ] {
+        let y = u16::try_from(line).expect("a frame is not that tall");
+        assert_eq!(
+            cell_at(&terminal, 2, y),
+            (letter.to_string(), colour),
+            "the title on line {line} is not in its panel's colour",
+        );
+    }
+}
+
+#[test]
+fn the_message_footer_shows_the_last_levers_refusal() {
+    // Given the user pressed p on T2, which is not running
+    let runfiles = Runfiles::new("t4-footer");
+    let log = runfiles.stream("t1", &[INIT.to_string()]);
+    let reads = Arc::new(Reads::answering(""));
+    let mut app = app_over(
+        &reads,
+        &report(&[
+            state_line("T1", "running", &log),
+            "T2     not spawned".to_string(),
+        ]),
+    );
+    app.board.selected = 1;
+    app.pause();
+
+    // When the board renders
+    let terminal = painted(&app.board, WIDE.0, WIDE.1);
+    let frame = lines_of(&terminal, WIDE.0, WIDE.1);
+
+    // Then the footer reads the refusal, in yellow
+    assert_eq!(
+        frame[FOOTER],
+        "keeler-top: T2 is not running — there is nothing to pause.",
+    );
+    let y = u16::try_from(FOOTER).expect("a frame is not that tall");
+    assert_eq!(
+        cell_at(&terminal, 0, y),
+        ("k".to_string(), keeler_top::theme::YELLOW),
+    );
+
+    // And the footer is empty again after the next keypress
+    assert_eq!(on_key(&mut app, press(KeyCode::Char('j'))), Action::Nothing);
+    let after = painted(&app.board, WIDE.0, WIDE.1);
+    assert_eq!(
+        lines_of(&after, WIDE.0, WIDE.1)[FOOTER],
+        "",
+        "the last key's answer outlived the key after it",
+    );
+}
+
+#[test]
+fn the_wave_title_names_the_spec_and_the_ref() {
+    // Given keeler-status answered "graph: specs/01-foo.md on feat/01-foo"
+    let board = assemble(&running_report(1), "", NOON);
+
+    // When the board renders
+    let frame = drawn(&board, WIDE.0, WIDE.1);
+
+    // Then the wave panel's title reads "wave  specs/01-foo.md on feat/01-foo"
+    assert!(
+        frame[WAVE_TOP].contains("wave  specs/01-foo.md on feat/01-foo"),
+        "{:?}",
+        frame[WAVE_TOP],
+    );
+}
+
+#[test]
+fn a_landed_features_board_names_head_as_the_ref() {
+    // Given feat/01-foo is gone and keeler-status answered from HEAD
+    let board = assemble(
+        "graph: specs/01-foo.md on HEAD\nT1     done\n",
+        "T1 done\n",
+        NOON,
+    );
+
+    // When the board renders
+    let frame = drawn(&board, WIDE.0, WIDE.1);
+
+    // Then the wave panel's title reads "wave  specs/01-foo.md on HEAD"
+    assert!(
+        frame[WAVE_TOP].contains("wave  specs/01-foo.md on HEAD"),
+        "{:?}",
+        frame[WAVE_TOP],
+    );
+}
+
+#[test]
+fn the_first_header_line_is_the_healthy_counts_and_the_status_age() {
+    // Given tasks running ×2, passed ×1, done ×3, and keeler-status
+    // answered 1 s ago
+    let board = assemble(
+        &states_report(&[
+            ("T1", "running"),
+            ("T2", "running"),
+            ("T3", "passed"),
+            ("T4", "done"),
+            ("T5", "done"),
+            ("T6", "done"),
+        ]),
+        "",
+        "2026-09-07T11:59:59.000Z",
+    );
+
+    // When the board renders
+    let frame = drawn(&board, WIDE.0, WIDE.1);
+    let first = inside(&frame[WAVE_TOP + 1]);
+
+    // Then the wave panel's first line begins with the counts
+    assert!(
+        first.starts_with("● 2 running   ◐ 1 passed   ✓ 3 done"),
+        "{first:?}",
+    );
+    // And ends with "status 1s ago"
+    assert!(first.ends_with("status 1s ago"), "{first:?}");
+    // And a state with no task is absent from the counts
+    for absent in ["ready", "blocked", "not spawned"] {
+        assert!(
+            !first.contains(absent),
+            "{absent} was counted on a board with none of it: {first:?}",
+        );
+    }
+}
+
+#[test]
+fn the_first_lines_right_half_names_what_needs_a_human() {
+    // Given T9 failed (exit 2), T8 paused, T4 died, T2 incomplete (no
+    // review record) — in the report's order, which is not the header's
+    let board = assemble(
+        &states_report(&[
+            ("T9", "failed (exit 2)"),
+            ("T8", "paused"),
+            ("T4", "died"),
+            ("T2", "incomplete (no review record)"),
+        ]),
+        "",
+        "2026-09-07T11:59:59.000Z",
+    );
+
+    // When the board renders
+    let terminal = painted(&board, 140, WIDE.1);
+    let frame = lines_of(&terminal, 140, WIDE.1);
+    let first = inside(&frame[WAVE_TOP + 1]);
+
+    // Then the first line's right half names them in the state table's
+    // order, before "status 1s ago"
+    assert!(
+        first.ends_with("✗ T9 exit 2 · ⊘ T4 died · ◔ T2 incomplete · ‖ T8 paused   status 1s ago",),
+        "{first:?}",
+    );
+    // And each item is in its state's colour
+    for (glyph, colour) in [
+        ('✗', RED),
+        ('⊘', RED),
+        ('◔', keeler_top::theme::YELLOW),
+        ('‖', VIOLET),
+    ] {
+        assert_eq!(
+            cell_at(&terminal, cell_of(&frame[WAVE_TOP + 1], glyph), 1).1,
+            colour,
+            "{glyph} is not in its state's colour",
+        );
+    }
+}
+
+#[test]
+fn with_nothing_to_act_on_the_right_half_is_empty() {
+    // Given every task is running, passed, blocked or done
+    let board = assemble(
+        &states_report(&[
+            ("T1", "running"),
+            ("T2", "passed"),
+            ("T3", "not spawned"),
+            ("T4", "done"),
+        ]),
+        "T3 blocked T1\n",
+        "2026-09-07T11:59:59.000Z",
+    );
+
+    // When the board renders
+    let frame = drawn(&board, WIDE.0, WIDE.1);
+    let first = inside(&frame[WAVE_TOP + 1]);
+
+    // Then nothing stands between the counts and "status 1s ago"
+    let counts = "● 1 running   ◐ 1 passed   ○ 1 blocked   ✓ 1 done";
+    assert!(first.starts_with(counts), "{first:?}");
+    assert_eq!(
+        first[counts.len()..].trim(),
+        "status 1s ago",
+        "something stands between the counts and the age: {first:?}",
+    );
+}
+
+#[test]
+fn the_second_line_is_an_outcome_strip_one_glyph_per_task_in_fives() {
+    // Given tasks T1 done, T2 done, T3 running, T4 died, T5 passed, T6
+    // paused, T7 blocked, T8 not spawned, T9 ready, T10 failed
+    let board = assemble(
+        &states_report(&[
+            ("T1", "done"),
+            ("T2", "done"),
+            ("T3", "running"),
+            ("T4", "died"),
+            ("T5", "passed"),
+            ("T6", "paused"),
+            ("T7", "not spawned"),
+            ("T8", "not spawned"),
+            ("T9", "not spawned"),
+            ("T10", "failed (exit 2)"),
+        ]),
+        "T7 blocked T5\nT9 ready\n",
+        NOON,
+    );
+
+    // When the board renders
+    let terminal = painted(&board, WIDE.0, WIDE.1);
+    let frame = lines_of(&terminal, WIDE.0, WIDE.1);
+
+    // Then the second line begins "✓✓●⊘◐ ‖○·◇✗" — the report's order, with
+    // a space after every fifth glyph and none after the last
+    assert!(
+        inside(&frame[WAVE_TOP + 2]).starts_with("✓✓●⊘◐ ‖○·◇✗"),
+        "{:?}",
+        frame[WAVE_TOP + 2],
+    );
+    // And each glyph is in its state's colour
+    for (x, colour) in [
+        (1, keeler_top::theme::DIM),
+        (3, ORANGE),
+        (4, RED),
+        (5, GREEN),
+        (7, VIOLET),
+        (10, BLUE),
+        (11, RED),
+    ] {
+        assert_eq!(
+            cell_at(&terminal, x, 2).1,
+            colour,
+            "the glyph at {x} is not in its state's colour",
+        );
+    }
+}
+
+/// The keys a live board answers to, as its second line names them.
+const KEYS: &str = "j/k move · Enter attach · p pause · R resume · r refresh · z compact · q quit";
+
+#[test]
+fn the_key_hints_sit_at_the_right_of_the_second_line_with_bright_keys() {
+    // Given a 120-column terminal with nine tasks
+    let board = assemble(&running_report(9), "", NOON);
+
+    // When the board renders
+    let terminal = painted(&board, WIDE.0, WIDE.1);
+    let frame = lines_of(&terminal, WIDE.0, WIDE.1);
+    let second = &frame[WAVE_TOP + 2];
+
+    // Then the second line ends with the hints
+    assert!(inside(second).ends_with(KEYS), "{second:?}");
+    // And the key names are in the text colour and the words after them dim
+    let key = cell_of(second, 'j');
+    assert_eq!(
+        cell_at(&terminal, key, 2),
+        ("j".to_string(), keeler_top::theme::TEXT),
+    );
+    assert_eq!(
+        cell_at(&terminal, key + 4, 2),
+        ("m".to_string(), keeler_top::theme::DIM),
+    );
+}
+
+#[test]
+fn hints_go_before_the_strip_is_cut() {
+    // Given 30 tasks in an 80-column terminal
+    let board = assemble(&running_report(30), "", NOON);
+
+    // When the board renders
+    let frame = drawn(&board, 80, WIDE.1);
+    let second = inside(&frame[WAVE_TOP + 2]);
+
+    // Then the second line holds the whole 30-glyph strip and no hints
+    assert_eq!(
+        second.chars().filter(|glyph| *glyph == '●').count(),
+        30,
+        "the strip lost a task: {second:?}",
+    );
+    assert!(
+        !second.contains("q quit"),
+        "the hints crowded the strip out: {second:?}",
+    );
+}
+
+#[test]
+fn a_finished_specs_header_says_so() {
+    // Given every task is done
+    let lines: Vec<String> = (1..=9).map(|task| format!("T{task:<5} done")).collect();
+    let board = assemble(&report(&lines), "", "2026-09-07T11:59:59.000Z");
+
+    // When the board renders
+    let frame = drawn(&board, WIDE.0, WIDE.1);
+
+    // Then the first line begins with the count and what to do next
+    assert!(
+        inside(&frame[WAVE_TOP + 1])
+            .starts_with("✓ 9 done   the feature is finished here — land it on main"),
+        "{:?}",
+        frame[WAVE_TOP + 1],
+    );
+    // And the hints read "j/k move · r refresh · q quit"
+    let second = inside(&frame[WAVE_TOP + 2]);
+    assert!(
+        second.ends_with("j/k move · r refresh · q quit"),
+        "{second:?}",
+    );
+    assert!(
+        !second.contains("pause") && !second.contains("attach"),
+        "a finished board offered a lever it has no session for: {second:?}",
+    );
 }
