@@ -577,15 +577,15 @@ pub fn render(frame: &mut ratatui::Frame, board: &Board, theme: Theme, now: Time
         .height
         .saturating_sub(WAVE_ROWS.saturating_add(FOOTER_ROWS))
         .saturating_sub(BORDERS);
-    let tasks = crate::panels::tasks(board, &cols, theme, now, room);
-    let panes = layout(area, tasks.lines.len());
+    let rows = crate::panels::tasks(board, &cols, theme, now, room);
+    let panes = layout(area, rows.len());
     frame.render_widget(
-        Paragraph::new(crate::panels::wave(board, theme, now, width, tasks.compact))
+        Paragraph::new(crate::panels::wave(board, theme, now, width))
             .block(panel(theme, crate::panels::title(board, theme))),
         panes.wave,
     );
     frame.render_widget(
-        Paragraph::new(tasks.lines).block(panel(theme, named("tasks", theme.style(ORANGE)))),
+        Paragraph::new(rows).block(panel(theme, named("tasks", theme.style(ORANGE)))),
         panes.tasks,
     );
     // Both, or neither. A spec whose tasks are still to be written has no

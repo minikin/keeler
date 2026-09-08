@@ -106,32 +106,9 @@ pub fn title(board: &Board, theme: Theme) -> Vec<Span<'static>> {
 }
 
 /// The panel's two lines, laid out for the width inside its borders.
-///
-/// `compact` is the tasks panel's answer rather than the wave's own: the
-/// hints name what `z` would do next, and what it would do next is decided
-/// by how the rows under this line are drawn.
 #[must_use]
-pub fn wave(
-    board: &Board,
-    theme: Theme,
-    now: Timestamp,
-    width: u16,
-    compact: bool,
-) -> Vec<Line<'static>> {
-    vec![
-        first(board, theme, now, width),
-        second(board, theme, width, compact),
-    ]
-}
-
-/// The tasks panel, as it is drawn and as the wave panel above it needs to
-/// know it was drawn.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Tasks {
-    /// The column heading, and the rows the panel had room for.
-    pub lines: Vec<Line<'static>>,
-    /// Whether the live rows were drawn on one line.
-    pub compact: bool,
+pub fn wave(board: &Board, theme: Theme, now: Timestamp, width: u16) -> Vec<Line<'static>> {
+    vec![first(board, theme, now, width), second(board, theme, width)]
 }
 
 /// The column heading, which takes a row of the panel like any other.
@@ -146,7 +123,13 @@ const HEADING: usize = 1;
 /// matters: a panel shorter than that is one the detail pane has already
 /// been dropped from, and one taller has room for every line there is.
 #[must_use]
-pub fn tasks(board: &Board, cols: &Columns, theme: Theme, now: Timestamp, height: u16) -> Tasks {
+pub fn tasks(
+    board: &Board,
+    cols: &Columns,
+    theme: Theme,
+    now: Timestamp,
+    height: u16,
+) -> Vec<Line<'static>> {
     let room = usize::from(height).saturating_sub(HEADING);
     let expanded = drawn(board, cols, theme, now, Collapse::None);
     let collapse = collapse(board.compact, expanded.rows.len(), room);
@@ -164,10 +147,7 @@ pub fn tasks(board: &Board, cols: &Columns, theme: Theme, now: Timestamp, height
             .skip(scrolled(watched.start, watched.end, room))
             .take(room),
     );
-    Tasks {
-        lines,
-        compact: collapse != Collapse::None,
-    }
+    lines
 }
 
 /// How many of the live rows give up the line under them.
@@ -361,9 +341,15 @@ fn first(board: &Board, theme: Theme, now: Timestamp, width: u16) -> Line<'stati
 
 /// The second: the strip, and the hints against the right edge — when there
 /// is room for both.
-fn second(board: &Board, theme: Theme, width: u16, compact: bool) -> Line<'static> {
+fn second(board: &Board, theme: Theme, width: u16) -> Line<'static> {
     let strip = strip(&board.rows, theme, board.finished());
-    let hinted = hinted(theme, board.finished(), compact);
+    // The hint names what the *next press* does, so it reads the same
+    // answer the key does and not how the panel below happened to draw the
+    // rows. A hint taken from the drawing would offer "z expand" on a board
+    // the panel collapsed by itself — where the press expands nothing and
+    // takes the watched row's second line instead — and on a board of
+    // closed rows, which have no second line for either word to be about.
+    let hinted = hinted(theme, board.finished(), board.compact == Some(true));
     // The strip is one cell a task and the hints are the same seven on
     // every board there is: a wave too wide for both keeps the half that is
     // about the wave, and the keys are on the second line of the README.

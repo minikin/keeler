@@ -5357,6 +5357,78 @@ fn z_toggles_compact_by_hand() {
     );
 }
 
+/// Not a scenario of its own: it is what the two scenarios above leave
+/// unsaid about a board the panel collapsed by itself, and the review found
+/// it. The hint names what the *next press* does, and the next press reads
+/// the answer the watcher last gave — so a hint taken from the drawing
+/// would read "z expand" on a board where `z` collapses the one row still
+/// on two lines, and again on a board of closed rows where it has nothing
+/// to expand at all.
+#[test]
+fn the_hint_names_what_the_key_will_do_and_not_what_the_panel_did() {
+    // A board the panel collapsed by itself: the rows are on one line and
+    // nobody asked for that.
+    let runfiles = Runfiles::new("t5-hint");
+    let mut app = app_over(
+        &Arc::new(Reads::answering("")),
+        &report(&spawned_wave(&runfiles, 14)),
+    );
+    for _ in 0..2 {
+        on_key(&mut app, press(KeyCode::Char('j')));
+    }
+    assert_eq!(app.board.selected, 2, "the fixture is not watching T3");
+    let frame = drawn(&app.board, WIDE.0, TALL);
+    assert!(
+        inside(under_of(&frame, "T3")).starts_with("    └─"),
+        "the panel collapsed the row it was drawn for:\n{}",
+        frame.join("\n"),
+    );
+    assert!(
+        inside(&frame[WAVE_TOP + 2]).ends_with("z compact · q quit"),
+        "the hint offered to expand a board nobody had collapsed: {:?}",
+        frame[WAVE_TOP + 2],
+    );
+
+    // The press it named takes the last second line with it.
+    on_key(&mut app, press(KeyCode::Char('z')));
+    let compact = drawn(&app.board, WIDE.0, TALL);
+    assert!(
+        !inside(under_of(&compact, "T3")).starts_with("    └─"),
+        "the press the hint named did nothing:\n{}",
+        compact.join("\n"),
+    );
+    assert!(
+        inside(&compact[WAVE_TOP + 2]).ends_with("z expand · q quit"),
+        "{:?}",
+        compact[WAVE_TOP + 2],
+    );
+
+    // And the one after it gives every row its second line back, whatever
+    // the panel would have done left to itself — the board scrolls instead.
+    on_key(&mut app, press(KeyCode::Char('z')));
+    let expanded = drawn(&app.board, WIDE.0, TALL);
+    assert!(
+        inside(under_of(&expanded, "T1")).starts_with("    └─"),
+        "a board expanded by hand collapsed itself again:\n{}",
+        expanded.join("\n"),
+    );
+    assert!(
+        inside(&expanded[WAVE_TOP + 2]).ends_with("z compact · q quit"),
+        "{:?}",
+        expanded[WAVE_TOP + 2],
+    );
+
+    // And a crowded board with no live row at all offers the same: there is
+    // no second line anywhere on it for "z expand" to have been about.
+    let closed: Vec<String> = (1..=30).map(|task| format!("T{task:<5} passed")).collect();
+    let short = drawn(&assemble(&report(&closed), "", NOON), WIDE.0, SHORT);
+    assert!(
+        inside(&short[WAVE_TOP + 2]).ends_with("z compact · q quit"),
+        "{:?}",
+        short[WAVE_TOP + 2],
+    );
+}
+
 #[test]
 fn a_short_panel_scrolls_to_keep_the_selection_visible() {
     // Given 12 tasks, all running, and a tasks panel 8 rows tall
