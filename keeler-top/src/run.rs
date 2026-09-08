@@ -316,6 +316,14 @@ pub struct RunView {
     pub output_by_message: HashMap<String, u64>,
     /// The run's last few words, oldest first — what the detail pane shows.
     pub texts: VecDeque<String>,
+    /// When this run began: the stamp on the init record it opened with.
+    ///
+    /// The **first** one, and a restart is what makes that worth saying. A
+    /// resumed task is a new run in the same file, and the reader throws the
+    /// view away when it sees one — so the first init this view is folded
+    /// from is always the first of the run it is about, never of the run
+    /// before it.
+    pub spawned_at: Option<Timestamp>,
 }
 
 impl RunView {
@@ -370,14 +378,29 @@ impl RunView {
             .map_or_else(String::new, |at| format_elapsed(now.seconds_since(at)))
     }
 
+    /// The share of its window the run has used, as a number — which is
+    /// what the board's bar is drawn from, where the column below is what
+    /// `--once` prints.
+    ///
+    /// Nothing rather than a zero for a run whose stream has carried no
+    /// usage yet: a window nobody has reported on and a window nobody has
+    /// touched are different answers, and only one of them is a bar.
+    #[must_use]
+    pub fn context_percent(&self) -> Option<u8> {
+        let used = self.context_used?;
+        Some(percent(
+            used,
+            window_for(self.model.as_deref().unwrap_or_default()),
+        ))
+    }
+
     /// The context column: the share of its window the run has used, marked
     /// once it is close enough to the end to matter.
     #[must_use]
     pub fn context_column(&self) -> String {
-        let Some(used) = self.context_used else {
+        let Some(share) = self.context_percent() else {
             return DASH.to_string();
         };
-        let share = percent(used, window_for(self.model.as_deref().unwrap_or_default()));
         if share >= CONTEXT_ALARM {
             format!("{share}%!")
         } else {
@@ -501,7 +524,13 @@ fn text_of(block: &serde_json::Value) -> Option<&str> {
 /// started as, what it has done, and what that has cost.
 pub fn fold(view: &mut RunView, record: Record, worktree: &Path) {
     match record {
-        Record::Init { model } => view.model = Some(model),
+        Record::Init { model, at } => {
+            view.model = Some(model);
+            // The first stamp stands: a batch that holds two init records is
+            // the run that ended and the run that replaced it, and the
+            // reader has already told the board to throw the first away.
+            view.spawned_at = view.spawned_at.or(at);
+        }
         Record::Assistant { message, at } => view.absorb(&message, at, worktree),
         Record::ToolResult(message) => view.absorb_tool_result(&message),
         Record::Other => {}
@@ -683,6 +712,7 @@ mod tests {
             &mut view,
             Record::Init {
                 model: "claude-opus-5[1m]".to_string(),
+                at: Timestamp::parse("2026-09-07T11:19:00Z"),
             },
             Path::new(WORKTREE),
         );
@@ -695,8 +725,43 @@ mod tests {
 
         assert_eq!(view.stage, Stage::Reading);
         // The init record is not nothing — it names the model, and the
-        // window the context column divides by comes from that name.
+        // window the context column divides by comes from that name, and
+        // its stamp is when the run was spawned.
         assert_eq!(view.model.as_deref(), Some("claude-opus-5[1m]"));
+        assert_eq!(view.spawned_at, Timestamp::parse("2026-09-07T11:19:00Z"));
+    }
+
+    #[test]
+    fn a_second_init_in_one_batch_does_not_move_the_spawn_time() {
+        // Two inits in one poll is the run that ended and the run that
+        // replaced it, read from the start of a truncated file — and the
+        // reader has already told the board to throw the first view away.
+        // The stamp the second run keeps is its own.
+        let mut view = RunView::default();
+        for stamp in ["2026-09-07T11:19:00Z", "2026-09-07T12:30:00Z"] {
+            fold(
+                &mut view,
+                Record::Init {
+                    model: "claude-opus-5[1m]".to_string(),
+                    at: Timestamp::parse(stamp),
+                },
+                Path::new(WORKTREE),
+            );
+        }
+
+        assert_eq!(view.spawned_at, Timestamp::parse("2026-09-07T11:19:00Z"));
+        // And an init whose stamp could not be read leaves nothing behind
+        // rather than a spawn at the epoch.
+        let mut unstamped = RunView::default();
+        fold(
+            &mut unstamped,
+            Record::Init {
+                model: String::new(),
+                at: None,
+            },
+            Path::new(WORKTREE),
+        );
+        assert_eq!(unstamped.spawned_at, None);
     }
 
     #[test]
@@ -971,6 +1036,29 @@ mod tests {
             view.context_used = Some(used);
             assert_eq!(view.context_column(), shown);
         }
+    }
+
+    #[test]
+    fn the_context_is_a_number_before_it_is_a_column() {
+        // The board draws a bar and `--once` prints a column, and the two
+        // are one reading: the number is where they part company, so it is
+        // the number the column is composed from rather than the other way
+        // round.
+        let mut view = RunView {
+            model: Some("claude-opus-5[1m]".to_string()),
+            ..RunView::default()
+        };
+        assert_eq!(view.context_percent(), None);
+
+        view.context_used = Some(500_000);
+        assert_eq!(view.context_percent(), Some(50));
+        assert_eq!(view.context_column(), "50%");
+
+        // The window is the model's, here as it is in the column: an
+        // unnamed model is the ordinary 200k, which this has filled.
+        view.model = None;
+        assert_eq!(view.context_percent(), Some(100));
+        assert_eq!(view.context_column(), "100%!");
     }
 
     #[test]

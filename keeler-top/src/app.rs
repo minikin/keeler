@@ -32,9 +32,10 @@ use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, Ke
 use crate::board::{Board, Runs};
 use crate::clock::Timestamp;
 use crate::dispatch::Dispatch;
-use crate::graph::GraphLine;
+use crate::graph::Graph;
 use crate::status::Status;
 use crate::terminal::{Guard, Screen};
+use crate::theme::Theme;
 
 /// How long the board waits for a keypress before re-reading the streams.
 ///
@@ -80,12 +81,17 @@ pub enum Action {
 pub struct App {
     /// The board as the last pass left it.
     pub board: Board,
+    /// The colours and glyphs this terminal asked for, read once in `main`
+    /// and carried here because this is what the loop draws from — a theme
+    /// re-read per frame would be the process's environment answering a
+    /// question the renderer is meant to be handed the answer to.
+    pub theme: Theme,
     /// The streams, one reader per task, kept between ticks.
     runs: Runs,
     /// The last report `keeler-status` gave.
     status: Status,
-    /// The graph as the last tick read it.
-    graph: Vec<GraphLine>,
+    /// The graph as the last tick read it, and the titles beside it.
+    graph: Graph,
     /// The project being watched — the graph is read from the ref that
     /// report named, in this repository.
     root: PathBuf,
@@ -123,13 +129,15 @@ impl App {
         dispatch: Arc<dyn Dispatch>,
         root: PathBuf,
         status: Status,
-        graph: Vec<GraphLine>,
+        graph: Graph,
         answered: Timestamp,
+        theme: Theme,
     ) -> Self {
         let mut runs = Runs::default();
-        let board = Board::assemble(&status, &graph, &mut runs, answered);
+        let board = Board::assemble(&status, &graph, &mut runs, answered, dispatch.as_ref());
         Self {
             board,
+            theme,
             runs,
             status,
             graph,
@@ -174,6 +182,7 @@ impl App {
             &self.graph,
             &mut self.runs,
             self.board.answered,
+            self.dispatch.as_ref(),
         );
         self.adopt(fresh);
     }
@@ -195,7 +204,13 @@ impl App {
             Ok(status) => {
                 self.status = status;
                 self.status_said = None;
-                let fresh = Board::assemble(&self.status, &self.graph, &mut self.runs, now);
+                let fresh = Board::assemble(
+                    &self.status,
+                    &self.graph,
+                    &mut self.runs,
+                    now,
+                    self.dispatch.as_ref(),
+                );
                 self.adopt(fresh);
             }
             Err(refused) => {
@@ -228,8 +243,9 @@ impl App {
     }
 
     /// Puts a freshly assembled board in place of the one on screen, keeping
-    /// the one thing a re-assembly knows nothing about — which row the
-    /// person is looking at — and saying again whatever there is to say.
+    /// the two things a re-assembly knows nothing about — which row the
+    /// person is looking at, and how they asked for the rows to be drawn —
+    /// and saying again whatever there is to say.
     ///
     /// The selection is clamped rather than kept, because the rows are the
     /// report's and the report can lose one — a task whose spec line was
@@ -239,6 +255,7 @@ impl App {
         let message = self.said();
         self.board = Board {
             selected,
+            compact: self.board.compact,
             message,
             ..fresh
         };
@@ -312,7 +329,7 @@ impl App {
         // pass is one. A board that went still and said nothing is one whose
         // watcher presses R again.
         self.says(Some(format!("keeler-top: resuming {id}…")));
-        surface.draw(&self.board, now)?;
+        surface.draw(&self.board, self.theme, now)?;
         let (Ok(said) | Err(said)) = self.dispatch.resume(&id);
         self.says(Some(sentence(&said)));
         Ok(())
@@ -389,7 +406,15 @@ fn refusal(answer: Result<(), String>) -> Option<String> {
 /// here, where a test presses one and reads the board afterwards, rather
 /// than inside a loop that needs a terminal to run at all.
 pub fn on_key(app: &mut App, key: KeyEvent) -> Action {
-    let selected = app.board.selected;
+    // Whatever the last key had to say was about the last key. It outlives
+    // the ticks in between — that is what [`App::key_said`] is for — but not
+    // the press after it: a refusal still under a board somebody has moved
+    // on from is a refusal about a row they are no longer looking at. The
+    // levers below say something of their own straight after this.
+    app.says(None);
+    if viewing(app, key) {
+        return Action::Nothing;
+    }
     match key.code {
         // Ctrl-C is here because raw mode is: the terminal no longer turns
         // it into a signal, so a board that ignored it would be one the
@@ -400,23 +425,38 @@ pub fn on_key(app: &mut App, key: KeyEvent) -> Action {
         // The three levers, and the only keys here that carry a guard:
         // they are the ones that do something outside the board, and
         // Ctrl-P is a chord half the world has bound to "previous". The
-        // keys above and below move a cursor or end a session the person
-        // is looking at; this one kills a running agent.
+        // keys the loop is never told about move a cursor or redraw a row;
+        // this one kills a running agent.
         KeyCode::Char('p') if plain(key) => Action::Pause,
         // Shifted, as `keeler-resume` is the heavier of the two: `p` stops
         // a run that can be started again, and `R` starts an agent.
         KeyCode::Char('R') if plain(key) => Action::Resume,
         KeyCode::Enter if plain(key) => Action::Attach,
-        KeyCode::Char('j') | KeyCode::Down => {
-            app.select(selected.saturating_add(1));
-            Action::Nothing
-        }
-        KeyCode::Char('k') | KeyCode::Up => {
-            app.select(selected.saturating_sub(1));
-            Action::Nothing
-        }
         _ => Action::Nothing,
     }
+}
+
+/// The keys that change what the board shows and nothing else, and whether
+/// this was one of them.
+///
+/// Apart from the levers, and not only because they are the two questions a
+/// reader of `on_key` has: these do their whole work here, where the levers
+/// are decided here and carried out by the loop. None of them carries a
+/// guard for that same reason — there is nothing outside the board for a
+/// chord to set off by accident.
+fn viewing(app: &mut App, key: KeyEvent) -> bool {
+    match key.code {
+        // Down and up the board as it is drawn, which is not the order the
+        // report listed the tasks in — `Board::moved` says why.
+        KeyCode::Char('j') | KeyCode::Down => app.select(app.board.moved(true)),
+        KeyCode::Char('k') | KeyCode::Up => app.select(app.board.moved(false)),
+        // `None` is the panel's own answer — collapse the live rows when
+        // they have outgrown it — so the first press is the watcher asking
+        // for the collapse, which is what somebody reaches for `z` to get.
+        KeyCode::Char('z') => app.board.compact = Some(!app.board.compact.unwrap_or(false)),
+        _ => return false,
+    }
+    true
 }
 
 /// Whether a key was pressed on its own.
@@ -521,12 +561,17 @@ impl StatusFeed {
 /// draw on ratatui's `TestBackend`, and the pass between them is the same
 /// code either way.
 pub trait Surface {
-    /// Draws one frame of the board.
+    /// Draws one frame of the board, in the colours and glyphs this
+    /// terminal asked for.
+    ///
+    /// The theme travels with the board rather than living on the surface:
+    /// it is a value read once in `main`, and a surface that held one would
+    /// be a second place for a test to have to arrange it.
     ///
     /// # Errors
     ///
     /// Whatever the terminal refused.
-    fn draw(&mut self, board: &Board, now: Timestamp) -> Result<(), String>;
+    fn draw(&mut self, board: &Board, theme: Theme, now: Timestamp) -> Result<(), String>;
 
     /// Hands the terminal to something else for as long as `body` runs, and
     /// takes it back after.
@@ -538,8 +583,8 @@ pub trait Surface {
 }
 
 impl<B: Backend> Surface for Terminal<B> {
-    fn draw(&mut self, board: &Board, now: Timestamp) -> Result<(), String> {
-        Terminal::draw(self, |frame| crate::frame::render(frame, board, now))
+    fn draw(&mut self, board: &Board, theme: Theme, now: Timestamp) -> Result<(), String> {
+        Terminal::draw(self, |frame| crate::frame::render(frame, board, theme, now))
             .map(drop)
             .map_err(|err| format!("keeler-top: drawing the board: {err}"))
     }
@@ -574,8 +619,8 @@ impl<S: Screen, B: Backend> Live<S, B> {
 }
 
 impl<S: Screen, B: Backend> Surface for Live<S, B> {
-    fn draw(&mut self, board: &Board, now: Timestamp) -> Result<(), String> {
-        Surface::draw(&mut self.terminal, board, now)
+    fn draw(&mut self, board: &Board, theme: Theme, now: Timestamp) -> Result<(), String> {
+        Surface::draw(&mut self.terminal, board, theme, now)
     }
 
     fn away(&mut self, body: &mut dyn FnMut()) -> Result<(), String> {
@@ -709,7 +754,7 @@ pub fn step(
     if feed.due(now) {
         feed.ask();
     }
-    surface.draw(&app.board, now)?;
+    surface.draw(&app.board, app.theme, now)?;
     let woke = events.next(TICK)?;
     if tick_due(woke, now.seconds_since(app.ticked)) {
         app.tick(now);
@@ -789,6 +834,7 @@ mod tests {
     use crate::clock::Timestamp;
     use crate::dispatch::Dispatch;
     use crate::terminal::{Guard, Screen};
+    use crate::theme::Theme;
     use ratatui::Terminal;
     use ratatui::backend::Backend as _;
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -863,6 +909,19 @@ mod tests {
         }
     }
 
+    // These scenarios are about the keys and the two cadences, and a board
+    // whose tasks have written no record and left no exit file is what a
+    // wave still running looks like.
+    impl crate::dispatch::Records for Answers {
+        fn verdict(&self, _slug: &str, _id: &str, _git_ref: &str) -> Option<String> {
+            None
+        }
+
+        fn exit(&self, _slug: &str, _id: &str) -> Option<crate::dispatch::Exit> {
+            None
+        }
+    }
+
     /// A board over a report, with no graph and no runs to read.
     fn app(report: &str) -> App {
         over(Arc::new(Answers::default()), report)
@@ -875,10 +934,19 @@ mod tests {
             dispatch,
             PathBuf::from("/nowhere"),
             status,
-            Vec::new(),
+            crate::graph::Graph::default(),
             Timestamp::from_epoch_seconds(1_000),
+            // Said outright rather than read from the process: the suite
+            // runs its tests in threads of one process, and a theme taken
+            // from the environment would be whatever the machine running
+            // them happens to export.
+            Theme::new(true, false),
         )
     }
+
+    /// The theme every board below is drawn through, said outright for the
+    /// reason [`over`] gives.
+    const THEME: Theme = Theme::new(true, false);
 
     /// The report the key tests move about in.
     const THREE: &str = "graph: s.md on HEAD\nT1     done\nT2     done\nT3     done\n";
@@ -924,6 +992,38 @@ mod tests {
         on_key(&mut app, press(KeyCode::Char('j')));
 
         assert_eq!(app.board.selected, 0, "the pane left the board");
+    }
+
+    #[test]
+    fn z_collapses_the_rows_and_the_press_after_it_expands_them() {
+        let mut app = app(THREE);
+
+        assert_eq!(app.board.compact, None, "the board did not open automatic");
+        assert_eq!(on_key(&mut app, press(KeyCode::Char('z'))), Action::Nothing);
+        assert_eq!(app.board.compact, Some(true));
+        on_key(&mut app, press(KeyCode::Char('z')));
+        assert_eq!(app.board.compact, Some(false));
+        on_key(&mut app, press(KeyCode::Char('z')));
+        assert_eq!(
+            app.board.compact,
+            Some(true),
+            "the toggle stopped after one round",
+        );
+    }
+
+    #[test]
+    fn a_tick_keeps_what_the_watcher_asked_of_the_rows() {
+        // The rows are re-assembled every second from the two reads, and
+        // neither of them knows anything about `z`. A board that took the
+        // fresh answer whole would expand itself a second after it was
+        // collapsed — which is the same reason the selection is carried
+        // over, and the same place it is carried over in.
+        let mut app = app(THREE);
+        on_key(&mut app, press(KeyCode::Char('z')));
+
+        app.tick(Timestamp::from_epoch_seconds(1_001));
+
+        assert_eq!(app.board.compact, Some(true));
     }
 
     #[test]
@@ -1156,7 +1256,7 @@ mod tests {
     struct Frames(Vec<Board>);
 
     impl Surface for Frames {
-        fn draw(&mut self, board: &Board, _now: Timestamp) -> Result<(), String> {
+        fn draw(&mut self, board: &Board, _theme: Theme, _now: Timestamp) -> Result<(), String> {
             self.0.push(board.clone());
             Ok(())
         }
@@ -1500,13 +1600,13 @@ mod tests {
             Terminal::new(ratatui::backend::TestBackend::new(60, 6)).expect("a terminal"),
             Guard::new(Blind).expect("the blind screen entered"),
         );
-        live.draw(&board, now).expect("a frame");
+        live.draw(&board, THEME, now).expect("a frame");
         assert!(!blank(&live.terminal));
 
         // What tmux left behind, in the one form a test backend has for it.
         live.terminal.backend_mut().clear().expect("the backend");
         live.away(&mut || {}).expect("the blind screen");
-        live.draw(&board, now).expect("a frame");
+        live.draw(&board, THEME, now).expect("a frame");
 
         assert!(
             !blank(&live.terminal),
@@ -1522,7 +1622,7 @@ mod tests {
             Terminal::new(ratatui::backend::TestBackend::new(20, 3)).expect("a terminal");
         let board = app(RUNNING).board;
         let now = Timestamp::from_epoch_seconds(1_000);
-        Surface::draw(&mut terminal, &board, now).expect("a frame");
+        Surface::draw(&mut terminal, &board, THEME, now).expect("a frame");
         let mut ran = false;
 
         Surface::away(&mut terminal, &mut || ran = true).expect("a terminal that answers");

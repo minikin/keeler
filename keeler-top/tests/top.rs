@@ -8,6 +8,15 @@
 use keeler_top::clock::Timestamp;
 use keeler_top::run::{RunView, Stage, fold, format_tokens};
 use keeler_top::stream::{Batch, Record, StreamReader};
+use keeler_top::theme::Theme;
+
+/// The theme every board below is built through.
+///
+/// Said outright and never read from the process: the theme is a value so
+/// that a test names the board it wants, and a suite that took the
+/// environment's answer would draw a different board on a machine that
+/// exports `NO_COLOR`.
+const THEME: Theme = Theme::new(true, false);
 
 // ── T1
 
@@ -127,7 +136,8 @@ fn a_malformed_stream_line_is_skipped() {
         batch.records,
         vec![
             Record::Init {
-                model: "claude-opus-5[1m]".to_string()
+                model: "claude-opus-5[1m]".to_string(),
+                at: None,
             },
             Record::Assistant {
                 message: serde_json::json!({"id": "m1"}),
@@ -154,7 +164,8 @@ fn a_half_written_last_line_waits_for_its_rest() {
     assert_eq!(
         first.records,
         vec![Record::Init {
-            model: "claude-opus-5[1m]".to_string()
+            model: "claude-opus-5[1m]".to_string(),
+            at: None,
         }],
     );
 
@@ -240,7 +251,8 @@ fn a_resumed_tasks_stream_is_read_from_the_start() {
     assert_eq!(
         view.first(),
         Some(&Record::Init {
-            model: "claude-opus-5[1m]".to_string()
+            model: "claude-opus-5[1m]".to_string(),
+            at: None,
         }),
     );
     assert!(
@@ -343,7 +355,7 @@ fn stream_line() -> impl proptest::prelude::Strategy<Value = String> {
 // Dispatch` first appears; this file's own calls to it read from that.
 use keeler_top::dispatch::Shell;
 use keeler_top::git::branch_facts;
-use keeler_top::graph::{GraphLine, GraphState};
+use keeler_top::graph::{Graph, GraphLine, GraphState};
 use std::path::{Path, PathBuf};
 
 /// The plugin's own tree: this crate is a member of it, so the Justfile
@@ -471,7 +483,7 @@ fn the_graph_is_read_from_the_ref_not_the_working_tree() {
 
     // Then T1 is not done, and T2 (Needs: T1) reads "blocked ← T1"
     assert_eq!(
-        graph,
+        graph.lines,
         vec![
             GraphLine {
                 id: "T1".to_string(),
@@ -486,6 +498,11 @@ fn the_graph_is_read_from_the_ref_not_the_working_tree() {
         ],
         "the working tree's tick was counted — the one place in graph mode where it must not be",
     );
+    // And the titles come from that same copy: one read of one spec at one
+    // ref, so a row cannot show a title from one commit beside a state from
+    // another.
+    assert_eq!(graph.title("T1").as_deref(), Some("the root"));
+    assert_eq!(graph.title("T2").as_deref(), Some("the dependent"));
 }
 
 #[test]
@@ -1694,7 +1711,7 @@ fn restamped(stamp: &str, line: &str) -> String {
 // ── T5
 
 use keeler_top::board::{Board, Runs};
-use keeler_top::frame::{cells, detail, layout, render};
+use keeler_top::frame::{cells, layout, render};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::layout::Rect;
@@ -1752,36 +1769,159 @@ fn report(lines: &[String]) -> String {
 /// keeler-status printed, the graph script's answer beside it, and
 /// whatever is on disk under the paths the report names.
 fn assemble(report: &str, graph: &str, answered: &str) -> Board {
+    assemble_titled(report, graph, "", answered)
+}
+
+/// The same, over a spec whose Tasks section the scenario supplies — which
+/// is where a row's title column comes from.
+fn assemble_titled(report: &str, graph: &str, spec: &str, answered: &str) -> Board {
+    assemble_read(report, graph, spec, answered, &Unread::default())
+}
+
+/// The same again, over a dispatch that answers the two reads a run's files
+/// are behind — which is what the pane's scenarios arrange.
+fn assemble_read(
+    report: &str,
+    graph: &str,
+    spec: &str,
+    answered: &str,
+    records: &dyn Records,
+) -> Board {
     let status =
         keeler_top::status::parse(report).expect("the fixture's report opens with a header");
     Board::assemble(
         &status,
-        &keeler_top::graph::parse(graph),
+        &Graph {
+            lines: keeler_top::graph::parse(graph),
+            titles: keeler_top::graph::titles(spec),
+        },
         &mut Runs::default(),
         now(answered),
+        records,
     )
+}
+
+/// A dispatch that runs nothing, and finds whatever a scenario has put in
+/// the two files a run leaves behind it.
+///
+/// Nothing, by default: that is a wave still running, whose tasks have
+/// written no record and left no exit code, and it is what most boards below
+/// are. The pane's own scenarios are the ones that arrange otherwise.
+#[derive(Debug, Clone, Default)]
+struct Unread {
+    verdict: Option<String>,
+    exit: Option<Exit>,
+}
+
+impl Dispatch for Unread {
+    fn status(&self) -> Result<String, String> {
+        Err("keeler-top: nothing was asked of this dispatch.".to_string())
+    }
+
+    fn graph(&self, _spec: &Path) -> Result<String, String> {
+        Err("keeler-top: nothing was asked of this dispatch.".to_string())
+    }
+
+    fn kill(&self, _session: &str) -> Result<(), String> {
+        Err("keeler-top: nothing was asked of this dispatch.".to_string())
+    }
+
+    fn resume(&self, _task: &str) -> Result<String, String> {
+        Err("keeler-top: nothing was asked of this dispatch.".to_string())
+    }
+
+    fn in_tmux(&self) -> bool {
+        false
+    }
+
+    fn attach(&self, _session: &str, _inside: bool) -> Result<(), String> {
+        Err("keeler-top: nothing was asked of this dispatch.".to_string())
+    }
+}
+
+impl Records for Unread {
+    fn verdict(&self, _slug: &str, _id: &str, _git_ref: &str) -> Option<String> {
+        self.verdict.clone()
+    }
+
+    fn exit(&self, _slug: &str, _id: &str) -> Option<Exit> {
+        self.exit
+    }
 }
 
 /// A frame, drawn on a terminal of the given size and read back as lines
 /// of text with the trailing blanks cut.
 fn drawn(board: &Board, width: u16, height: u16) -> Vec<String> {
-    let mut terminal =
-        Terminal::new(TestBackend::new(width, height)).expect("a terminal to draw on");
-    terminal
-        .draw(|frame| render(frame, board, now(NOON)))
-        .expect("the board drew a frame");
-    lines_of(&terminal, width, height)
+    lines_of(&painted(board, width, height), width, height)
 }
 
-/// The drawn line that begins with a task's id, or the whole frame in the
-/// failure message — a row that is missing is the thing most of these
-/// tests are about.
+/// The terminal a board was drawn on, kept rather than read back — which is
+/// what a scenario asking what colour something is needs, since a line of
+/// text has thrown that away.
+fn painted(board: &Board, width: u16, height: u16) -> Terminal<TestBackend> {
+    painted_through(board, THEME, width, height)
+}
+
+/// The drawn line a task's row is on, or the whole frame in the failure
+/// message — a row that is missing is the thing most of these tests are
+/// about.
+///
+/// Found by the id and not by the left margin: the row opens with the
+/// marker column, which is the marker on the selected row and two cells of
+/// nothing on every other — and the panel's own border before either.
 fn row_of<'a>(frame: &'a [String], id: &str) -> &'a str {
     frame
         .iter()
-        .find(|line| line.starts_with(&format!("{id} ")))
+        .find(|line| {
+            inside(line)
+                .trim_start()
+                .trim_start_matches(['▸', '>'])
+                .trim_start()
+                .starts_with(&format!("{id} "))
+        })
         .unwrap_or_else(|| panic!("no row for {id} in:\n{}", frame.join("\n")))
 }
+
+/// The line a live row hangs under it, which is where spec 11 put the tool
+/// a run is in.
+fn under_of<'a>(frame: &'a [String], id: &str) -> &'a str {
+    let row = row_of(frame, id).to_string();
+    let index = frame
+        .iter()
+        .position(|line| *line == row)
+        .expect("the row this is under is in the frame");
+    frame.get(index + 1).map_or_else(
+        || panic!("nothing under {id}'s row in:\n{}", frame.join("\n")),
+        String::as_str,
+    )
+}
+
+/// The selected task's panel, as lines of text.
+///
+/// Spec 11's T6 replaced the pane spec 10 drew — the two scenarios below
+/// keep their subject and read it in the shape it has now.
+fn pane_of(board: &Board, height: u16) -> Vec<String> {
+    keeler_top::detail::pane(
+        board.selected_row().expect("the board has a row"),
+        board.slug(),
+        THEME,
+        now(NOON),
+        PANE,
+        height,
+    )
+    .iter()
+    .map(|line| {
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>()
+    })
+    .collect()
+}
+
+/// How wide the panel's inside is where a scenario asks for the pane rather
+/// than for the frame around it: wide enough for every line whole.
+const PANE: u16 = 100;
 
 /// The board's binary, run the way `keeler keeler-top` runs it: the plugin
 /// tree it shells back to, the project it is watching, and the flags and
@@ -1972,11 +2112,19 @@ fn the_header_names_the_ref_keeler_status_answered_from_and_the_age_of_that_answ
     // When the board renders
     let frame = drawn(&board, 100, 12);
 
-    // Then the header reads "specs/01-foo.md on feat/01-foo" and "status 4s ago"
+    // Then the header reads "specs/01-foo.md on feat/01-foo" and "status 4s
+    // ago" — the ref on the wave panel's title, and the age of the answer
+    // against the right edge of the line under it, which is where spec 11
+    // put the two halves of spec 10's one header line.
     assert!(
-        frame[0].contains("specs/01-foo.md on feat/01-foo") && frame[0].contains("status 4s ago"),
-        "the header names neither the ref nor the age: {:?}",
+        frame[0].contains("specs/01-foo.md on feat/01-foo"),
+        "the header does not name the ref: {:?}",
         frame[0],
+    );
+    assert!(
+        inside(&frame[1]).ends_with("status 4s ago"),
+        "the header does not name the age of the answer: {:?}",
+        frame[1],
     );
 }
 
@@ -1988,20 +2136,18 @@ fn every_task_in_the_graph_has_a_row_in_spec_order() {
         .collect();
     let board = assemble(&report(&lines), "T1 ready\n", NOON);
 
-    // When the board renders
-    let frame = drawn(&board, 100, 20);
+    // When the user runs `keeler-top --once` — spec 11 keeps this for the
+    // plain table, which is the script surface; the frame orders its rows
+    // by what needs a human first.
+    let table = keeler_top::frame::once(&board, now(NOON));
 
     // Then it shows five rows, T1 first and T5 last
-    let heading = frame
-        .iter()
-        .position(|line| line.starts_with("TASK"))
-        .expect("the table has a heading line");
-    let rows = &frame[heading + 1..=heading + 5];
+    let rows: Vec<&str> = table.lines().skip(1).collect();
+    assert!(table.starts_with("TASK"), "no heading line:\n{table}");
     for (index, task) in (1..=5).enumerate() {
         assert!(
             rows[index].starts_with(&format!("T{task} ")),
-            "the rows are not in spec order:\n{}",
-            frame.join("\n"),
+            "the rows are not in spec order:\n{table}",
         );
     }
     assert_eq!(
@@ -2119,9 +2265,17 @@ fn a_landed_feature_whose_branch_is_gone_still_renders() {
     // When the board renders
     let frame = drawn(&board, 100, 16);
 
-    // Then every row is shown and the commit column reads "—" for each
+    // Then every row is shown, and `--once`'s commit column reads "—" for
+    // each — spec 11 keeps that for the plain table and drops it from the
+    // frame, where a board of landed rows would otherwise be a wall of
+    // dashes.
     for (index, id) in ["T1", "T2"].into_iter().enumerate() {
-        assert!(row_of(&frame, id).ends_with('—'), "{id} named a commit");
+        let row = row_of(&frame, id);
+        assert!(row.contains("done"), "{id} lost its state: {row:?}");
+        assert!(
+            !row.contains('—'),
+            "the frame padded a row with dashes: {row:?}"
+        );
         assert_eq!(cells(&board.rows[index], now(NOON))[8], "—");
     }
 
@@ -2160,8 +2314,11 @@ fn a_long_command_is_cut_to_the_column_with_an_ellipsis() {
     // When the board renders
     let frame = drawn(&board, 120, 24);
 
-    // Then the column shows its head followed by "…"
-    let row = row_of(&frame, "T1");
+    // Then the column shows its head followed by "…" — `--once`'s TOOL
+    // column, which spec 11 leaves exactly as it was, and the frame's own
+    // second line, where the tool moved to.
+    let table = keeler_top::frame::once(&board, now(NOON));
+    let row = table.lines().nth(1).expect("a row under the heading");
     assert!(
         row.contains("Bash: just dev 2>&1 | tail -35 #") && row.contains('…'),
         "the command was not cut to the column: {row:?}",
@@ -2170,11 +2327,24 @@ fn a_long_command_is_cut_to_the_column_with_an_ellipsis() {
         !row.contains(&command),
         "the whole command was written into the row: {row:?}",
     );
+    // Found by the row it hangs under and not by the connector: a panel's
+    // own bottom border opens with the same two characters.
+    let under = under_of(&frame, "T1");
+    assert!(
+        under.contains(&format!("Bash: {command}")),
+        "a panel with room for the command cut it anyway: {under:?}",
+    );
+    let narrow = drawn(&board, 80, 24);
+    let cut = under_of(&narrow, "T1");
+    assert!(
+        cut.contains("Bash: just dev 2>&1 | tail -35 #") && cut.contains('…'),
+        "the command was not cut to the panel: {cut:?}",
+    );
 
     // And the detail pane shows it whole
     let whole = format!("Bash: {command}");
     assert!(
-        frame.contains(&whole),
+        frame.iter().any(|line| line.contains(&whole)),
         "the pane did not show the command whole:\n{}",
         frame.join("\n"),
     );
@@ -2204,10 +2374,11 @@ fn the_detail_pane_shows_the_selected_tasks_last_five_texts_and_its_last_command
     );
 
     // When T1 is selected
-    let pane = detail(board.selected_row().expect("the first row is selected"));
+    let pane = pane_of(&board, 24);
 
     // Then the pane shows the last five texts, oldest first, and the
-    // command in full
+    // command in full — spec 11 took the prefix off them and put them under
+    // a rule that says whose words they are.
     let texts: Vec<&String> = pane
         .iter()
         .filter(|line| {
@@ -2223,7 +2394,7 @@ fn the_detail_pane_shows_the_selected_tasks_last_five_texts_and_its_last_command
     // And it is drawn where the pane is.
     let frame = drawn(&board, 120, 24);
     assert!(
-        frame.contains(&"Bash: just dev".to_string()),
+        frame.iter().any(|line| line.contains("Bash: just dev")),
         "the pane was not drawn:\n{}",
         frame.join("\n"),
     );
@@ -2249,7 +2420,7 @@ fn the_detail_pane_lists_the_branchs_commits_since_the_feature_branch() {
     );
 
     // When T1 is selected
-    let pane = detail(board.selected_row().expect("the first row is selected"));
+    let pane = pane_of(&board, 24);
 
     // Then the pane lists both subjects with their short hashes, newest first
     let listed: Vec<&String> = pane
@@ -2304,7 +2475,12 @@ fn a_missing_stream_file_shows_the_state_alone() {
 
 #[test]
 fn a_narrow_terminal_drops_the_detail_pane_before_it_drops_columns() {
-    // Given a terminal 100 columns wide and 12 lines tall
+    // Given a terminal 100 columns wide and 20 lines tall — spec 10 asked
+    // this at twelve, and spec 11 gives a live task a second line and puts
+    // the rows in a panel with a wave panel above it, so five running tasks
+    // and a heading are thirteen lines rather than six. The scenario is
+    // about which part goes first when there is not room for everything,
+    // and thirteen lines and no pane is exactly that.
     let runfiles = Runfiles::new("narrow");
     let lines: Vec<String> = (1..=5)
         .map(|task| {
@@ -2327,13 +2503,14 @@ fn a_narrow_terminal_drops_the_detail_pane_before_it_drops_columns() {
     let board = assemble(&report(&lines), "T1 ready\n", NOON);
 
     // When the board renders
-    let frame = drawn(&board, 100, 12);
+    let frame = drawn(&board, 100, 20);
 
-    // Then every task row is shown with state, stage and tool
+    // Then every task row is shown with state and stage, and the tool on
+    // the line under it — which is where spec 11 moved it
     for task in 1..=5 {
         let row = row_of(&frame, &format!("T{task}"));
         assert!(
-            row.contains("running") && row.contains("qa") && row.contains("Bash: just dev"),
+            row.contains("running") && row.contains("qa"),
             "T{task}'s row lost a column: {row:?}",
         );
         assert!(
@@ -2341,11 +2518,28 @@ fn a_narrow_terminal_drops_the_detail_pane_before_it_drops_columns() {
             "the row runs past the window and is clipped where it stands: {row:?}",
         );
     }
+    assert_eq!(
+        frame
+            .iter()
+            .filter(|line| line.contains("└─ Bash: just dev"))
+            .count(),
+        5,
+        "not every running row named its tool:\n{}",
+        frame.join("\n"),
+    );
 
     // And the detail pane is absent
-    assert_eq!(layout(Rect::new(0, 0, 100, 12), 5).detail, None);
+    assert_eq!(
+        layout(
+            Rect::new(0, 0, 100, 20),
+            11,
+            &keeler_top::layout::bands(100, 20, 17, false),
+        )
+        .detail,
+        None,
+    );
     assert!(
-        !frame.iter().any(|line| line.starts_with("T1 — running")),
+        !frame.iter().any(|line| inside(line).starts_with("T1 — ")),
         "the pane was drawn on a terminal with no room for it:\n{}",
         frame.join("\n"),
     );
@@ -2354,7 +2548,7 @@ fn a_narrow_terminal_drops_the_detail_pane_before_it_drops_columns() {
 // ── T6
 
 use keeler_top::app::{Action, App, Events, StatusFeed, TICK, Woke, looping, on_key, step};
-use keeler_top::dispatch::Dispatch;
+use keeler_top::dispatch::{Dispatch, Exit, Records};
 use keeler_top::terminal::{Guard, Screen};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::collections::VecDeque;
@@ -2442,6 +2636,18 @@ impl Dispatch for Reads {
 
     fn attach(&self, session: &str, _inside: bool) -> Result<(), String> {
         panic!("a board about the cadences attached to {session}")
+    }
+}
+
+/// Neither read has anything to find: these boards are a wave still
+/// running, whose tasks have written no record and left no exit file.
+impl Records for Reads {
+    fn verdict(&self, _slug: &str, _id: &str, _git_ref: &str) -> Option<String> {
+        None
+    }
+
+    fn exit(&self, _slug: &str, _id: &str) -> Option<Exit> {
+        None
     }
 }
 
@@ -2552,8 +2758,9 @@ fn app_over(reads: &Arc<Reads>, report: &str) -> App {
         Arc::clone(reads) as Arc<dyn Dispatch>,
         PathBuf::from("/nowhere"),
         status,
-        Vec::new(),
+        Graph::default(),
         now(NOON),
+        THEME,
     )
 }
 
@@ -2617,13 +2824,19 @@ fn j_and_k_move_the_selection_and_the_detail_pane_follows() {
         assert_eq!(on_key(&mut app, press(code)), Action::Nothing);
     }
 
-    // Then T2 is selected and the detail pane shows T2
+    // Then T2 is selected and the detail pane shows T2 — on a terminal with
+    // room for the pane, which spec 11's T7 made a band of its own: below
+    // twenty-four lines there is no pane for a selection to move it.
     assert_eq!(app.board.selected, 1);
-    let frame = drawn(&app.board, 140, 20);
+    let frame = drawn(&app.board, 140, 24);
+    // Found by the branch the pane names rather than by a heading: spec 11's
+    // T6 put the task's id on the panel's own border and opened the pane
+    // with a fact block, and the paths line is the one that says which task
+    // those facts are about.
     let pane = |id: &str| {
-        frame
-            .iter()
-            .any(|line| line.starts_with(&format!("{id} —")))
+        frame.iter().any(|line| {
+            inside(line).starts_with(&format!("paths   keeler/01-foo/{}", id.to_lowercase()))
+        })
     };
     assert!(
         pane("T2") && !pane("T1") && !pane("T3"),
@@ -2656,7 +2869,7 @@ fn the_stream_is_re_read_once_a_second_without_input() {
     let reads = Arc::new(Reads::answering(""));
     let mut app = app_over(&reads, &report(&[running("T1", &log)]));
     let mut feed = StatusFeed::new(Arc::clone(&reads) as Arc<dyn Dispatch>, now(NOON));
-    assert!(row_of(&drawn(&app.board, 140, 20), "T1").contains("just dev"));
+    assert!(under_of(&drawn(&app.board, 140, 20), "T1").contains("just dev"));
     runfiles.append(
         "t1",
         &stamped_tool_use(
@@ -2690,9 +2903,9 @@ fn the_stream_is_re_read_once_a_second_without_input() {
     );
     assert_eq!(TICK, Duration::from_secs(1), "the tick is not a second");
     let frame = lines_of(&terminal, BOARD.0, BOARD.1);
-    let row = row_of(&frame, "T1").to_string();
+    let under = under_of(&frame, "T1").to_string();
     assert!(
-        row.contains("just mutants-diff main"),
+        under.contains("just mutants-diff main"),
         "the frame is a second out of date:\n{}",
         frame.join("\n"),
     );
@@ -2789,9 +3002,9 @@ fn keeler_status_is_re_read_every_five_seconds_and_on_r() {
     // Then keeler-status runs again and the header's age resets
     assert_eq!(reads.started(), 1, "r asked nobody anything");
     assert!(
-        app.board.header(two).ends_with("status 0s ago"),
+        app.board.age(two) == "status 0s ago",
         "the header still shows the age of the answer r replaced: {}",
-        app.board.header(two),
+        app.board.age(two),
     );
 
     // And without r it runs again when the answer is five seconds old
@@ -2860,7 +3073,7 @@ fn a_slow_keeler_status_does_not_stall_the_board() {
         )
         .expect("a pass");
         assert!(
-            row_of(&drawn(&app.board, 140, 20), "T1").contains(command),
+            under_of(&drawn(&app.board, 140, 20), "T1").contains(command),
             "the streams stopped while the report was being waited for",
         );
         assert!(feed.pending(), "the fixture's slow read answered early");
@@ -2872,7 +3085,7 @@ fn a_slow_keeler_status_does_not_stall_the_board() {
     opener.send(()).expect("the read is still waiting");
     settle(&mut app, &mut feed, later);
     assert!(
-        app.board.header(later).ends_with("status 0s ago"),
+        app.board.age(later) == "status 0s ago",
         "the answer arrived and the header did not take it",
     );
 }
@@ -2899,8 +3112,9 @@ fn a_tick_that_could_read_the_graph_takes_its_word_and_its_refusal_back() {
         Arc::clone(&reads) as Arc<dyn Dispatch>,
         project.root(),
         status,
-        Vec::new(),
+        Graph::default(),
         now(NOON),
+        THEME,
     );
     // A refusal to be taken away: the first tick reads a ref the project
     // does not have, and the second reads the one it does.
@@ -2908,8 +3122,9 @@ fn a_tick_that_could_read_the_graph_takes_its_word_and_its_refusal_back() {
         Arc::clone(&reads) as Arc<dyn Dispatch>,
         PathBuf::from("/nowhere"),
         keeler_top::status::parse(&report(&["T1     not spawned".to_string()])).expect("a report"),
-        Vec::new(),
+        Graph::default(),
         now(NOON),
+        THEME,
     );
     lost.tick(now(NOON));
     assert!(
@@ -3126,6 +3341,18 @@ impl Dispatch for Levers {
     }
 }
 
+/// The levers are what these scenarios pull; the two file reads are the
+/// pane's, and a board of running tasks has neither to find.
+impl Records for Levers {
+    fn verdict(&self, _slug: &str, _id: &str, _git_ref: &str) -> Option<String> {
+        None
+    }
+
+    fn exit(&self, _slug: &str, _id: &str) -> Option<Exit> {
+        None
+    }
+}
+
 /// One task's line of the report, in whatever state the scenario wants it —
 /// the recipe's own `printf`, with the paths every state but two carries.
 fn state_line(id: &str, state: &str, log: &str) -> String {
@@ -3140,8 +3367,9 @@ fn board_over(levers: &Arc<Levers>) -> (App, StatusFeed) {
         Arc::clone(levers) as Arc<dyn Dispatch>,
         PathBuf::from("/nowhere"),
         status,
-        Vec::new(),
+        Graph::default(),
         now(NOON),
+        THEME,
     );
     let feed = StatusFeed::new(Arc::clone(levers) as Arc<dyn Dispatch>, now(NOON));
     (app, feed)
@@ -3545,7 +3773,7 @@ fn enter_attaches_to_the_selected_running_task_and_returns_on_detach() {
         "qa",
         "the board came back showing what the run was doing before it left",
     );
-    assert!(row_of(&drawn(&app.board, 140, 20), "T1").contains("just dev"));
+    assert!(under_of(&drawn(&app.board, 140, 20), "T1").contains("just dev"));
 }
 
 #[test]
@@ -3650,4 +3878,2251 @@ fn enter_on_a_task_with_no_session_says_so() {
         ["enter"],
         "the board handed the terminal to a session that is not there",
     );
+}
+
+// ── 11-T2
+//
+// Spec 11's tasks add their tests under a heading of their own, and its
+// numbering starts again from T1 — so the heading carries the spec as well
+// as the task, or this file would hold two `// ── T2`s about two different
+// pieces of work.
+
+use keeler_top::git::{BranchFacts, Commit};
+use ratatui::style::Color;
+
+/// The panel's own line: the frame's, without the cells its borders take.
+/// Every offset in the spec's column table is measured from there.
+///
+/// Trailing blanks go with them. A panel pads its lines to its inner width
+/// so that what stands against its right edge is against the edge and not
+/// near it, and a scenario about what a row says has no business reading
+/// that padding.
+fn inside(line: &str) -> &str {
+    let body = line.strip_prefix(['│', '|', ' ']).unwrap_or(line);
+    body.strip_suffix(['│', '|']).unwrap_or(body).trim_end()
+}
+
+/// What is in one cell of a drawn frame: the character, and the colour it
+/// is drawn in.
+fn cell_at(terminal: &Terminal<TestBackend>, x: u16, y: u16) -> (String, Color) {
+    let cell = &terminal.backend().buffer()[(x, y)];
+    (cell.symbol().to_string(), cell.fg)
+}
+
+/// The tasks panel's column heading, found by what it says rather than by
+/// where it is: the panel sits under the wave panel, whose own lines are
+/// somebody else's scenario to move.
+fn heading_of(frame: &[String]) -> &str {
+    frame
+        .iter()
+        .map(String::as_str)
+        .map(inside)
+        .find(|line| line.starts_with("  TASK "))
+        .unwrap_or_else(|| panic!("no column heading in:\n{}", frame.join("\n")))
+}
+
+/// Which line of a frame a task's row is on.
+fn row_at(frame: &[String], id: &str) -> usize {
+    let row = row_of(frame, id).to_string();
+    frame
+        .iter()
+        .position(|line| *line == row)
+        .expect("the row is in the frame it was found in")
+}
+
+/// The Tasks section the boards below take their titles from.
+const TITLES: &str = "\
+## Tasks
+
+- [x] **T1 — The crate exists and reads a stream incrementally.** `stream.rs`.
+- [ ] **T3 — The fold reads the tool, the clock, the usage and the model.** Needs: T1.
+- [ ] T4 — a line that never opened the form. Needs: T1.
+";
+
+/// T3's stream: the model it was started with, the skill call that puts it
+/// in its review stage, what it has cost, and the command it is in now —
+/// two minutes and fourteen seconds before the board's clock.
+fn t3_stream() -> Vec<String> {
+    let mut usage = input_usage(410_000);
+    usage["output_tokens"] = serde_json::json!(12_100_000);
+    vec![
+        INIT.to_string(),
+        record(
+            None,
+            "m1",
+            Some(usage),
+            call(
+                "toolu_0",
+                "Skill",
+                serde_json::json!({"skill": "code-review"}),
+            ),
+        ),
+        restamped(
+            "2026-09-07T11:57:46.000Z",
+            &stamped_tool_use(
+                "toolu_1",
+                "Bash",
+                serde_json::json!({"command": "just dev 2>&1 | tail -35"}),
+            ),
+        ),
+    ]
+}
+
+/// A board whose only task is T3, running, with the facts the row scenarios
+/// describe: the branch's head four ahead with two dirty files, and the
+/// title the spec gives it.
+fn t3_board(runfiles: &Runfiles) -> Board {
+    let log = runfiles.stream("t3", &t3_stream());
+    let mut board = assemble_titled(
+        &format!(
+            "graph: specs/01-foo.md on feat/01-foo\nT3     running          log {log}  worktree /nowhere\n"
+        ),
+        "T3 ready\n",
+        TITLES,
+        NOON,
+    );
+    // Said outright rather than read from a repository: what these
+    // scenarios are about is the column, and `git.rs`'s own tests are where
+    // the facts behind it are read.
+    board.rows[0].branch = Some(BranchFacts {
+        head: "b33e05f".to_string(),
+        ahead: 4,
+        dirty: 2,
+        commits: Vec::new(),
+    });
+    board
+}
+
+#[test]
+fn a_running_tasks_row() {
+    // Given T3 is running, stage review, model "claude-opus-5[1m]", context
+    // 41%, 12.1M output tokens, head b33e05f four ahead with two dirty
+    // files, titled "The fold reads …", selected
+    let runfiles = Runfiles::new("t2-running-row");
+    let board = t3_board(&runfiles);
+
+    // When the board renders at 120 columns
+    let frame = drawn(&board, 120, 24);
+
+    // Then T3's row reads as the spec's column table composes it
+    let row = inside(row_of(&frame, "T3"));
+    assert_eq!(
+        row,
+        "▸ T3   ● running         review  opus5[1m] ███░░░░░  41%   12.1M b33e05f +4 ~2 \
+         The fold reads the tool, the clock, th…",
+    );
+    // And it is exactly 118 cells wide — the terminal's 120, less the two
+    // the panel's borders take.
+    assert_eq!(unicode_width::UnicodeWidthStr::width(row), 118);
+}
+
+#[test]
+fn the_running_tasks_second_line() {
+    // Given T3's last tool is Bash "just dev 2>&1 | tail -35", started
+    // 02:14 ago
+    let runfiles = Runfiles::new("t2-second-line");
+    let board = t3_board(&runfiles);
+
+    // When the board renders
+    let terminal = painted(&board, 120, 24);
+    let frame = lines_of(&terminal, 120, 24);
+    let under = row_at(&frame, "T3") + 1;
+    let y = u16::try_from(under).expect("a frame is not that tall");
+
+    // Then the line under T3's row begins "    └─ Bash: just dev 2>&1 | tail -35"
+    assert!(
+        inside(&frame[under]).starts_with("    └─ Bash: just dev 2>&1 | tail -35"),
+        "the tool is not under the row: {:?}",
+        frame[under],
+    );
+    // And "02:14" ends at the panel's inner right edge
+    assert!(
+        inside(&frame[under]).ends_with("02:14"),
+        "{:?}",
+        frame[under]
+    );
+    assert_eq!(cell_at(&terminal, 118, y).0, "4");
+    // And "Bash" is cyan, the command plain, the "└─" dim
+    assert_eq!(
+        cell_at(&terminal, 5, y),
+        ("└".to_string(), keeler_top::theme::DIM),
+    );
+    assert_eq!(
+        cell_at(&terminal, 8, y),
+        ("B".to_string(), keeler_top::theme::CYAN),
+    );
+    assert_eq!(
+        cell_at(&terminal, 14, y),
+        ("j".to_string(), keeler_top::theme::TEXT),
+    );
+}
+
+/// A report of one task per state, with no paths at all — the states these
+/// scenarios are about are the ones a run has finished with or never
+/// reached.
+fn states_report(states: &[(&str, &str)]) -> String {
+    let lines: Vec<String> = states
+        .iter()
+        .map(|(id, state)| format!("{id:<6} {state}"))
+        .collect();
+    report(&lines)
+}
+
+#[test]
+fn closed_and_waiting_tasks_take_one_line() {
+    // Given T6 passed, T9 failed (exit 2), T4 died, T2 incomplete (no review
+    // record), T7 blocked ← T6, T5 ready, T1 done, T10 not spawned
+    let board = assemble(
+        &states_report(&[
+            ("T6", "passed"),
+            ("T9", "failed (exit 2)"),
+            ("T4", "died"),
+            ("T2", "incomplete (no review record)"),
+            ("T7", "not spawned"),
+            ("T5", "not spawned"),
+            ("T1", "done"),
+            ("T10", "not spawned"),
+        ]),
+        "T7 blocked T6\nT5 ready\n",
+        NOON,
+    );
+
+    // When the board renders
+    let frame = drawn(&board, 120, 24);
+
+    // Then each of those rows is one line and no line stands under it
+    for (id, state) in [
+        ("T6", "passed"),
+        ("T9", "failed (exit 2)"),
+        ("T4", "died"),
+        ("T2", "incomplete (no review record)"),
+        ("T7", "blocked ← T6"),
+        ("T5", "ready"),
+        ("T1", "done"),
+        ("T10", "not spawned"),
+    ] {
+        let row = row_at(&frame, id);
+        assert!(row_of(&frame, id).contains(state), "{id} lost its state");
+        // The connector hangs four cells in, under the state's glyph — the
+        // panel's own bottom border opens with the same two characters at
+        // the left edge, which is why the indent is part of what is asked.
+        assert!(
+            !inside(&frame[row + 1]).starts_with("    └─"),
+            "{id}'s row hangs a line under it:\n{}",
+            frame.join("\n"),
+        );
+    }
+    // And the table is the heading and one line per task, nothing more: the
+    // wave panel takes four lines and the tasks panel's border and heading
+    // two more, so the last row of eight is the frame's fourteenth line.
+    assert_eq!(row_at(&frame, "T1"), 13, "the rows are not eight lines");
+}
+
+#[test]
+fn a_states_reason_is_never_cut() {
+    // Given T2 is incomplete (no review record, box not ticked) on a
+    // 140-column terminal
+    let board = assemble(
+        &states_report(&[
+            ("T2", "incomplete (no review record, box not ticked)"),
+            ("T3", "passed"),
+        ]),
+        "",
+        NOON,
+    );
+
+    // When the board renders
+    let frame = drawn(&board, 140, 24);
+
+    // Then T2's STATE column reads it whole
+    assert!(
+        inside(row_of(&frame, "T2"))
+            .starts_with("▸ T2   ◔ incomplete (no review record, box not ticked)"),
+        "the reason was cut: {:?}",
+        row_of(&frame, "T2"),
+    );
+    // And every later column in every row starts 30 cells further right
+    // than the table says — 47 cells of state where the table has 17.
+    let header = heading_of(&frame);
+    for (heading, start) in [("STAGE", 55), ("MODEL", 63), ("TOKENS", 88), ("TITLE", 109)] {
+        assert_eq!(
+            header.find(heading),
+            Some(start),
+            "{heading} did not move with the state: {header:?}",
+        );
+    }
+}
+
+#[test]
+fn a_done_row_in_a_live_view_is_the_id_the_word_and_the_title() {
+    // Given T1 is done, titled "The crate exists and reads a stream
+    // incrementally", and T3 is running
+    let runfiles = Runfiles::new("t2-done-row");
+    let log = runfiles.stream("t3", &t3_stream());
+    let mut board = assemble_titled(
+        &format!(
+            "graph: specs/01-foo.md on feat/01-foo\n\
+             T1     done\n\
+             T3     running          log {log}  worktree /nowhere\n"
+        ),
+        "T1 done\nT3 ready\n",
+        TITLES,
+        NOON,
+    );
+    // The running task is the one being watched, so T1's row shows the two
+    // cells of nothing every unselected row opens with.
+    board.selected = 1;
+
+    // When the board renders
+    let frame = drawn(&board, 120, 24);
+
+    // Then T1's row reads "  T1   ✓ done" followed by spaces and then the
+    // title at cell 79
+    let row = inside(row_of(&frame, "T1"));
+    assert!(row.starts_with("  T1   ✓ done"), "{row:?}");
+    // The title starts at cell 79, and at 120 columns it has 39 cells to
+    // finish in — so what stands there is its head and the mark that says
+    // the rest was cut.
+    // Counted in cells and not in bytes: the state's glyph is one cell and
+    // three bytes, so `find` would answer 81 about a column at 79.
+    assert!(
+        row.chars()
+            .skip(79)
+            .collect::<String>()
+            .starts_with("The crate exists and reads a stream in"),
+        "the title is not in the title column: {row:?}",
+    );
+    assert!(row.ends_with('…'), "{row:?}");
+    // And no "—" appears in the row
+    assert!(
+        !row.contains('—'),
+        "the row was padded with dashes: {row:?}"
+    );
+}
+
+#[test]
+fn a_title_the_spec_does_not_give_is_blank() {
+    // Given T4's task line lacks the "**T4 — …**" form
+    let board = assemble_titled(
+        &states_report(&[("T4", "died"), ("T3", "passed")]),
+        "",
+        TITLES,
+        NOON,
+    );
+
+    // When the board renders
+    let frame = drawn(&board, 120, 24);
+
+    // Then T4's TITLE column is blank and the board shows no error
+    assert_eq!(inside(row_of(&frame, "T4")).trim_end(), "▸ T4   ⊘ died");
+    assert_eq!(board.rows[0].title, None);
+    assert!(
+        board.message.is_empty(),
+        "the board complained: {}",
+        board.message,
+    );
+}
+
+#[test]
+fn the_finished_view_lists_each_tasks_title() {
+    // Given every task is done and the spec's Tasks section names T1 "The
+    // crate exists and reads a stream incrementally"
+    let mut board = assemble_titled(
+        &states_report(&[("T1", "done"), ("T3", "done")]),
+        "T1 done\nT3 done\n",
+        TITLES,
+        NOON,
+    );
+    board.selected = 1;
+
+    // When the board renders
+    let terminal = painted(&board, 120, 24);
+    let frame = lines_of(&terminal, 120, 24);
+
+    // Then the tasks header reads "  TASK STATE  LANDED"
+    assert_eq!(heading_of(&frame), "  TASK STATE  LANDED");
+    // And T1's row reads "  T1   ✓ done <title>" with "✓ done" green
+    assert_eq!(
+        inside(row_of(&frame, "T1")),
+        "  T1   ✓ done The crate exists and reads a stream incrementally",
+    );
+    let y = u16::try_from(row_at(&frame, "T1")).expect("a frame is not that tall");
+    assert_eq!(
+        cell_at(&terminal, 8, y),
+        ("✓".to_string(), keeler_top::theme::GREEN),
+    );
+}
+
+#[test]
+fn once_is_untouched() {
+    // Given the ten tasks above
+    let mut board = assemble(
+        &states_report(&[
+            ("T1", "done"),
+            ("T2", "incomplete (no review record)"),
+            ("T3", "running"),
+            ("T4", "died"),
+            ("T5", "not spawned"),
+            ("T6", "passed"),
+            ("T7", "not spawned"),
+            ("T8", "paused"),
+            ("T9", "failed (exit 2)"),
+            ("T10", "not spawned"),
+        ]),
+        "T5 ready\nT7 blocked T6\n",
+        NOON,
+    );
+    board.rows[2].branch = Some(BranchFacts {
+        head: "b33e05f".to_string(),
+        ahead: 4,
+        dirty: 2,
+        commits: Vec::new(),
+    });
+
+    // When the user runs `keeler-top --once specs/01-foo.md`
+    let table = keeler_top::frame::once(&board, now(NOON));
+
+    // Then stdout lists T1..T10 in the report's order in spec 10's plain table
+    let lines: Vec<&str> = table.lines().collect();
+    assert!(lines[0].starts_with("TASK STATE"), "{:?}", lines[0]);
+    for (index, id) in (1..=10).map(|task| format!("T{task}")).enumerate() {
+        assert!(
+            lines[index + 1].starts_with(&format!("{id} ")),
+            "the plain table is not in the report's order:\n{table}",
+        );
+    }
+    // And its commit column still reads "b33e05f +4  2 dirty" and its dash
+    // cells are still "—"
+    assert!(lines[3].contains("b33e05f +4  2 dirty"), "{:?}", lines[3]);
+    assert!(lines[1].contains('—'), "{:?}", lines[1]);
+    // And no box-drawing, colour, bar glyph or second line appears
+    for line in &lines {
+        assert!(
+            !line.contains('\u{1b}') && !line.contains('█') && !line.contains('░'),
+            "the plain table was drawn like the board: {line:?}",
+        );
+        assert!(!line.contains("└─") && !line.contains('│'), "{line:?}");
+    }
+    assert_eq!(lines.len(), 11, "not a heading and ten rows:\n{table}");
+}
+
+// ── 11-T4
+
+use keeler_top::theme::{BLUE, BORDER, CHROME, DIM, GREEN, ORANGE, RED, TEXT, VIOLET, YELLOW};
+
+/// The terminal these scenarios draw on: wide enough for every column and
+/// tall enough for all three panels, so what they read back is the board
+/// whole rather than one a band has already cut down.
+const WIDE: (u16, u16) = (120, 40);
+
+/// Which line of that frame each panel opens on, and which one the footer
+/// is — the arithmetic of a one-task board, said once here rather than
+/// counted off in six scenarios.
+///
+/// The wave panel is its two lines and its borders; the tasks panel is the
+/// column heading, T3's row and the line under it, and its borders; the
+/// detail panel takes what is left above the footer.
+const WAVE_TOP: usize = 0;
+const TASKS_TOP: usize = 4;
+const DETAIL_TOP: usize = 9;
+const FOOTER: usize = 39;
+
+/// A report of one running task per id, with no paths at all — the header
+/// is about how many tasks are in each state, not about what any of them is
+/// doing.
+fn running_report(how_many: usize) -> String {
+    let lines: Vec<String> = (1..=how_many)
+        .map(|task| format!("T{task:<5} running"))
+        .collect();
+    report(&lines)
+}
+
+/// Where a glyph is on a drawn line, counted in cells — which is what a
+/// scenario asking the colour of one has to hand [`cell_at`].
+///
+/// Not `str::find`: every glyph the state table owns is three bytes and one
+/// cell, so a byte offset would answer about some other column.
+fn cell_of(line: &str, glyph: char) -> u16 {
+    let at = line
+        .chars()
+        .position(|drawn| drawn == glyph)
+        .unwrap_or_else(|| panic!("no {glyph} on the line {line:?}"));
+    u16::try_from(at).expect("a line is not that wide")
+}
+
+#[test]
+fn the_frame_is_three_bordered_panels_and_a_footer() {
+    // Given a running wave and a 120x40 terminal
+    let runfiles = Runfiles::new("t4-panels");
+    let board = t3_board(&runfiles);
+
+    // When the board renders
+    let frame = drawn(&board, WIDE.0, WIDE.1);
+
+    // Then three boxes are drawn with box-drawing borders, titled
+    // "wave  <spec> on <ref>", "tasks" and the selected task's id on their
+    // top borders
+    for (top, title) in [
+        (WAVE_TOP, "wave  specs/01-foo.md on feat/01-foo"),
+        (TASKS_TOP, "tasks"),
+        (DETAIL_TOP, "T3"),
+    ] {
+        assert!(
+            frame[top].starts_with('┌') && frame[top].ends_with('┐'),
+            "line {top} is not a box's top border: {:?}",
+            frame[top],
+        );
+        assert!(
+            frame[top].contains(title),
+            "line {top} does not name {title:?}: {:?}",
+            frame[top],
+        );
+    }
+    for bottom in [WAVE_TOP + 3, TASKS_TOP + 4, FOOTER - 1] {
+        assert!(
+            frame[bottom].starts_with('└') && frame[bottom].ends_with('┘'),
+            "line {bottom} is not a box's bottom border: {:?}",
+            frame[bottom],
+        );
+    }
+    // And the last line of the frame is reserved for messages — outside
+    // every box, which is what lets a refusal be written without moving a
+    // row.
+    assert!(
+        !frame[FOOTER].starts_with(['│', '└']),
+        "the footer is inside a panel: {:?}",
+        frame[FOOTER],
+    );
+}
+
+/// Not a scenario of its own: it is what the scenario above does not say
+/// about a board with no tasks, and the review found it. A spec whose tasks
+/// are still to be written has none to show in full, and a box drawn about
+/// one — untitled, and empty — is the board drawing its own furniture.
+#[test]
+fn a_board_with_no_tasks_has_no_task_to_draw_a_panel_about() {
+    let board = assemble("graph: specs/01-foo.md on feat/01-foo\n", "", NOON);
+
+    let frame = drawn(&board, WIDE.0, WIDE.1);
+
+    // The two panels that are about the wave are drawn, the tasks panel
+    // holding its column heading and no rows.
+    assert!(frame[WAVE_TOP].contains("wave"), "{:?}", frame[WAVE_TOP]);
+    assert!(frame[TASKS_TOP].contains("tasks"), "{:?}", frame[TASKS_TOP]);
+    assert!(
+        frame[TASKS_TOP + 2].starts_with('└'),
+        "the tasks panel drew a row for a task that is not there: {:?}",
+        frame[TASKS_TOP + 2],
+    );
+    // And nothing at all below them.
+    for (below, line) in frame.iter().enumerate().skip(TASKS_TOP + 3) {
+        assert_eq!(
+            line,
+            "",
+            "line {below} is a panel about a task that is not there:\n{}",
+            frame.join("\n"),
+        );
+    }
+}
+
+#[test]
+fn panel_borders_are_neutral_and_titles_carry_the_colour() {
+    // Given the board renders
+    let runfiles = Runfiles::new("t4-borders");
+    let board = t3_board(&runfiles);
+
+    let terminal = painted(&board, WIDE.0, WIDE.1);
+
+    // Then every border cell is drawn in the chrome border colour
+    let right = WIDE.0 - 1;
+    for (x, y, glyph) in [
+        (0, 0, "┌"),
+        (right, 0, "┐"),
+        (0, 2, "│"),
+        (right, 2, "│"),
+        (0, 3, "└"),
+        (60, 3, "─"),
+        (right, 3, "┘"),
+        (0, 4, "┌"),
+        (right, 8, "┘"),
+        (0, 9, "┌"),
+        (right, 38, "┘"),
+    ] {
+        assert_eq!(
+            cell_at(&terminal, x, y),
+            (glyph.to_string(), BORDER),
+            "the cell at {x},{y} is not a border in the chrome colour",
+        );
+    }
+    // And "wave" is blue, "tasks" is orange and the detail title is green
+    for (line, letter, colour) in [
+        (WAVE_TOP, "w", BLUE),
+        (TASKS_TOP, "t", ORANGE),
+        (DETAIL_TOP, "T", GREEN),
+    ] {
+        let y = u16::try_from(line).expect("a frame is not that tall");
+        assert_eq!(
+            cell_at(&terminal, 2, y),
+            (letter.to_string(), colour),
+            "the title on line {line} is not in its panel's colour",
+        );
+    }
+}
+
+#[test]
+fn the_message_footer_shows_the_last_levers_refusal() {
+    // Given the user pressed p on T2, which is not running
+    let runfiles = Runfiles::new("t4-footer");
+    let log = runfiles.stream("t1", &[INIT.to_string()]);
+    let reads = Arc::new(Reads::answering(""));
+    let mut app = app_over(
+        &reads,
+        &report(&[
+            state_line("T1", "running", &log),
+            "T2     not spawned".to_string(),
+        ]),
+    );
+    app.board.selected = 1;
+    app.pause();
+
+    // When the board renders
+    let terminal = painted(&app.board, WIDE.0, WIDE.1);
+    let frame = lines_of(&terminal, WIDE.0, WIDE.1);
+
+    // Then the footer reads the refusal, in yellow
+    assert_eq!(
+        frame[FOOTER],
+        "keeler-top: T2 is not running — there is nothing to pause.",
+    );
+    let y = u16::try_from(FOOTER).expect("a frame is not that tall");
+    assert_eq!(
+        cell_at(&terminal, 0, y),
+        ("k".to_string(), keeler_top::theme::YELLOW),
+    );
+
+    // And the footer is empty again after the next keypress
+    assert_eq!(on_key(&mut app, press(KeyCode::Char('j'))), Action::Nothing);
+    let after = painted(&app.board, WIDE.0, WIDE.1);
+    assert_eq!(
+        lines_of(&after, WIDE.0, WIDE.1)[FOOTER],
+        "",
+        "the last key's answer outlived the key after it",
+    );
+}
+
+#[test]
+fn the_wave_title_names_the_spec_and_the_ref() {
+    // Given keeler-status answered "graph: specs/01-foo.md on feat/01-foo"
+    let board = assemble(&running_report(1), "", NOON);
+
+    // When the board renders
+    let frame = drawn(&board, WIDE.0, WIDE.1);
+
+    // Then the wave panel's title reads "wave  specs/01-foo.md on feat/01-foo"
+    assert!(
+        frame[WAVE_TOP].contains("wave  specs/01-foo.md on feat/01-foo"),
+        "{:?}",
+        frame[WAVE_TOP],
+    );
+}
+
+#[test]
+fn a_landed_features_board_names_head_as_the_ref() {
+    // Given feat/01-foo is gone and keeler-status answered from HEAD
+    let board = assemble(
+        "graph: specs/01-foo.md on HEAD\nT1     done\n",
+        "T1 done\n",
+        NOON,
+    );
+
+    // When the board renders
+    let frame = drawn(&board, WIDE.0, WIDE.1);
+
+    // Then the wave panel's title reads "wave  specs/01-foo.md on HEAD"
+    assert!(
+        frame[WAVE_TOP].contains("wave  specs/01-foo.md on HEAD"),
+        "{:?}",
+        frame[WAVE_TOP],
+    );
+}
+
+#[test]
+fn the_first_header_line_is_the_healthy_counts_and_the_status_age() {
+    // Given tasks running ×2, passed ×1, done ×3, and keeler-status
+    // answered 1 s ago
+    let board = assemble(
+        &states_report(&[
+            ("T1", "running"),
+            ("T2", "running"),
+            ("T3", "passed"),
+            ("T4", "done"),
+            ("T5", "done"),
+            ("T6", "done"),
+        ]),
+        "",
+        "2026-09-07T11:59:59.000Z",
+    );
+
+    // When the board renders
+    let frame = drawn(&board, WIDE.0, WIDE.1);
+    let first = inside(&frame[WAVE_TOP + 1]);
+
+    // Then the wave panel's first line begins with the counts
+    assert!(
+        first.starts_with("● 2 running   ◐ 1 passed   ✓ 3 done"),
+        "{first:?}",
+    );
+    // And ends with "status 1s ago"
+    assert!(first.ends_with("status 1s ago"), "{first:?}");
+    // And a state with no task is absent from the counts
+    for absent in ["ready", "blocked", "not spawned"] {
+        assert!(
+            !first.contains(absent),
+            "{absent} was counted on a board with none of it: {first:?}",
+        );
+    }
+}
+
+#[test]
+fn the_first_lines_right_half_names_what_needs_a_human() {
+    // Given T9 failed (exit 2), T8 paused, T4 died, T2 incomplete (no
+    // review record) — in the report's order, which is not the header's
+    let board = assemble(
+        &states_report(&[
+            ("T9", "failed (exit 2)"),
+            ("T8", "paused"),
+            ("T4", "died"),
+            ("T2", "incomplete (no review record)"),
+        ]),
+        "",
+        "2026-09-07T11:59:59.000Z",
+    );
+
+    // When the board renders
+    let terminal = painted(&board, 140, WIDE.1);
+    let frame = lines_of(&terminal, 140, WIDE.1);
+    let first = inside(&frame[WAVE_TOP + 1]);
+
+    // Then the first line's right half names them in the state table's
+    // order, before "status 1s ago"
+    assert!(
+        first.ends_with("✗ T9 exit 2 · ⊘ T4 died · ◔ T2 incomplete · ‖ T8 paused   status 1s ago",),
+        "{first:?}",
+    );
+    // And each item is in its state's colour
+    for (glyph, colour) in [
+        ('✗', RED),
+        ('⊘', RED),
+        ('◔', keeler_top::theme::YELLOW),
+        ('‖', VIOLET),
+    ] {
+        assert_eq!(
+            cell_at(&terminal, cell_of(&frame[WAVE_TOP + 1], glyph), 1).1,
+            colour,
+            "{glyph} is not in its state's colour",
+        );
+    }
+}
+
+#[test]
+fn with_nothing_to_act_on_the_right_half_is_empty() {
+    // Given every task is running, passed, blocked or done
+    let board = assemble(
+        &states_report(&[
+            ("T1", "running"),
+            ("T2", "passed"),
+            ("T3", "not spawned"),
+            ("T4", "done"),
+        ]),
+        "T3 blocked T1\n",
+        "2026-09-07T11:59:59.000Z",
+    );
+
+    // When the board renders
+    let frame = drawn(&board, WIDE.0, WIDE.1);
+    let first = inside(&frame[WAVE_TOP + 1]);
+
+    // Then nothing stands between the counts and "status 1s ago"
+    let counts = "● 1 running   ◐ 1 passed   ○ 1 blocked   ✓ 1 done";
+    assert!(first.starts_with(counts), "{first:?}");
+    assert_eq!(
+        first[counts.len()..].trim(),
+        "status 1s ago",
+        "something stands between the counts and the age: {first:?}",
+    );
+}
+
+#[test]
+fn the_second_line_is_an_outcome_strip_one_glyph_per_task_in_fives() {
+    // Given tasks T1 done, T2 done, T3 running, T4 died, T5 passed, T6
+    // paused, T7 blocked, T8 not spawned, T9 ready, T10 failed
+    let board = assemble(
+        &states_report(&[
+            ("T1", "done"),
+            ("T2", "done"),
+            ("T3", "running"),
+            ("T4", "died"),
+            ("T5", "passed"),
+            ("T6", "paused"),
+            ("T7", "not spawned"),
+            ("T8", "not spawned"),
+            ("T9", "not spawned"),
+            ("T10", "failed (exit 2)"),
+        ]),
+        "T7 blocked T5\nT9 ready\n",
+        NOON,
+    );
+
+    // When the board renders
+    let terminal = painted(&board, WIDE.0, WIDE.1);
+    let frame = lines_of(&terminal, WIDE.0, WIDE.1);
+
+    // Then the second line begins "✓✓●⊘◐ ‖○·◇✗" — the report's order, with
+    // a space after every fifth glyph and none after the last
+    assert!(
+        inside(&frame[WAVE_TOP + 2]).starts_with("✓✓●⊘◐ ‖○·◇✗"),
+        "{:?}",
+        frame[WAVE_TOP + 2],
+    );
+    // And each glyph is in its state's colour
+    for (x, colour) in [
+        (1, keeler_top::theme::DIM),
+        (3, ORANGE),
+        (4, RED),
+        (5, GREEN),
+        (7, VIOLET),
+        (10, BLUE),
+        (11, RED),
+    ] {
+        assert_eq!(
+            cell_at(&terminal, x, 2).1,
+            colour,
+            "the glyph at {x} is not in its state's colour",
+        );
+    }
+}
+
+/// The keys a live board answers to, as its second line names them.
+const KEYS: &str = "j/k move · Enter attach · p pause · R resume · r refresh · z compact · q quit";
+
+#[test]
+fn the_key_hints_sit_at_the_right_of_the_second_line_with_bright_keys() {
+    // Given a 120-column terminal with nine tasks
+    let board = assemble(&running_report(9), "", NOON);
+
+    // When the board renders
+    let terminal = painted(&board, WIDE.0, WIDE.1);
+    let frame = lines_of(&terminal, WIDE.0, WIDE.1);
+    let second = &frame[WAVE_TOP + 2];
+
+    // Then the second line ends with the hints
+    assert!(inside(second).ends_with(KEYS), "{second:?}");
+    // And the key names are in the text colour and the words after them dim
+    let key = cell_of(second, 'j');
+    assert_eq!(
+        cell_at(&terminal, key, 2),
+        ("j".to_string(), keeler_top::theme::TEXT),
+    );
+    assert_eq!(
+        cell_at(&terminal, key + 4, 2),
+        ("m".to_string(), keeler_top::theme::DIM),
+    );
+}
+
+#[test]
+fn hints_go_before_the_strip_is_cut() {
+    // Given 30 tasks in an 80-column terminal
+    let board = assemble(&running_report(30), "", NOON);
+
+    // When the board renders
+    let frame = drawn(&board, 80, WIDE.1);
+    let second = inside(&frame[WAVE_TOP + 2]);
+
+    // Then the second line holds the whole 30-glyph strip and no hints
+    assert_eq!(
+        second.chars().filter(|glyph| *glyph == '●').count(),
+        30,
+        "the strip lost a task: {second:?}",
+    );
+    assert!(
+        !second.contains("q quit"),
+        "the hints crowded the strip out: {second:?}",
+    );
+
+    // And they go at the width they no longer fit on, not before it. Nine
+    // glyphs and the space after the fifth are ten cells; the three between
+    // and the hints' seventy-seven make ninety, which is exactly the room
+    // inside a 92-column terminal. One task more is one cell over.
+    let fitting = drawn(&assemble(&running_report(9), "", NOON), 92, WIDE.1);
+    let fits = inside(&fitting[WAVE_TOP + 2]);
+    assert!(
+        fits.ends_with(KEYS),
+        "the hints went while they still fitted: {fits:?}",
+    );
+    let crowded = drawn(&assemble(&running_report(10), "", NOON), 92, WIDE.1);
+    let over = inside(&crowded[WAVE_TOP + 2]);
+    assert!(
+        !over.contains("q quit"),
+        "the hints stayed one cell past the edge: {over:?}",
+    );
+}
+
+#[test]
+fn a_finished_specs_header_says_so() {
+    // Given every task is done
+    let lines: Vec<String> = (1..=9).map(|task| format!("T{task:<5} done")).collect();
+    let board = assemble(&report(&lines), "", "2026-09-07T11:59:59.000Z");
+
+    // When the board renders
+    let frame = drawn(&board, WIDE.0, WIDE.1);
+
+    // Then the first line begins with the count and what to do next
+    assert!(
+        inside(&frame[WAVE_TOP + 1])
+            .starts_with("✓ 9 done   the feature is finished here — land it on main"),
+        "{:?}",
+        frame[WAVE_TOP + 1],
+    );
+    // And the hints read "j/k move · r refresh · q quit"
+    let second = inside(&frame[WAVE_TOP + 2]);
+    assert!(
+        second.ends_with("j/k move · r refresh · q quit"),
+        "{second:?}",
+    );
+    assert!(
+        !second.contains("pause") && !second.contains("attach"),
+        "a finished board offered a lever it has no session for: {second:?}",
+    );
+}
+
+// ── 11-T3
+
+/// A frame drawn through a theme the scenario names rather than the coloured
+/// one every other board here uses.
+///
+/// The theme is a value and never the process's environment, which is what
+/// lets one board be drawn twice — once as a terminal that can colour and
+/// once as one that has said it will not.
+fn painted_through(board: &Board, theme: Theme, width: u16, height: u16) -> Terminal<TestBackend> {
+    let mut terminal =
+        Terminal::new(TestBackend::new(width, height)).expect("a terminal to draw on");
+    terminal
+        .draw(|frame| render(frame, board, theme, now(NOON)))
+        .expect("the board drew a frame");
+    terminal
+}
+
+/// The background one cell is drawn on.
+///
+/// The foreground is [`cell_at`]'s; this is the other half of the answer,
+/// which the `NO_COLOR` scenario asks for because a theme that painted a
+/// background instead would be colour by another name.
+fn ground_at(terminal: &Terminal<TestBackend>, x: u16, y: u16) -> Color {
+    terminal.backend().buffer()[(x, y)].bg
+}
+
+/// Which line of a drawn frame a task's row is on, as a coordinate.
+fn y_of(frame: &[String], id: &str) -> u16 {
+    u16::try_from(row_at(frame, id)).expect("a frame is not that tall")
+}
+
+/// The characters a drawn frame holds between two cells of one line.
+fn cells_at(terminal: &Terminal<TestBackend>, xs: std::ops::Range<u16>, y: u16) -> String {
+    xs.map(|x| cell_at(terminal, x, y).0).collect()
+}
+
+/// Where a state's glyph is drawn: the panel's left border, then the marker
+/// column and the id, which is where the spec's table starts the state
+/// whatever the board's widest one is.
+const GLYPH_X: u16 = 8;
+
+/// The ten states of the table in one report, in the order it lists them,
+/// with the two the graph answers for left to the graph.
+///
+/// No run behind any of them, so every row is one line and what the frame is
+/// asked about is the state alone.
+fn every_state_report() -> String {
+    states_report(&[
+        ("T9", "failed (exit 2)"),
+        ("T4", "died"),
+        ("T2", "incomplete (no review record)"),
+        ("T8", "paused"),
+        ("T3", "running"),
+        ("T6", "passed"),
+        ("T5", "not spawned"),
+        ("T7", "not spawned"),
+        ("T10", "not spawned"),
+        ("T1", "done"),
+    ])
+}
+
+/// The graph's answer for the two states `keeler-status` has no word for.
+///
+/// T7 waits on five tasks, which makes it the widest state on this board —
+/// wider than `incomplete (no review record)`, and the one state whose
+/// width the theme changes, since `<-` is two cells where `←` is one.
+const READY_AND_BLOCKED: &str = "T5 ready\nT7 blocked T6 T4 T9 T10 T11\n";
+
+/// What that state comes to, whole.
+const BLOCKED: &str = "blocked <- T6, T4, T9, T10, T11";
+
+#[test]
+fn each_state_has_its_glyph_and_colour() {
+    // Given one task in each of the ten states
+    let board = assemble(&every_state_report(), READY_AND_BLOCKED, NOON);
+
+    // When the board renders
+    let terminal = painted(&board, 120, 30);
+    let frame = lines_of(&terminal, 120, 30);
+
+    // Then failed is "✗" red, died "⊘" red, incomplete "◔" yellow, paused
+    // "‖" violet, running "●" orange, passed "◐" green, ready "◇" blue,
+    // blocked "○" dim, not spawned "·" dim, done "✓" dim
+    for (id, glyph, colour) in [
+        ("T9", "✗", RED),
+        ("T4", "⊘", RED),
+        ("T2", "◔", YELLOW),
+        ("T8", "‖", VIOLET),
+        ("T3", "●", ORANGE),
+        ("T6", "◐", GREEN),
+        ("T5", "◇", BLUE),
+        ("T7", "○", DIM),
+        ("T10", "·", DIM),
+        ("T1", "✓", DIM),
+    ] {
+        let y = y_of(&frame, id);
+        assert_eq!(
+            cell_at(&terminal, GLYPH_X, y),
+            (glyph.to_string(), colour),
+            "{id} is not the state table's row:\n{}",
+            frame.join("\n"),
+        );
+        // And the word after the glyph is in the same colour: the glyph is
+        // what a NO_COLOR terminal reads the state by and the colour is what
+        // every other one reads it by, so a column coloured over the glyph
+        // alone would be saying it twice to nobody.
+        assert_eq!(
+            cell_at(&terminal, GLYPH_X + 2, y).1,
+            colour,
+            "{id}'s state word left its glyph's colour behind",
+        );
+    }
+}
+
+#[test]
+fn a_finished_view_paints_done_green() {
+    // Given every task is done
+    let board = assemble(
+        &states_report(&[("T1", "done"), ("T2", "done"), ("T3", "done")]),
+        "",
+        NOON,
+    );
+
+    // When the board renders
+    let terminal = painted(&board, 120, 24);
+    let frame = lines_of(&terminal, 120, 24);
+
+    // Then every "✓ done" is green — the glyph and the word alike, which is
+    // the one state whose colour the board around it decides.
+    for id in ["T1", "T2", "T3"] {
+        let y = y_of(&frame, id);
+        assert_eq!(
+            cells_at(&terminal, GLYPH_X..GLYPH_X + 6, y),
+            "✓ done",
+            "{id} is not a landed row",
+        );
+        for x in GLYPH_X..GLYPH_X + 6 {
+            assert_eq!(
+                cell_at(&terminal, x, y).1,
+                GREEN,
+                "{id}'s landed state is not green at {x}",
+            );
+        }
+    }
+}
+
+/// A run that has used a share of its window and is in a tool call — the
+/// context column's reading, and nothing else.
+fn context_stream(used: u64) -> Vec<String> {
+    vec![
+        INIT.to_string(),
+        record(
+            None,
+            "m1",
+            Some(input_usage(used)),
+            call(
+                "toolu_1",
+                "Read",
+                serde_json::json!({ "file_path": "/nowhere/x.rs" }),
+            ),
+        ),
+    ]
+}
+
+/// Where the context column is drawn on a board whose widest state is the
+/// table's seventeen: the spec puts it at cell 43, and the panel's left
+/// border is the cell before that.
+const BAR_X: u16 = 44;
+
+#[test]
+fn the_context_bar_fills_cells_and_colours_by_threshold() {
+    // Given context at 41%, 65% and 84%
+    let runfiles = Runfiles::new("t3-context-bar");
+    let board = assemble(
+        &report(
+            &[("T1", 410_000_u64), ("T2", 650_000), ("T3", 840_000)].map(|(id, used)| {
+                let log = runfiles.stream(&id.to_lowercase(), &context_stream(used));
+                format!("{id:<6} running          log {log}  worktree /nowhere")
+            }),
+        ),
+        "",
+        NOON,
+    );
+
+    // When the board renders
+    let terminal = painted(&board, 120, 30);
+    let frame = lines_of(&terminal, 120, 30);
+
+    // Then the bars read "███░░░░░", "█████░░░" and "███████░", their filled
+    // cells are blue, yellow and red, the empty cells chrome, and the
+    // percentages read "  41% ", "  65% " and "  84%!"
+    for (id, filled, colour, percentage) in [
+        ("T1", 3_u16, BLUE, "  41% "),
+        ("T2", 5, YELLOW, "  65% "),
+        ("T3", 7, RED, "  84%!"),
+    ] {
+        let y = y_of(&frame, id);
+        let bar = BAR_X..BAR_X + 8;
+        assert_eq!(
+            cells_at(&terminal, bar.clone(), y),
+            format!(
+                "{}{}",
+                "█".repeat(usize::from(filled)),
+                "░".repeat(usize::from(8 - filled)),
+            ),
+            "{id}'s bar is not the share it was given:\n{}",
+            frame.join("\n"),
+        );
+        for x in bar {
+            let (half, expected) = if x < BAR_X + filled {
+                ("filled", colour)
+            } else {
+                ("empty", CHROME)
+            };
+            assert_eq!(
+                cell_at(&terminal, x, y).1,
+                expected,
+                "{id}'s {half} cell at {x} is the wrong colour",
+            );
+        }
+        assert_eq!(
+            cells_at(&terminal, BAR_X + 8..BAR_X + 14, y),
+            percentage,
+            "{id}'s percentage is not beside its bar",
+        );
+    }
+}
+
+/// Where the commit column is drawn on that same board: cell 65 of the
+/// spec's table, and the border before it.
+const COMMIT_X: u16 = 66;
+
+#[test]
+fn the_commit_column_colours_the_hash_and_the_dirty_count() {
+    // Given T3's commit facts are hash b33e05f, 4 ahead, 2 dirty — and T6,
+    // whose worktree has nothing uncommitted in it
+    let mut board = assemble(
+        &states_report(&[("T3", "running"), ("T6", "running")]),
+        "",
+        NOON,
+    );
+    for (index, dirty) in [(0_usize, 2_usize), (1, 0)] {
+        board.rows[index].branch = Some(BranchFacts {
+            head: "b33e05f".to_string(),
+            ahead: 4,
+            dirty,
+            commits: Vec::new(),
+        });
+    }
+
+    // When the board renders
+    let terminal = painted(&board, 120, 24);
+    let frame = lines_of(&terminal, 120, 24);
+    let y = y_of(&frame, "T3");
+
+    // Then "b33e05f" is yellow, "+4" plain, "~2" red
+    assert_eq!(
+        cells_at(&terminal, COMMIT_X..COMMIT_X + 13, y),
+        "b33e05f +4 ~2",
+    );
+    for x in COMMIT_X..COMMIT_X + 7 {
+        assert_eq!(cell_at(&terminal, x, y).1, YELLOW, "the hash at {x}");
+    }
+    for x in COMMIT_X + 8..COMMIT_X + 10 {
+        assert_eq!(cell_at(&terminal, x, y).1, TEXT, "the distance at {x}");
+    }
+    for x in COMMIT_X + 11..COMMIT_X + 13 {
+        assert_eq!(cell_at(&terminal, x, y).1, RED, "the dirt at {x}");
+    }
+    // And a clean worktree shows "+4" and no "~"
+    let clean = y_of(&frame, "T6");
+    assert_eq!(
+        cells_at(&terminal, COMMIT_X..COMMIT_X + 13, clean).trim_end(),
+        "b33e05f +4",
+    );
+}
+
+#[test]
+fn no_color_draws_the_same_characters_in_default_colours() {
+    // Given NO_COLOR is set
+    let runfiles = Runfiles::new("t3-no-color");
+    let board = t3_board(&runfiles);
+
+    // When the board renders
+    let coloured = painted(&board, 120, 24);
+    let plain = painted_through(&board, Theme::new(false, false), 120, 24);
+
+    // Then every cell's foreground and background are the terminal defaults
+    for y in 0..24 {
+        for x in 0..120 {
+            assert_eq!(
+                (cell_at(&plain, x, y).1, ground_at(&plain, x, y)),
+                (Color::Reset, Color::Reset),
+                "the cell at {x},{y} was painted on a board that asked for no paint",
+            );
+        }
+    }
+    // And the characters in every cell equal those of the coloured frame
+    let frame = lines_of(&plain, 120, 24);
+    assert_eq!(frame, lines_of(&coloured, 120, 24));
+    // And the selected row is marked by "▸" alone — the glyphs are the whole
+    // of what this board has left to say a state with, so nothing may go
+    // away with the colour.
+    assert!(
+        inside(row_of(&frame, "T3")).starts_with("▸ T3   ● running"),
+        "{:?}",
+        row_of(&frame, "T3"),
+    );
+}
+
+/// The ten states, a word the theme has no row for, and a running task
+/// carrying everything a row can — the one board every glyph the theme owns
+/// appears on at once.
+fn glyph_board(runfiles: &Runfiles) -> Board {
+    let log = runfiles.stream("t3", &t3_stream());
+    let lines: Vec<String> = every_state_report()
+        .lines()
+        .skip(1)
+        .map(|line| {
+            if line.starts_with("T3 ") {
+                format!("T3     running          log {log}  worktree /nowhere")
+            } else {
+                line.to_string()
+            }
+        })
+        .chain(["T11    sulking".to_string()])
+        .collect();
+    let mut board = assemble_titled(&report(&lines), READY_AND_BLOCKED, TITLES, NOON);
+    // The watched task is the running one, so the marker lands on a row that
+    // also carries a bar, a title cut to its column and a line under it.
+    board.selected = board
+        .rows
+        .iter()
+        .position(|row| row.id == "T3")
+        .expect("the report named T3");
+    board
+}
+
+#[test]
+fn the_ascii_theme_replaces_every_non_ascii_glyph() {
+    // Given KEELER_TOP_ASCII=1
+    let runfiles = Runfiles::new("t3-ascii");
+    let mut board = glyph_board(&runfiles);
+
+    // When the board renders
+    let terminal = painted_through(&board, Theme::new(true, true), 120, 30);
+    let frame = lines_of(&terminal, 120, 30);
+
+    // Then the states read x X o = * + < - . v and the fallback "?"
+    for (id, glyph) in [
+        ("T9", "x"),
+        ("T4", "X"),
+        ("T2", "o"),
+        ("T8", "="),
+        ("T3", "*"),
+        ("T6", "+"),
+        ("T5", "<"),
+        ("T7", "-"),
+        ("T10", "."),
+        ("T1", "v"),
+        ("T11", "?"),
+    ] {
+        assert_eq!(
+            cell_at(&terminal, GLYPH_X, y_of(&frame, id)).0,
+            glyph,
+            "{id} kept a glyph this terminal cannot draw:\n{}",
+            frame.join("\n"),
+        );
+    }
+    // And the bar "###-----", the marker ">" and the connector "`-"
+    let running = inside(row_of(&frame, "T3"));
+    assert!(running.contains("###-----"), "{running:?}");
+    assert!(running.starts_with("> T3   * running"), "{running:?}");
+    assert!(
+        inside(under_of(&frame, "T3")).starts_with("    `- Bash: just dev"),
+        "{:?}",
+        under_of(&frame, "T3"),
+    );
+    // And "←" and "…" are drawn as "<-" and "..." — the arrow reaches the
+    // frame inside the state's own words rather than through the theme, and
+    // the mark that says a title was cut is three cells here and not one.
+    //
+    // Whole, and that is the second half of it: T7's is the widest state on
+    // this board, and the two cells `<-` takes where `←` took one are two a
+    // column measured in the other set would not have given it. What would
+    // be cut is the last task a blocked one is waiting on.
+    assert!(
+        inside(row_of(&frame, "T7")).contains(&format!("- {BLOCKED}")),
+        "the widest state was measured in glyphs this terminal will not draw: {:?}",
+        row_of(&frame, "T7"),
+    );
+    assert!(running.ends_with("..."), "{running:?}");
+    // And no glyph the theme owns is above U+007F — the whole frame, not
+    // the table alone: spec 11's T6 gave the pane a fact block whose dash,
+    // separator and rules are the theme's, where spec 10's pane carried a
+    // `—` no theme owned.
+    for line in &frame {
+        assert!(
+            line.is_ascii(),
+            "the board drew a glyph this terminal cannot:\n{line:?}",
+        );
+    }
+    // The pane owes the theme the state most of all, since that one carries
+    // the arrow inside its own words: a pane reading "blocked ← T6" under a
+    // row reading "blocked <- T6" would be one board disagreeing with itself
+    // on one screen.
+    board.selected = board
+        .rows
+        .iter()
+        .position(|row| row.id == "T7")
+        .expect("the report named T7");
+    let watched = lines_of(
+        &painted_through(&board, Theme::new(true, true), 120, 30),
+        120,
+        30,
+    );
+    assert!(
+        watched
+            .iter()
+            .any(|line| line.contains(&format!("state   - {BLOCKED}"))),
+        "the pane kept a glyph the row beside it swapped:\n{}",
+        watched.join("\n"),
+    );
+}
+
+// ── 11-T5
+
+use keeler_top::theme::SELECTED_BG;
+use ratatui::style::Modifier;
+
+/// A terminal whose tasks panel is twenty rows tall, its column heading
+/// among them: the wave panel's four lines and the footer's one leave
+/// twenty-two, and the panel's own borders take two of those.
+const TALL: u16 = 27;
+
+/// And one whose tasks panel is eight — which is fewer rows than twelve
+/// tasks have lines, and so the terminal the scroll scenario is about.
+///
+/// Fourteen rather than fifteen because of T7's height bands: below sixteen
+/// lines the wave panel is its first line alone, so it and the footer leave
+/// ten and the panel's own borders take two of those.
+const SHORT: u16 = 14;
+
+/// Which line of a frame that short the tasks panel opens on: one above
+/// [`TASKS_TOP`], the line the wave panel gave up.
+const SHORT_TASKS_TOP: usize = TASKS_TOP - 1;
+
+/// What every task below is in the middle of: a command long enough that a
+/// collapsed row, which shows the tool where the title goes, has to cut it.
+const COLLAPSING: &str = "just dev 2>&1 | tail -35 && cargo mutants --workspace";
+
+/// One running task's report line, its stream holding that command.
+fn spawned(runfiles: &Runfiles, id: &str) -> String {
+    let log = runfiles.stream(
+        &id.to_lowercase(),
+        &[
+            INIT.to_string(),
+            stamped_tool_use(
+                "toolu_1",
+                "Bash",
+                serde_json::json!({ "command": COLLAPSING }),
+            ),
+        ],
+    );
+    running(id, &log)
+}
+
+/// A wave of running tasks, T1 upward, each with a line to hang under it.
+fn spawned_wave(runfiles: &Runfiles, how_many: usize) -> Vec<String> {
+    (1..=how_many)
+        .map(|task| spawned(runfiles, &format!("T{task}")))
+        .collect()
+}
+
+/// A board of two tasks — T3 running with a tool under it, T1 done — with
+/// one of them watched. The two are in different groups, so the rows are
+/// drawn T3 and then T1 whichever of them is selected.
+fn watching(runfiles: &Runfiles, selected: usize) -> Board {
+    let mut board = assemble_titled(
+        &report(&["T1     done".to_string(), spawned(runfiles, "T3")]),
+        "T1 done\nT3 ready\n",
+        TITLES,
+        NOON,
+    );
+    board.selected = selected;
+    board
+}
+
+/// What a cell is drawn with beyond its colours.
+///
+/// Asked because reverse video is how the selected row used to be marked,
+/// and the whole of what this spec says about that is that it must not be.
+fn modifier_at(terminal: &Terminal<TestBackend>, x: u16, y: u16) -> Modifier {
+    terminal.backend().buffer()[(x, y)].modifier
+}
+
+/// The board's own columns: everything the panels' borders do not take.
+fn inner(width: u16) -> std::ops::Range<u16> {
+    1..width - 1
+}
+
+#[test]
+fn the_selected_row_carries_a_marker_in_its_own_colour_and_a_lighter_background() {
+    // Given T3 (running) is selected
+    let runfiles = Runfiles::new("t5-selection");
+    let board = watching(&runfiles, 1);
+
+    // When the board renders
+    let terminal = painted(&board, WIDE.0, WIDE.1);
+    let frame = lines_of(&terminal, WIDE.0, WIDE.1);
+    let y = y_of(&frame, "T3");
+
+    // Then T3's row begins with "▸" in orange
+    assert_eq!(cell_at(&terminal, 1, y), ("▸".to_string(), ORANGE));
+    // And both of T3's lines have the selection background
+    for line in [y, y + 1] {
+        for x in inner(WIDE.0) {
+            assert_eq!(
+                ground_at(&terminal, x, line),
+                SELECTED_BG,
+                "the cell at {x},{line} is not on the selected row's ground:\n{}",
+                frame.join("\n"),
+            );
+        }
+    }
+    // And no other row has it
+    let other = y_of(&frame, "T1");
+    for x in inner(WIDE.0) {
+        assert_eq!(
+            ground_at(&terminal, x, other),
+            Color::Reset,
+            "the cell at {x},{other} is on a row nobody selected",
+        );
+    }
+    // And no cell uses reverse video: reversing a row throws away the
+    // colours it was drawn in, which are the reading it exists to give.
+    for y in 0..WIDE.1 {
+        for x in 0..WIDE.0 {
+            assert!(
+                !modifier_at(&terminal, x, y).contains(Modifier::REVERSED),
+                "the cell at {x},{y} is drawn in reverse video",
+            );
+        }
+    }
+}
+
+#[test]
+fn the_marker_takes_the_rows_colour() {
+    // Given T1 (done) is selected in a live view
+    let runfiles = Runfiles::new("t5-dim-marker");
+    let board = watching(&runfiles, 0);
+
+    // When the board renders
+    let terminal = painted(&board, WIDE.0, WIDE.1);
+    let frame = lines_of(&terminal, WIDE.0, WIDE.1);
+
+    // Then the marker is dim
+    assert_eq!(
+        cell_at(&terminal, 1, y_of(&frame, "T1")),
+        ("▸".to_string(), DIM),
+    );
+    // And the running row it left carries none.
+    assert!(
+        inside(row_of(&frame, "T3")).starts_with("  T3"),
+        "{:?}",
+        row_of(&frame, "T3"),
+    );
+}
+
+// ── 11-T6
+
+/// The wave these panes are about: spec 10's own, which is the board the
+/// fact block in the spec was written from.
+const WATCHED: &str = "graph: specs/10-keeler-top.md on feat/10-keeler-top";
+
+/// When T3 was spawned — forty-one minutes before the clock every frame here
+/// is drawn against — and when it called the tool it is still in, which is
+/// seven minutes and fifty-two seconds before it.
+const SPAWNED: &str = "2026-09-07T11:19:00.000Z";
+const CALLED: &str = "2026-09-07T11:52:08.000Z";
+
+/// A report of one task of that wave, with the paths the recipe prints
+/// beside a state that has a run.
+fn watched_report(id: &str, state: &str, log: &str) -> String {
+    format!(
+        "{WATCHED}\n{id:<6} {state:<16} log {log}  worktree /w/keeler-10-keeler-top-{}\n",
+        id.to_lowercase(),
+    )
+}
+
+/// T3's stream: spawned, and in its gate since 11:52:08.
+///
+/// `just keeler-branch` rather than `just dev`, because the stage is part of
+/// what the fact block says and that recipe is the one that means `gate`.
+fn gate_stream() -> Vec<String> {
+    vec![
+        restamped(SPAWNED, INIT),
+        restamped(
+            CALLED,
+            &stamped_tool_use(
+                "toolu_1",
+                "Bash",
+                serde_json::json!({ "command": "just keeler-branch" }),
+            ),
+        ),
+    ]
+}
+
+/// A board of one task, over the two files a scenario says are there.
+fn watched_board(report: &str, files: &Unread) -> Board {
+    assemble_read(report, "", "", NOON, files)
+}
+
+/// The pane as the frame drew it, from its first fact down — found by that
+/// line rather than counted, because how many lines the panels above it take
+/// is their scenarios' business and not this one's.
+fn pane_in(frame: &[String]) -> Vec<&str> {
+    let top = frame
+        .iter()
+        .position(|line| inside(line).starts_with("state   "))
+        .unwrap_or_else(|| panic!("no fact block in:\n{}", frame.join("\n")));
+    frame[top..]
+        .iter()
+        .map(String::as_str)
+        .map(inside)
+        .collect()
+}
+
+#[test]
+fn the_live_pane_opens_with_a_fact_block() {
+    // Given T3 is running, stage gate, in its tool for 07:52, spawned 41
+    // minutes ago, log at .keeler/runs/10-keeler-top/t3.log, review record
+    // with Verdict: pass on its branch
+    let runfiles = Runfiles::new("t6-fact-block");
+    let log = runfiles.stream("t3", &gate_stream());
+    let board = watched_board(
+        &watched_report("T3", "running", &log),
+        &Unread {
+            verdict: Some("pass".to_string()),
+            ..Unread::default()
+        },
+    );
+
+    // When T3 is selected — it is the only task, so it already is
+    let frame = drawn(&board, WIDE.0, WIDE.1);
+    let pane = pane_in(&frame);
+
+    // Then the pane's first lines read the four facts
+    assert_eq!(
+        pane[..4],
+        [
+            "state   ● running · gate · 07:52 in this tool · 41m since spawn",
+            "paths   keeler/10-keeler-top/t3 · ../keeler-10-keeler-top-t3 · tmux keeler-10-keeler-top-t3",
+            "run     .keeler/runs/10-keeler-top/t3.log",
+            "review  reviews/10-keeler-top/t3.md   Verdict: pass",
+        ],
+    );
+}
+
+#[test]
+fn a_review_record_not_yet_written_says_so() {
+    // Given T3 has no reviews/<slug>/t3.md on its branch
+    let runfiles = Runfiles::new("t6-no-record");
+    let log = runfiles.stream("t3", &gate_stream());
+    let board = watched_board(&watched_report("T3", "running", &log), &Unread::default());
+
+    // When T3 is selected
+    let frame = drawn(&board, WIDE.0, WIDE.1);
+
+    // Then the review line says nobody has written one, rather than naming
+    // a file that is not there
+    assert_eq!(pane_in(&frame)[3], "review  — not written yet");
+}
+
+#[test]
+fn a_failed_tasks_state_line_carries_the_exit_code() {
+    // Given T9 failed (exit 2) and its turn ended 04:11 ago
+    let runfiles = Runfiles::new("t6-failed");
+    let log = runfiles.stream("t9", &gate_stream());
+    let board = watched_board(
+        &watched_report("T9", "failed (exit 2)", &log),
+        &Unread {
+            exit: Some(Exit {
+                code: 2,
+                at: Timestamp::parse("2026-09-07T11:55:49.000Z"),
+            }),
+            ..Unread::default()
+        },
+    );
+
+    // When T9 is selected
+    let frame = drawn(&board, WIDE.0, WIDE.1);
+
+    // Then the state line reads the word, the code and when it ended
+    assert_eq!(
+        pane_in(&frame)[0],
+        "state   ✗ failed · exit 2 · ended 04:11 ago",
+    );
+}
+
+/// T3 with its own words behind it, and the branch a scenario gives it.
+///
+/// The commits are said outright rather than read from a repository, as the
+/// row's COMMIT column's are: what these scenarios are about is the pane,
+/// and `git.rs`'s own tests are where the facts behind it are read.
+fn saying(runfiles: &Runfiles, name: &str, texts: &[&str], commits: usize) -> Board {
+    let mut lines = gate_stream();
+    for said in texts {
+        lines.push(record(None, "m1", None, text(said)));
+    }
+    let log = runfiles.stream(name, &lines);
+    let mut board = watched_board(&watched_report("T3", "running", &log), &Unread::default());
+    board.rows[0].branch = Some(BranchFacts {
+        // The newest commit is the branch's head, as a repository would have
+        // it: the row's COMMIT column and the pane's first line are the same
+        // fact read twice, and a fixture that let them differ would not be
+        // able to say so.
+        head: "b33e050".to_string(),
+        ahead: commits,
+        dirty: 0,
+        commits: (0..commits)
+            .map(|which| Commit {
+                hash: format!("b33e05{which}"),
+                subject: format!("feat(10-keeler-top): T3 step {which}"),
+            })
+            .collect(),
+    });
+    board
+}
+
+#[test]
+fn the_panes_sections_are_ruled_and_ordered_agent_commits_last_command() {
+    // Given T3 has seven texts, four commits since the feature branch and a
+    // last command — the view keeps the last five texts, which is what the
+    // pane is handed
+    let runfiles = Runfiles::new("t6-sections");
+    let board = saying(
+        &runfiles,
+        "t3",
+        &["one", "two", "three", "four", "five", "six", "seven"],
+        4,
+    );
+
+    // When T3 is selected
+    let frame = drawn(&board, WIDE.0, WIDE.1);
+    let pane = pane_in(&frame);
+
+    // Then after the fact block come "── agent ──" and the last five texts,
+    // oldest first, without a prefix
+    assert!(pane[4].starts_with("── agent ──"), "{:?}", pane[4]);
+    assert_eq!(pane[5..10], ["three", "four", "five", "six", "seven"]);
+    // And then "── commits ──" and one commit per line, newest first, the
+    // first hash equal to the row's COMMIT hash
+    assert!(pane[10].starts_with("── commits ──"), "{:?}", pane[10]);
+    assert_eq!(pane[11], "b33e050 feat(10-keeler-top): T3 step 0");
+    assert_eq!(pane[14], "b33e053 feat(10-keeler-top): T3 step 3");
+    assert!(
+        inside(row_of(&frame, "T3")).contains("b33e050 +4"),
+        "the row and the pane name different commits: {:?}",
+        row_of(&frame, "T3"),
+    );
+    // And then "── last command ──" and the command in full
+    assert!(pane[15].starts_with("── last command ──"), "{:?}", pane[15]);
+    assert_eq!(pane[16], "Bash: just keeler-branch");
+    // And every rule spans the pane's inner width — the terminal's 120, less
+    // the two the panel's borders take
+    for rule in [pane[4], pane[10], pane[15]] {
+        assert_eq!(
+            unicode_width::UnicodeWidthStr::width(rule),
+            usize::from(WIDE.0 - 2),
+            "a rule stops short of the pane's edge: {rule:?}",
+        );
+    }
+}
+
+#[test]
+fn commits_that_do_not_fit_end_with_a_count() {
+    // Given T3 has 9 commits since the feature branch and the pane holds 3
+    // commit lines — a panel of twelve, whose fact block is four lines, whose
+    // agent section is a rule and one text, and whose last command is a rule
+    // and one line
+    let runfiles = Runfiles::new("t6-commit-count");
+    let board = saying(&runfiles, "t3", &["one"], 9);
+
+    // When T3 is selected
+    let pane = pane_of(&board, 12);
+
+    // Then the third commit line says how many were not drawn
+    assert!(pane[6].starts_with("── commits ──"), "{:?}", pane[6]);
+    assert_eq!(pane[7], "b33e050 feat(10-keeler-top): T3 step 0");
+    assert_eq!(pane[8], "b33e051 feat(10-keeler-top): T3 step 1");
+    assert_eq!(pane[9], "… +7 more");
+    // And it is dim, because it is the pane talking about the list rather
+    // than another line of it
+    let lines = keeler_top::detail::pane(
+        board.selected_row().expect("the board has a row"),
+        board.slug(),
+        THEME,
+        now(NOON),
+        PANE,
+        12,
+    );
+    assert_eq!(lines[9].style, ratatui::style::Style::new().fg(DIM));
+}
+
+/// A board whose one task has landed, over the record and the exit file a
+/// scenario says are still there.
+fn landed_board(files: &Unread) -> Board {
+    watched_board(&format!("{WATCHED}\nT1     done\n"), files)
+}
+
+#[test]
+fn a_done_tasks_pane_shows_its_record_its_run_and_the_next_step() {
+    // Given T1 is done and its worktree is gone
+    let board = landed_board(&Unread {
+        verdict: Some("pass".to_string()),
+        exit: Some(Exit {
+            code: 0,
+            at: Timestamp::parse("2026-09-07T11:45:00.000Z"),
+        }),
+    });
+
+    // When T1 is selected
+    let frame = drawn(&board, WIDE.0, WIDE.1);
+    let pane = pane_in(&frame);
+
+    // Then the pane's title reads "T1"
+    let top = frame
+        .iter()
+        .rposition(|line| line.starts_with('┌'))
+        .expect("the pane is drawn in a box");
+    assert!(frame[top].starts_with("┌ T1 ─"), "{:?}", frame[top]);
+    // And its lines read the state, the record, the run and the step after
+    assert_eq!(
+        pane[..4],
+        [
+            "state   ✓ done · landed, worktree and branch removed by keeler-land",
+            "review  reviews/10-keeler-top/t1.md   Verdict: pass",
+            "run     .keeler/runs/10-keeler-top/t1.log · exit 0",
+            "next    keeler keeler-land on main → baseline staged, Status: Implemented",
+        ],
+    );
+}
+
+#[test]
+fn j_and_k_move_over_tasks_not_lines() {
+    // Given T3 (two lines) is selected and T5 (two lines) is next
+    let runfiles = Runfiles::new("t5-move");
+    let mut app = app_over(
+        &Arc::new(Reads::answering("")),
+        &report(&[spawned(&runfiles, "T3"), spawned(&runfiles, "T5")]),
+    );
+    assert_eq!(app.board.selected, 0, "the board opened on some other row");
+
+    // When the user presses j
+    assert_eq!(on_key(&mut app, press(KeyCode::Char('j'))), Action::Nothing);
+
+    // Then T5 is selected and its marker is on its first line
+    assert_eq!(
+        app.board.selected, 1,
+        "one press moved one line rather than one task",
+    );
+    let frame = drawn(&app.board, WIDE.0, WIDE.1);
+    assert!(
+        inside(row_of(&frame, "T5")).starts_with("▸ T5"),
+        "{:?}",
+        row_of(&frame, "T5"),
+    );
+    assert!(
+        !inside(under_of(&frame, "T5")).contains('▸'),
+        "the marker is on the line under the row: {:?}",
+        under_of(&frame, "T5"),
+    );
+    assert!(
+        inside(row_of(&frame, "T3")).starts_with("  T3"),
+        "the marker stayed on the row it left: {:?}",
+        row_of(&frame, "T3"),
+    );
+    // And k comes back over the same task, in one press.
+    on_key(&mut app, press(KeyCode::Char('k')));
+    assert_eq!(app.board.selected, 0);
+}
+
+#[test]
+fn rows_that_outgrow_the_panel_collapse_to_one_line_except_the_selected() {
+    // Given 14 running tasks, T3 selected, and a tasks panel 20 rows tall
+    let runfiles = Runfiles::new("t5-collapse");
+    let mut board = assemble(&report(&spawned_wave(&runfiles, 14)), "", NOON);
+    board.selected = 2;
+
+    // When the board renders
+    let frame = drawn(&board, WIDE.0, TALL);
+    assert!(
+        frame[TASKS_TOP].starts_with('┌') && frame[TASKS_TOP + 21].starts_with('└'),
+        "the tasks panel is not twenty rows tall:\n{}",
+        frame.join("\n"),
+    );
+
+    // Then T3 takes two lines and the other running tasks one
+    assert!(
+        inside(under_of(&frame, "T3")).starts_with("    └─ Bash: just dev"),
+        "the watched row lost the line that says what it is doing: {:?}",
+        under_of(&frame, "T3"),
+    );
+    for task in (1..=14).filter(|task| *task != 3) {
+        let id = format!("T{task}");
+        assert!(
+            !inside(under_of(&frame, &id)).starts_with("    └─"),
+            "{id} kept its second line on a panel with no room for it:\n{}",
+            frame.join("\n"),
+        );
+    }
+    // And each collapsed row shows its tool in the TITLE column as
+    // "Bash: just dev…" — cut where the column ends, since the second line
+    // it came off had the panel's whole width to say it in.
+    let title: String = inside(row_of(&frame, "T1")).chars().skip(79).collect();
+    assert!(title.starts_with("Bash: just dev"), "{title:?}");
+    assert!(title.trim_end().ends_with('…'), "{title:?}");
+}
+
+#[test]
+fn z_toggles_compact_by_hand() {
+    // Given nine tasks that fit two-line
+    let runfiles = Runfiles::new("t5-compact-key");
+    let mut app = app_over(
+        &Arc::new(Reads::answering("")),
+        &report(&spawned_wave(&runfiles, 9)),
+    );
+    assert!(
+        inside(under_of(&drawn(&app.board, WIDE.0, WIDE.1), "T1")).starts_with("    └─"),
+        "the board did not open with the rows two-line",
+    );
+
+    // When the user presses z
+    assert_eq!(on_key(&mut app, press(KeyCode::Char('z'))), Action::Nothing);
+    let frame = drawn(&app.board, WIDE.0, WIDE.1);
+
+    // Then every live row is one line
+    for task in 1..=9 {
+        let id = format!("T{task}");
+        assert!(
+            !inside(under_of(&frame, &id)).starts_with("    └─"),
+            "{id} kept its second line:\n{}",
+            frame.join("\n"),
+        );
+    }
+    // And the hints read "z expand"
+    assert!(
+        inside(&frame[WAVE_TOP + 2]).ends_with("z expand · q quit"),
+        "{:?}",
+        frame[WAVE_TOP + 2],
+    );
+
+    // And pressing z again restores the second lines
+    on_key(&mut app, press(KeyCode::Char('z')));
+    let back = drawn(&app.board, WIDE.0, WIDE.1);
+    assert!(
+        inside(under_of(&back, "T1")).starts_with("    └─ Bash: just dev"),
+        "{:?}",
+        under_of(&back, "T1"),
+    );
+    assert!(
+        inside(&back[WAVE_TOP + 2]).ends_with("z compact · q quit"),
+        "{:?}",
+        back[WAVE_TOP + 2],
+    );
+}
+
+/// Not a scenario of its own: it is what the two scenarios above leave
+/// unsaid about a board the panel collapsed by itself, and the review found
+/// it. The hint names what the *next press* does, and the next press reads
+/// the answer the watcher last gave — so a hint taken from the drawing
+/// would read "z expand" on a board where `z` collapses the one row still
+/// on two lines, and again on a board of closed rows where it has nothing
+/// to expand at all.
+#[test]
+fn the_hint_names_what_the_key_will_do_and_not_what_the_panel_did() {
+    // A board the panel collapsed by itself: the rows are on one line and
+    // nobody asked for that.
+    let runfiles = Runfiles::new("t5-hint");
+    let mut app = app_over(
+        &Arc::new(Reads::answering("")),
+        &report(&spawned_wave(&runfiles, 14)),
+    );
+    for _ in 0..2 {
+        on_key(&mut app, press(KeyCode::Char('j')));
+    }
+    assert_eq!(app.board.selected, 2, "the fixture is not watching T3");
+    let frame = drawn(&app.board, WIDE.0, TALL);
+    assert!(
+        inside(under_of(&frame, "T3")).starts_with("    └─"),
+        "the panel collapsed the row it was drawn for:\n{}",
+        frame.join("\n"),
+    );
+    assert!(
+        inside(&frame[WAVE_TOP + 2]).ends_with("z compact · q quit"),
+        "the hint offered to expand a board nobody had collapsed: {:?}",
+        frame[WAVE_TOP + 2],
+    );
+
+    // The press it named takes the last second line with it.
+    on_key(&mut app, press(KeyCode::Char('z')));
+    let compact = drawn(&app.board, WIDE.0, TALL);
+    assert!(
+        !inside(under_of(&compact, "T3")).starts_with("    └─"),
+        "the press the hint named did nothing:\n{}",
+        compact.join("\n"),
+    );
+    assert!(
+        inside(&compact[WAVE_TOP + 2]).ends_with("z expand · q quit"),
+        "{:?}",
+        compact[WAVE_TOP + 2],
+    );
+
+    // And the one after it gives every row its second line back, whatever
+    // the panel would have done left to itself — the board scrolls instead.
+    on_key(&mut app, press(KeyCode::Char('z')));
+    let expanded = drawn(&app.board, WIDE.0, TALL);
+    assert!(
+        inside(under_of(&expanded, "T1")).starts_with("    └─"),
+        "a board expanded by hand collapsed itself again:\n{}",
+        expanded.join("\n"),
+    );
+    assert!(
+        inside(&expanded[WAVE_TOP + 2]).ends_with("z compact · q quit"),
+        "{:?}",
+        expanded[WAVE_TOP + 2],
+    );
+
+    // And a crowded board with no live row at all offers the same: there is
+    // no second line anywhere on it for "z expand" to have been about.
+    let closed: Vec<String> = (1..=30).map(|task| format!("T{task:<5} passed")).collect();
+    let crowded = drawn(&assemble(&report(&closed), "", NOON), WIDE.0, TALL);
+    assert!(
+        inside(&crowded[WAVE_TOP + 2]).ends_with("z compact · q quit"),
+        "{:?}",
+        crowded[WAVE_TOP + 2],
+    );
+}
+
+#[test]
+fn a_short_panel_scrolls_to_keep_the_selection_visible() {
+    // Given 12 tasks, all running, and a tasks panel 8 rows tall
+    let runfiles = Runfiles::new("t5-scroll");
+    let mut app = app_over(
+        &Arc::new(Reads::answering("")),
+        &report(&spawned_wave(&runfiles, 12)),
+    );
+
+    // When the user presses j until T12 is selected
+    for _ in 0..11 {
+        on_key(&mut app, press(KeyCode::Char('j')));
+    }
+    assert_eq!(app.board.selected, 11);
+    let frame = drawn(&app.board, WIDE.0, SHORT);
+
+    // Then T12's row is drawn inside the tasks panel, its second line with
+    // it and the panel's bottom border under that
+    assert!(
+        inside(row_of(&frame, "T12")).starts_with("▸ T12"),
+        "{:?}",
+        row_of(&frame, "T12"),
+    );
+    assert!(
+        inside(under_of(&frame, "T12")).starts_with("    └─"),
+        "the watched task's second line fell off the panel:\n{}",
+        frame.join("\n"),
+    );
+    assert!(
+        frame[SHORT_TASKS_TOP + 9].starts_with('└'),
+        "the tasks panel is not eight rows tall:\n{}",
+        frame.join("\n"),
+    );
+
+    // And the first row drawn is T7
+    assert!(
+        inside(&frame[SHORT_TASKS_TOP + 2]).starts_with("  T7 "),
+        "{:?}",
+        frame[SHORT_TASKS_TOP + 2],
+    );
+    for task in 1..=6 {
+        assert!(
+            !frame
+                .iter()
+                .any(|line| inside(line).trim_start().starts_with(&format!("T{task} "))),
+            "T{task} was drawn on a panel that had scrolled past it:\n{}",
+            frame.join("\n"),
+        );
+    }
+}
+
+#[test]
+fn a_done_task_whose_run_files_are_gone_shows_dashes_for_them() {
+    // Given T1 is done and .keeler/runs/<slug>/t1.exit does not exist, which
+    // is what removing the worktree with `keeler-land` leaves behind
+    let board = landed_board(&Unread {
+        verdict: Some("pass".to_string()),
+        exit: None,
+    });
+
+    // When T1 is selected
+    let frame = drawn(&board, WIDE.0, WIDE.1);
+
+    // Then the run line names no file it cannot open
+    assert_eq!(pane_in(&frame)[2], "run     —");
+}
+
+// ── 11-T7
+
+/// The height every width band below is read at: tall enough that no height
+/// band has a say in what the rows lost.
+const ROOMY: u16 = 40;
+
+#[test]
+fn at_100_columns_the_title_is_drawn_cut() {
+    // Given a 100-column terminal
+    let runfiles = Runfiles::new("t7-title-cut");
+    let board = t3_board(&runfiles);
+
+    // When the board renders
+    let row = inside(row_of(&drawn(&board, 100, ROOMY), "T3")).to_string();
+
+    // Then T3's title occupies cells 79..97 and ends with "…" — the panel's
+    // 98 cells, less the 79 the columns before it take.
+    let title: String = row.chars().skip(79).collect();
+    assert_eq!(title, "The fold reads the…");
+    assert_eq!(
+        unicode_width::UnicodeWidthStr::width(row.as_str()),
+        98,
+        "the row does not end at the panel's inner right edge: {row:?}",
+    );
+}
+
+#[test]
+fn below_93_columns_the_title_goes_and_the_row_stays_whole() {
+    // Given a 90-column terminal
+    let runfiles = Runfiles::new("t7-no-title");
+    let board = t3_board(&runfiles);
+
+    // When the board renders
+    let frame = drawn(&board, 90, ROOMY);
+
+    // Then no title is drawn
+    assert!(
+        !heading_of(&frame).contains("TITLE"),
+        "the heading kept a column the rows dropped: {:?}",
+        heading_of(&frame),
+    );
+    // And MODEL, TOKENS and the full eight-cell bar are still drawn
+    assert_eq!(
+        inside(row_of(&frame, "T3")),
+        "▸ T3   ● running         review  opus5[1m] ███░░░░░  41%   12.1M b33e05f +4 ~2",
+    );
+}
+
+#[test]
+fn below_81_columns_the_bar_collapses_to_its_percentage() {
+    // Given a 78-column terminal
+    let runfiles = Runfiles::new("t7-narrow-bar");
+    let board = t3_board(&runfiles);
+
+    // When the board renders
+    let frame = drawn(&board, 78, ROOMY);
+
+    // Then the CONTEXT column reads " 41% " and its header "CTX"
+    assert_eq!(
+        inside(row_of(&frame, "T3")),
+        "▸ T3   ● running         review  opus5[1m]  41%   12.1M b33e05f +4 ~2",
+    );
+    let heading = heading_of(&frame);
+    assert!(heading.contains(" CTX "), "{heading:?}");
+    assert!(!heading.contains("CONTEXT"), "{heading:?}");
+    // And MODEL and TOKENS are still drawn
+    assert!(
+        heading.contains("MODEL") && heading.contains("TOKENS"),
+        "{heading:?}",
+    );
+}
+
+#[test]
+fn below_72_columns_model_and_tokens_go() {
+    // Given a 68-column terminal
+    let runfiles = Runfiles::new("t7-no-numbers");
+    let board = t3_board(&runfiles);
+
+    // When the board renders
+    let frame = drawn(&board, 68, ROOMY);
+
+    // Then the tasks header reads "  TASK STATE             STAGE   CTX   COMMIT +~"
+    assert_eq!(
+        heading_of(&frame),
+        "  TASK STATE             STAGE   CTX   COMMIT +~",
+    );
+    assert_eq!(
+        inside(row_of(&frame, "T3")),
+        "▸ T3   ● running         review   41%  b33e05f +4 ~2",
+    );
+}
+
+#[test]
+fn a_column_that_does_not_fit_is_dropped_whole() {
+    // Given a 60-column terminal and T2 incomplete (no review record)
+    let runfiles = Runfiles::new("t7-drop-whole");
+    let log = runfiles.stream("t3", &t3_stream());
+    let mut board = assemble_titled(
+        &report(&[
+            "T2     incomplete (no review record)".to_string(),
+            format!("T3     running          log {log}  worktree /nowhere"),
+        ]),
+        "",
+        TITLES,
+        NOON,
+    );
+    board.rows[1].branch = Some(BranchFacts {
+        head: "b33e05f".to_string(),
+        ahead: 4,
+        dirty: 2,
+        commits: Vec::new(),
+    });
+
+    // When the board renders
+    let frame = drawn(&board, 60, ROOMY);
+
+    // Then T2's row shows "◔ incomplete (no review record)" whole and its
+    // stage — the state is 31 cells here, so every threshold moved 14 right
+    // and the row is down to what a board is for.
+    assert!(
+        inside(row_of(&frame, "T2")).starts_with("▸ T2   ◔ incomplete (no review record)"),
+        "the reason was cut: {:?}",
+        row_of(&frame, "T2"),
+    );
+    assert!(
+        heading_of(&frame).contains("STAGE"),
+        "the stage went before the columns to the right of it: {:?}",
+        heading_of(&frame),
+    );
+    assert!(
+        inside(row_of(&frame, "T3")).ends_with("review"),
+        "{:?}",
+        row_of(&frame, "T3"),
+    );
+    // And COMMIT is absent from every row rather than half drawn
+    assert!(
+        !heading_of(&frame).contains("COMMIT"),
+        "{:?}",
+        heading_of(&frame),
+    );
+    for line in &frame {
+        assert!(
+            !line.contains("b33e0"),
+            "a hash was drawn on a board with no room for the column: {line:?}",
+        );
+    }
+}
+
+#[test]
+fn the_detail_panel_goes_below_100_columns_or_24_rows() {
+    // Given a 96x40 terminal, and separately a 120x22 terminal
+    let runfiles = Runfiles::new("t7-no-detail");
+    let board = t3_board(&runfiles);
+
+    // When the board renders
+    // Then in both the wave and tasks panels are drawn and the detail panel
+    // is absent
+    for (width, height) in [(96, 40), (120, 22)] {
+        let frame = drawn(&board, width, height);
+        assert!(
+            frame[0].contains("wave  specs/01-foo.md"),
+            "the wave panel is not drawn at {width}x{height}:\n{}",
+            frame.join("\n"),
+        );
+        heading_of(&frame);
+        assert!(
+            !frame
+                .iter()
+                .any(|line| inside(line).starts_with("state   ")),
+            "the pane was drawn on a terminal with no room for it at {width}x{height}:\n{}",
+            frame.join("\n"),
+        );
+    }
+    // And a terminal at both bands has it: the panel goes below them, not at
+    // them.
+    assert!(
+        drawn(&board, 100, 24)
+            .iter()
+            .any(|line| inside(line).starts_with("state   ")),
+        "the pane went from a terminal with room for it",
+    );
+}
+
+#[test]
+fn the_wave_panel_collapses_to_one_line_below_16_rows() {
+    // Given a 120x14 terminal
+    let runfiles = Runfiles::new("t7-short");
+    let board = t3_board(&runfiles);
+
+    // When the board renders
+    let frame = drawn(&board, 120, 14);
+
+    // Then the wave panel holds only its first line
+    assert!(
+        inside(&frame[1]).ends_with("status 0s ago"),
+        "{:?}",
+        frame[1],
+    );
+    assert!(
+        frame[2].starts_with('└') && frame[3].starts_with("┌ tasks"),
+        "the wave panel kept its second line:\n{}",
+        frame.join("\n"),
+    );
+    assert!(
+        !frame.iter().any(|line| line.contains("j/k move")),
+        "the hints stayed on a panel that lost the line they sit on:\n{}",
+        frame.join("\n"),
+    );
+    // And the tasks panel has at least 5 rows — its column heading among
+    // them, and its borders not.
+    let bottom = frame
+        .iter()
+        .rposition(|line| line.starts_with('└'))
+        .expect("the tasks panel is drawn in a box");
+    let rows = bottom - 4;
+    assert!(
+        rows >= 5,
+        "the tasks panel is {rows} rows tall:\n{}",
+        frame.join("\n"),
+    );
+    // And at sixteen lines the panel has both of its own again.
+    let taller = drawn(&board, 120, 16);
+    assert!(taller[2].contains("j/k move"), "{:?}", taller[2]);
 }

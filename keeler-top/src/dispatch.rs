@@ -22,6 +22,48 @@ use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::clock::Timestamp;
+
+/// What a run's `.exit` file says.
+///
+/// The stamp travels with the code because the file is the only place either
+/// of them is written: the runner closes the stream and *then* writes this,
+/// so the last record of a run says nothing about when the run ended and
+/// this file's own modification time says exactly that.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Exit {
+    /// What the turn ended with. Zero is a run that finished its pipeline;
+    /// anything else is the code `keeler-status` reads `failed (exit N)`
+    /// off, and the board shows the same number rather than a second one.
+    pub code: i32,
+    /// When the file was written, which is when the turn ended — or nothing
+    /// on a filesystem that will not say.
+    pub at: Option<Timestamp>,
+}
+
+/// The two files a finished stage leaves beside a run.
+///
+/// A trait of its own, and a supertrait of [`Dispatch`] rather than part of
+/// it, because the two are asked at different moments and by different
+/// things. The levers below are pulled by a keypress; these are read while a
+/// row is being assembled, which is a function of a report and some files —
+/// so `board.rs` asks for this and is handed a whole dispatch by a loop that
+/// has one.
+pub trait Records {
+    /// The word on the `Verdict:` line of a task's review record, or nothing
+    /// where no record has been written yet.
+    ///
+    /// Read from the task's own branch while there is one and from `git_ref`
+    /// once the work has landed — which is where `keeler-status` looks for
+    /// the same file, and for the same reason: before a merge, the record
+    /// exists only on the branch that wrote it.
+    fn verdict(&self, slug: &str, id: &str, git_ref: &str) -> Option<String>;
+
+    /// What a task's run ended with, or nothing while it is still running —
+    /// or once `keeler-land` has taken the run directory with the worktree.
+    fn exit(&self, slug: &str, id: &str) -> Option<Exit>;
+}
+
 /// What the board asks the world for.
 ///
 /// `Send + Sync` because one of these calls runs on a thread: `keeler-status`
@@ -29,7 +71,7 @@ use std::process::Command;
 /// on a thread of its own and collected whenever it answers. Every
 /// implementation is a description of how to run something rather than
 /// something running, so the bound costs nothing to meet.
-pub trait Dispatch: Send + Sync {
+pub trait Dispatch: Records + Send + Sync {
     /// `keeler-status`'s report for the spec the board is watching.
     ///
     /// # Errors
@@ -204,6 +246,16 @@ pub fn inside_tmux(tmux: Option<&OsStr>) -> bool {
     tmux.is_some_and(|value| !value.is_empty())
 }
 
+impl Records for Shell {
+    fn verdict(&self, slug: &str, id: &str, git_ref: &str) -> Option<String> {
+        crate::git::verdict(&self.root, slug, id, git_ref)
+    }
+
+    fn exit(&self, slug: &str, id: &str) -> Option<Exit> {
+        exit_file(&self.root.join(crate::board::run_file(slug, id, "exit")))
+    }
+}
+
 impl Dispatch for Shell {
     fn status(&self) -> Result<String, String> {
         run(self.status_command())
@@ -283,6 +335,22 @@ fn run(mut command: Command) -> Result<String, String> {
     } else {
         said
     })
+}
+
+/// What a run's `.exit` file holds, and when it was written.
+///
+/// Nothing for a file that is not there — a run still going, or one whose
+/// directory `keeler-land` removed with the worktree — and nothing for one
+/// holding something that is not a code, since a number the board invented
+/// would be a claim about how a run ended.
+#[must_use]
+pub fn exit_file(path: &Path) -> Option<Exit> {
+    let code = std::fs::read_to_string(path).ok()?.trim().parse().ok()?;
+    let at = std::fs::metadata(path)
+        .and_then(|file| file.modified())
+        .ok()
+        .and_then(Timestamp::from_system_time);
+    Some(Exit { code, at })
 }
 
 /// A command that never started.
@@ -417,6 +485,124 @@ mod tests {
                 "{lever} refused without saying anything about it",
             );
         }
+    }
+
+    /// A project root of its own, with the run directory a spec's tasks
+    /// write into — removed on drop.
+    struct Runs(std::path::PathBuf);
+
+    impl Runs {
+        fn new(name: &str) -> Self {
+            let root = crate::fixture_dir(name);
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(root.join(".keeler/runs/01-foo")).unwrap();
+            Self(root)
+        }
+
+        fn write(&self, rel: &str, body: &str) {
+            let path = self.0.join(rel);
+            std::fs::create_dir_all(path.parent().expect("a file has a parent")).unwrap();
+            std::fs::write(path, body).unwrap();
+        }
+
+        /// git with a fixed identity and no user config, so a global
+        /// `commit.gpgsign` cannot hang the suite waiting for a key.
+        fn git(&self, args: &[&str]) {
+            let output = Command::new("git")
+                .args(["-c", "user.email=probe@keeler", "-c", "user.name=probe"])
+                .args(args)
+                .current_dir(&self.0)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_SYSTEM", "/dev/null")
+                .output()
+                .expect("failed to run git");
+            assert!(
+                output.status.success(),
+                "git {args:?} failed:\n{}",
+                String::from_utf8_lossy(&output.stderr),
+            );
+        }
+
+        fn shell(&self) -> super::Shell {
+            super::Shell::new("/p", &self.0, "specs/01-foo.md")
+        }
+    }
+
+    impl Drop for Runs {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn a_runs_exit_file_says_what_it_ended_with_and_when() {
+        use super::Records as _;
+
+        let runs = Runs::new("exit");
+        runs.write(".keeler/runs/01-foo/t1.exit", "0\n");
+
+        let exit = runs
+            .shell()
+            .exit("01-foo", "T1")
+            .expect("the file is there to read");
+
+        assert_eq!(exit.code, 0);
+        // Stamped from the file itself, because the runner writes it after
+        // the stream is closed — no record in the stream says when the turn
+        // ended, and this one was written as it did.
+        assert!(
+            exit.at.expect("a file has a modification time")
+                > crate::clock::Timestamp::from_epoch_seconds(1_700_000_000),
+            "the exit file's own clock was not read",
+        );
+        // A failure's code reaches the pane as the number `keeler-status`
+        // read `failed (exit N)` off, rather than as a second opinion.
+        runs.write(".keeler/runs/01-foo/t1.exit", "2");
+        assert_eq!(
+            runs.shell().exit("01-foo", "T1").map(|exit| exit.code),
+            Some(2),
+        );
+        // A task still running has written none, and one whose run
+        // directory `keeler-land` took has none left.
+        assert_eq!(runs.shell().exit("01-foo", "T2"), None);
+        // And a file holding something that is not a code is not a code: a
+        // number invented here would be a claim about how a run ended.
+        runs.write(".keeler/runs/01-foo/t1.exit", "killed\n");
+        assert_eq!(runs.shell().exit("01-foo", "T1"), None);
+    }
+
+    #[test]
+    fn the_two_reads_are_composed_from_the_root_the_recipe_passed() {
+        use super::Records as _;
+
+        // The board is launched with the project's root and may be started
+        // from anywhere inside it, so both paths are composed from that root
+        // rather than from a working directory nobody promised.
+        let runs = Runs::new("composed");
+        runs.write(".keeler/runs/01-foo/t3.exit", "1\n");
+        let elsewhere = super::Shell::new("/p", "/keeler-top-no-such-root", "specs/01-foo.md");
+
+        assert_eq!(
+            runs.shell().exit("01-foo", "T3").map(|exit| exit.code),
+            Some(1),
+        );
+        assert_eq!(elsewhere.exit("01-foo", "T3"), None);
+        // And a root that is not a repository answers no verdict rather
+        // than ending the board.
+        assert_eq!(elsewhere.verdict("01-foo", "T3", "main"), None);
+
+        // The record is read from that same root, through the queries
+        // `git.rs` makes — which is the whole of what this method is.
+        runs.git(&["init", "-qb", "main"]);
+        runs.write("reviews/01-foo/t3.md", "Task: t3\nVerdict: pass\n");
+        runs.git(&["add", "reviews"]);
+        runs.git(&["commit", "-qm", "T3's review record"]);
+
+        assert_eq!(
+            runs.shell().verdict("01-foo", "T3", "main"),
+            Some("pass".to_string()),
+        );
+        assert_eq!(runs.shell().verdict("01-foo", "T4", "main"), None);
     }
 
     #[test]
