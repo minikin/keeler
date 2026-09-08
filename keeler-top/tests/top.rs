@@ -4271,6 +4271,36 @@ fn the_frame_is_three_bordered_panels_and_a_footer() {
     );
 }
 
+/// Not a scenario of its own: it is what the scenario above does not say
+/// about a board with no tasks, and the review found it. A spec whose tasks
+/// are still to be written has none to show in full, and a box drawn about
+/// one — untitled, and empty — is the board drawing its own furniture.
+#[test]
+fn a_board_with_no_tasks_has_no_task_to_draw_a_panel_about() {
+    let board = assemble("graph: specs/01-foo.md on feat/01-foo\n", "", NOON);
+
+    let frame = drawn(&board, WIDE.0, WIDE.1);
+
+    // The two panels that are about the wave are drawn, the tasks panel
+    // holding its column heading and no rows.
+    assert!(frame[WAVE_TOP].contains("wave"), "{:?}", frame[WAVE_TOP]);
+    assert!(frame[TASKS_TOP].contains("tasks"), "{:?}", frame[TASKS_TOP]);
+    assert!(
+        frame[TASKS_TOP + 2].starts_with('└'),
+        "the tasks panel drew a row for a task that is not there: {:?}",
+        frame[TASKS_TOP + 2],
+    );
+    // And nothing at all below them.
+    for (below, line) in frame.iter().enumerate().skip(TASKS_TOP + 3) {
+        assert_eq!(
+            line,
+            "",
+            "line {below} is a panel about a task that is not there:\n{}",
+            frame.join("\n"),
+        );
+    }
+}
+
 #[test]
 fn panel_borders_are_neutral_and_titles_carry_the_colour() {
     // Given the board renders

@@ -568,12 +568,13 @@ pub fn render(frame: &mut ratatui::Frame, board: &Board, theme: Theme, now: Time
         Paragraph::new(rows).block(panel(theme, named("tasks", theme.style(ORANGE)))),
         panes.tasks,
     );
-    if let Some(pane) = panes.detail {
-        let row = board.selected_row();
-        let title = row.map(|row| row.id.clone()).unwrap_or_default();
+    // Both, or neither. A spec whose tasks are still to be written has no
+    // task to show in full, and a panel drawn about one would be an
+    // untitled empty box — the board drawing its own furniture.
+    if let (Some(pane), Some(row)) = (panes.detail, board.selected_row()) {
         frame.render_widget(
-            Paragraph::new(row.map(detail).unwrap_or_default().join("\n"))
-                .block(panel(theme, named(&title, theme.style(GREEN)))),
+            Paragraph::new(detail(row).join("\n"))
+                .block(panel(theme, named(&row.id, theme.style(GREEN)))),
             pane,
         );
     }

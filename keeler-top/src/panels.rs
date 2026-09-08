@@ -12,10 +12,13 @@
 //! panel is one row in full. What is here is the panel neither of those is:
 //! the one about the wave rather than about a task.
 //!
-//! **Two builders are public because they are the whole of the reading.**
-//! [`counts`] and [`needing`] decide what the line says; the spans around
-//! them decide what it looks like. A test that asserted only on the drawn
-//! frame would be reading the arithmetic through the paint.
+//! **What the lines say is decided apart from what they look like.**
+//! [`counts`], [`needing`], [`naming`], [`strip`] and [`hints`] are the
+//! reading; the spans built around them are the paint. Each is a function
+//! of the rows alone and has a test of its own, because a suite that
+//! asserted only on the drawn frame would be reading the arithmetic through
+//! the paint. None of them leaves this module — [`wave`] and [`title`] are
+//! the whole of what a frame asks the panel for.
 
 use ratatui::text::{Line, Span};
 
@@ -101,8 +104,7 @@ pub fn wave(board: &Board, theme: Theme, now: Timestamp, width: u16) -> Vec<Line
 /// Left out rather than shown as a zero: the line is read at a glance for
 /// what the wave is doing, and six tallies of which four say nothing are
 /// four things between the reader and the two that do.
-#[must_use]
-pub fn counts(rows: &[Row]) -> Vec<(&'static str, usize)> {
+fn counts(rows: &[Row]) -> Vec<(&'static str, usize)> {
     COUNTED
         .into_iter()
         .map(|word| {
@@ -125,8 +127,7 @@ pub fn counts(rows: &[Row]) -> Vec<(&'static str, usize)> {
 /// tasks and so is not among them — the board cannot read the word, and a
 /// state it cannot read must not be promoted to the half of the line that
 /// means somebody is needed.
-#[must_use]
-pub fn needing(rows: &[Row]) -> Vec<&Row> {
+fn needing(rows: &[Row]) -> Vec<&Row> {
     let mut needing: Vec<&Row> = rows
         .iter()
         .filter(|row| Theme::group(&row.state) <= NEEDS_YOU)
@@ -141,8 +142,7 @@ pub fn needing(rows: &[Row]) -> Vec<&Row> {
 /// Only `failed` carries a reason short enough to belong up here, and it is
 /// the one that says *which* failure. `incomplete (no review record, box
 /// not ticked)` is a sentence, and the row is where it is read.
-#[must_use]
-pub fn naming(state: &str) -> &str {
+fn naming(state: &str) -> &str {
     let word = state.split_whitespace().next().unwrap_or_default();
     if word != FAILED {
         return word;
@@ -160,8 +160,7 @@ pub fn naming(state: &str) -> &str {
 /// what needs a human, and they move as states change; the strip is the
 /// spec read left to right, and a glyph that stays where it was is what
 /// makes a second glance at it worth anything.
-#[must_use]
-pub fn strip(rows: &[Row], theme: Theme, finished: bool) -> Vec<Span<'static>> {
+fn strip(rows: &[Row], theme: Theme, finished: bool) -> Vec<Span<'static>> {
     let mut spans = Vec::with_capacity(rows.len());
     for (index, row) in rows.iter().enumerate() {
         let look = theme.look(&row.state, finished);
@@ -174,8 +173,7 @@ pub fn strip(rows: &[Row], theme: Theme, finished: bool) -> Vec<Span<'static>> {
 }
 
 /// The keys the board answers to, as the second line names them.
-#[must_use]
-pub fn hints(finished: bool) -> &'static [(&'static str, &'static str)] {
+fn hints(finished: bool) -> &'static [(&'static str, &'static str)] {
     if finished { &LANDED_HINTS } else { &HINTS }
 }
 
