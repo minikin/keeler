@@ -384,6 +384,58 @@ mod tests {
     }
 
     #[test]
+    fn a_bound_on_the_names_tried_is_a_refusal_and_not_a_loop() {
+        // Not a scenario of any spec: the coverage gate found it, and what
+        // it found is the one arm of that loop no test had ever taken. The
+        // bound exists so a temporary directory that is somehow full of this
+        // process's own leftovers is refused in words rather than tried for
+        // ever, and a bound nothing reaches is a bound nothing has checked.
+        let repo = Repo::new("all-taken");
+        repo.commit("specs/01-foo.md", "## Tasks\n");
+        let first = spec_from_ref(&repo.0, "HEAD", "specs/01-foo.md").expect("HEAD holds it");
+        let serial: u64 = first
+            .path()
+            .parent()
+            .unwrap()
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .rsplit('-')
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap();
+        // Every name the next read will try, standing before it does. The
+        // process id is this one's, so no other test's names are touched.
+        let taken: Vec<std::path::PathBuf> = (1..=64)
+            .map(|next| {
+                let dir = std::env::temp_dir().join(format!(
+                    "keeler-top-{}-{}",
+                    std::process::id(),
+                    serial + next
+                ));
+                std::fs::create_dir(&dir).unwrap();
+                dir
+            })
+            .collect();
+
+        // When a copy is asked for
+        let refused = spec_from_ref(&repo.0, "HEAD", "specs/01-foo.md").unwrap_err();
+
+        // Then the refusal names the directory that is the problem, and the
+        // sixty-fifth name was never tried.
+        assert!(refused.contains("every name tried was taken"), "{refused}");
+        assert!(
+            refused.contains(&std::env::temp_dir().display().to_string()),
+            "{refused}",
+        );
+        for dir in taken {
+            std::fs::remove_dir(&dir).unwrap();
+        }
+    }
+
+    #[test]
     fn a_directory_that_cannot_be_made_is_refused_in_its_own_words() {
         // Given a temporary directory that is not a directory at all — a
         // failure that is not "already taken", and must not be tried again
