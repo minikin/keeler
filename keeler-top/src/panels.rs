@@ -341,47 +341,86 @@ fn hints(finished: bool, compact: bool) -> Vec<(&'static str, &'static str)> {
 
 /// The first line: the counts, and against the right edge whatever needs a
 /// human and how old the report is.
+///
+/// **The age is the one thing on it that is never given up.** A board whose
+/// read has stalled looks exactly like a live one except for that number, so
+/// a window too narrow for the line takes its cells from everything else
+/// first: the counts, which are work going as it should, and then the names
+/// of what needs a human — which are on the strip under this line as glyphs
+/// whatever happens to them here.
 fn first(board: &Board, theme: Theme, now: Timestamp, width: u16) -> Line<'static> {
-    let mut left = tally(&board.rows, theme, board.finished());
+    let mut counted = tally(&board.rows, theme, board.finished());
     if board.finished() {
-        left.push(vec![Span::styled(FINISHED, theme.style(GREEN))]);
+        counted.push(vec![Span::styled(FINISHED, theme.style(GREEN))]);
     }
-    let mut right = needed(&board.rows, theme);
+    let age = Span::styled(board.age(now), theme.style(DIM));
+    // The names give up their end of the list rather than their front: they
+    // are in the state table's order, most urgent first, so the last of them
+    // is the least of what a human is needed for.
+    let room = width.saturating_sub(wide(&age.content));
+    let mut right = fitting(
+        needed(&board.rows, theme),
+        room.saturating_sub(wide(GAP)),
+        &separator(theme),
+        Given::Last,
+    );
     if !right.is_empty() {
         right.push(Span::raw(GAP));
     }
-    right.push(Span::styled(board.age(now), theme.style(DIM)));
-    // What is left for the counts once the right-hand end has its cells and
-    // the two are a gap apart. The counts are what gives way on a narrow
-    // window: what needs a human is the reading the line exists for, and an
-    // age that has stopped moving is how a watcher learns the board is
-    // stale — a line cut from the right would lose both to a tally of tasks
-    // going as they should.
-    let room = width
-        .saturating_sub(measured(&right))
-        .saturating_sub(wide(GAP));
-    spread(fitted(left, room), right, width)
+    right.push(age);
+    let left = fitting(
+        counted,
+        width
+            .saturating_sub(measured(&right))
+            .saturating_sub(wide(GAP)),
+        &Span::raw(GAP),
+        Given::First,
+    );
+    spread(left, right, width)
 }
 
-/// As many of the counts as `room` holds, given up from the left.
+/// Which end of a list a line that does not fit takes its cells from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Given {
+    /// The front of it — which for the counts is the end furthest from the
+    /// two readings this line exists for.
+    First,
+    /// The back — which for the names is the least urgent of them.
+    Last,
+}
+
+/// As many of `groups` as `room` holds, whole ones, given up from `end`.
 ///
-/// Whole ones: half a count is a glyph with no number after it, or a number
-/// with no glyph before it, and either reads as some other state's tally.
-fn fitted(mut counts: Vec<Vec<Span<'static>>>, room: u16) -> Vec<Span<'static>> {
-    while !counts.is_empty() && measured(&joined(&counts)) > room {
-        counts.remove(0);
+/// Whole, because half of one is worse than none: half a count is a glyph
+/// with no number after it, and half a name is a task id with somebody
+/// else's state beside it.
+fn fitting(
+    mut groups: Vec<Vec<Span<'static>>>,
+    room: u16,
+    between: &Span<'static>,
+    end: Given,
+) -> Vec<Span<'static>> {
+    while !groups.is_empty() && measured(&joined(&groups, between)) > room {
+        match end {
+            Given::First => {
+                groups.remove(0);
+            }
+            Given::Last => {
+                groups.pop();
+            }
+        }
     }
-    joined(&counts)
+    joined(&groups, between)
 }
 
-/// The counts as one run of spans, a gap between each pair.
-fn joined(counts: &[Vec<Span<'static>>]) -> Vec<Span<'static>> {
+/// The groups as one run of spans, with `between` at each seam.
+fn joined(groups: &[Vec<Span<'static>>], between: &Span<'static>) -> Vec<Span<'static>> {
     let mut spans = Vec::new();
-    for count in counts {
+    for group in groups {
         if !spans.is_empty() {
-            spans.push(Span::raw(GAP));
+            spans.push(between.clone());
         }
-        spans.extend(count.iter().cloned());
+        spans.extend(group.iter().cloned());
     }
     spans
 }
@@ -434,19 +473,20 @@ fn tally(rows: &[Row], theme: Theme, finished: bool) -> Vec<Vec<Span<'static>>> 
 
 /// What needs a human, as it is drawn: each task in its state's colour,
 /// because the colour is what says which kind of trouble it is in.
-fn needed(rows: &[Row], theme: Theme) -> Vec<Span<'static>> {
-    let mut spans = Vec::new();
-    for row in needing(rows) {
-        if !spans.is_empty() {
-            spans.push(separator(theme));
-        }
-        let look = theme.look(&row.state, false);
-        spans.push(Span::styled(
-            format!("{} {} {}", look.glyph, row.id, naming(&row.state)),
-            look.style,
-        ));
-    }
-    spans
+///
+/// One entry per task, for the reason [`tally`] gives: a narrow window gives
+/// them up one at a time.
+fn needed(rows: &[Row], theme: Theme) -> Vec<Vec<Span<'static>>> {
+    needing(rows)
+        .into_iter()
+        .map(|row| {
+            let look = theme.look(&row.state, false);
+            vec![Span::styled(
+                format!("{} {} {}", look.glyph, row.id, naming(&row.state)),
+                look.style,
+            )]
+        })
+        .collect()
 }
 
 /// The hints, as they are drawn: the key bright and what it does dim, so
@@ -495,8 +535,10 @@ fn separator(theme: Theme) -> Span<'static> {
 #[cfg(test)]
 mod tests {
     use super::{Collapse, collapse, counts, hints, naming, needing, scrolled, strip};
-    use crate::board::Row;
+    use crate::board::{Board, Row};
+    use crate::clock::Timestamp;
     use crate::theme::Theme;
+    use ratatui::text::Line;
 
     /// The theme these are composed through: colours on, glyphs drawable.
     /// Said outright rather than read from the process, which is the whole
@@ -732,27 +774,98 @@ mod tests {
         assert!(Collapse::Whole.takes(true));
     }
 
+    /// A board of those rows, answered a minute before the clock the lines
+    /// below are drawn against.
+    fn board_of(states: &[(&str, &str)]) -> Board {
+        Board {
+            rel: "specs/01-foo.md".to_string(),
+            git_ref: "feat/01-foo".to_string(),
+            answered: Timestamp::from_epoch_seconds(0),
+            rows: rows_of(states),
+            selected: 0,
+            compact: None,
+            message: String::new(),
+        }
+    }
+
+    /// One line as text, which is what its arithmetic shows up in.
+    fn text(line: &Line<'static>) -> String {
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect()
+    }
+
     #[test]
-    fn a_first_line_that_does_not_fit_gives_up_counts_from_the_left() {
+    fn the_status_age_stands_whatever_else_the_first_line_gives_up() {
+        // Given more tasks needing a human than the panel has cells for
+        // their names — ten failures are 137 cells of them, and the panel
+        // inside a 120-column terminal is 118.
+        let failing: Vec<(String, &str)> = (1..=10)
+            .map(|task| (format!("T{task}"), "failed (exit 2)"))
+            .collect();
+        let board = board_of(
+            &failing
+                .iter()
+                .map(|(id, state)| (id.as_str(), *state))
+                .collect::<Vec<_>>(),
+        );
+
+        let line = text(&super::first(
+            &board,
+            THEME,
+            Timestamp::from_epoch_seconds(60),
+            118,
+        ));
+
+        // Then the age is still there, and the line is still the panel's.
+        assert!(line.ends_with("status 60s ago"), "{line:?}");
+        assert_eq!(crate::layout::wide(&line), 118, "{line:?}");
+        // And what it gave up is the least of what needs a human: the names
+        // are in the state table's order, most urgent first, so the end of
+        // that list is the end that goes — whole, never half a name.
+        assert!(line.contains("✗ T1 exit 2 · ✗ T2 exit 2"), "{line:?}");
+        assert!(!line.contains("T8"), "{line:?}");
+        // A board whose line fits keeps every one of them.
+        let two = text(&super::first(
+            &board_of(&[("T1", "failed (exit 2)"), ("T2", "died")]),
+            THEME,
+            Timestamp::from_epoch_seconds(60),
+            118,
+        ));
+        assert!(
+            two.contains("✗ T1 exit 2 · ⊘ T2 died   status 60s ago"),
+            "{two:?}"
+        );
+    }
+
+    #[test]
+    fn a_first_line_that_does_not_fit_gives_up_whole_readings_from_one_end() {
         // The counts as the line draws them, and what a window with room for
         // some of them keeps.
         let tallied = || super::tally(&rows_of(&[("T1", "running"), ("T2", "done")]), THEME, false);
-        let text = |room| {
-            super::fitted(tallied(), room)
+        let gap = ratatui::text::Span::raw(super::GAP);
+        let text = |room, end| {
+            super::fitting(tallied(), room, &gap, end)
                 .iter()
                 .map(|span| span.content.to_string())
                 .collect::<String>()
         };
 
-        assert_eq!(text(u16::MAX), "● 1 running   ✓ 1 done");
-        // A window a cell short of both gives up the leftmost, whole: the
-        // line's right-hand end is what needs a human and how old the answer
-        // is, and neither may be lost to a tally of work going as it should.
-        assert_eq!(text(21), "✓ 1 done");
-        assert_eq!(text(8), "✓ 1 done");
-        assert_eq!(text(7), "");
-        assert_eq!(text(0), "");
-        assert!(super::fitted(Vec::new(), 40).is_empty());
+        assert_eq!(
+            text(u16::MAX, super::Given::First),
+            "● 1 running   ✓ 1 done"
+        );
+        // A window a cell short of both gives up one whole, from the end it
+        // was told: the counts from the left, so that what stands at the
+        // line's right-hand end keeps its cells, and the names from the
+        // right, so that the most urgent of them is the last to go.
+        assert_eq!(text(21, super::Given::First), "✓ 1 done");
+        assert_eq!(text(8, super::Given::First), "✓ 1 done");
+        assert_eq!(text(21, super::Given::Last), "● 1 running");
+        assert_eq!(text(7, super::Given::First), "");
+        assert_eq!(text(0, super::Given::Last), "");
+        assert!(super::fitting(Vec::new(), 40, &gap, super::Given::First).is_empty());
     }
 
     #[test]
